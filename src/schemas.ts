@@ -55,6 +55,8 @@ const buttonActionSchema = {
  * and their associated button configurations.
  */
 export const longClickConfigSchema = {
+  $id: "LongClickConfig",
+  description: "Schema for the main longClickConfig.json file.",
   type: "object",
   properties: {
     devices: {
@@ -85,12 +87,15 @@ export const longClickConfigSchema = {
 };
 
 /**
- * Schema for the payload of an LSH device's 'conf' topic.
+ * Schema for the payload of an LSH device's 'conf' topic (`d_dd`).
  * This payload provides the device's static configuration details.
  */
-export const deviceConfPayloadSchema = {
+export const deviceDetailsPayloadSchema = {
+  $id: "DeviceDetailsPayload",
+  description: "Schema for a device's static configuration details (d_dd).",
   type: "object",
   properties: {
+    p: { const: "d_dd" },
     ai: {
       type: "array",
       items: { type: "string" },
@@ -103,30 +108,32 @@ export const deviceConfPayloadSchema = {
     },
     dn: { type: "string", description: "Device Name." },
   },
-  required: ["ai", "bi", "dn"],
-  /** Allows for forward-compatibility. If future firmware versions add extra fields, they will be ignored instead of causing a validation error. */
+  required: ["p", "ai", "bi", "dn"],
   additionalProperties: true,
 };
 
 /**
- * Schema for the payload of an LSH device's 'state' topic.
+ * Schema for the payload of an LSH device's 'state' topic (`d_as`).
  * This payload reports the current state of all actuators.
  */
-export const deviceStatePayloadSchema = {
+export const deviceActuatorsStatePayloadSchema = {
+  $id: "DeviceActuatorsStatePayload",
+  description: "Schema for a device's actuator states (d_as).",
   type: "object",
   properties: {
+    p: { const: "d_as" },
     as: {
       type: "array",
       items: { type: "boolean" },
       description: "Array of Actuator States (true=ON, false=OFF).",
     },
   },
-  required: ["as"],
-  additionalProperties: true, // Allow for future firmware extensions.
+  required: ["p", "as"],
+  additionalProperties: true,
 };
 
 /** Schema for a Network Click payload ('c_nc'). */
-export const networkClickPayloadSchema = {
+const networkClickPayloadSchema = {
   type: "object",
   properties: {
     p: { const: "c_nc", description: "Protocol: Network Click." },
@@ -143,7 +150,7 @@ export const networkClickPayloadSchema = {
 };
 
 /** Schema for a Device Boot payload ('d_b'). */
-export const deviceBootPayloadSchema = {
+const deviceBootPayloadSchema = {
   type: "object",
   properties: {
     p: { const: "d_b", description: "Protocol: Device Boot." },
@@ -153,7 +160,7 @@ export const deviceBootPayloadSchema = {
 };
 
 /** Schema for a Ping payload ('d_p'). */
-export const pingPayloadSchema = {
+const pingPayloadSchema = {
   type: "object",
   properties: {
     p: { const: "d_p", description: "Protocol: Ping." },
@@ -163,11 +170,13 @@ export const pingPayloadSchema = {
 };
 
 /**
- * A "super-schema" that validates any valid 'misc' payload.
+ * A "super-schema" that validates any valid 'misc' topic payload.
  * It uses a discriminator to efficiently select the correct sub-schema based on the 'p' property.
  * This allows validating any incoming 'misc' message with a single `validate` call.
  */
-export const anyMiscPayloadSchema = {
+export const anyMiscTopicPayloadSchema = {
+  $id: "AnyMiscTopicPayload",
+  description: "Discriminator schema for any valid 'misc' topic payload.",
   type: "object",
   discriminator: { propertyName: "p" },
   oneOf: [
@@ -175,4 +184,5 @@ export const anyMiscPayloadSchema = {
     deviceBootPayloadSchema,
     pingPayloadSchema,
   ],
+  required: ["p"],
 };
