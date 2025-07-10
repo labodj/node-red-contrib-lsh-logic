@@ -80,26 +80,18 @@ describe("Watchdog", () => {
     expect(result.status).toBe("stale");
   });
 
-  it('should return "unhealthy" for a device that has never been seen', () => {
+  it('should return "needs_ping" for a device that exists but has never communicated (lastSeenTime is 0)', () => {
     const now = Date.now();
-    const device = { ...mockDevice, lastSeenTime: 0 }; // Never seen
+    // This device is in the registry but has never had its lastSeenTime updated.
+    // The correct behavior is to try pinging it first, not mark it as unhealthy immediately.
+    const device = { ...mockDevice, lastSeenTime: 0 };
     const result = watchdog.checkDeviceHealth(device, now);
-
-    // First, verify the status is correct
-    expect(result.status).toBe("unhealthy");
-
-    // Then, use a type guard to safely access the 'reason' property
-    if (result.status === "unhealthy") {
-      expect(result.reason).toContain("Never seen");
-    } else {
-      // This part will only execute if the test fails the first expect,
-      // providing a helpful failure message.
-      fail('Expected status to be "unhealthy" but it was not.');
-    }
+    expect(result.status).toBe("needs_ping");
   });
 
-  it('should return "unhealthy" for a device configured but never seen (undefined state)', () => {
+  it('should return "unhealthy" for a device that is not in the registry (undefined state)', () => {
     const now = Date.now();
+    // This represents a device listed in the config file but that has never sent any message.
     const result = watchdog.checkDeviceHealth(undefined, now);
 
     expect(result.status).toBe("unhealthy");
