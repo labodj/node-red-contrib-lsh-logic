@@ -406,27 +406,28 @@
     <li>
       <strong>User Directory:</strong> It is highly recommended to place your
       <code>longClickConfig.json</code> file within a sub-directory of your
-      Node-RED user directory (e.g., <code>~/.node-red/configs/</code>).
-      This ensures your configuration is portable and included in backups of
-      your Node-RED environment.
+      Node-RED user directory (e.g., <code>~/.node-red/configs/</code>). This
+      ensures your configuration is portable and included in backups of your
+      Node-RED environment.
     </li>
     <li>
       <strong>Topic Structure:</strong> Keep your MQTT topics consistent. The
-      node relies on a predictable structure (<code>base/device-name/suffix</code>)
-      to function correctly.
+      node relies on a predictable structure
+      (<code>base/device-name/suffix</code>) to function correctly.
     </li>
     <li>
       <strong>Context Usage:</strong> Use the "Export" features to expose state
       and topics to the context. This decouples your dashboard or other logic
       from the internal workings of this node, making your flows more robust.
-      For example, an <code>mqtt-in</code> node can subscribe to topics
-      from <code>flow.get("lsh_topics.all")</code>, automatically updating
-      when you change your configuration.
+      For example, an <code>mqtt-in</code> node can subscribe to topics from
+      <code>flow.get("lsh_topics.all")</code>, automatically updating when you
+      change your configuration.
     </li>
     <li>
-      <strong>Watchdog Tuning:</strong> The default timing settings are generally
-      safe, but you may need to adjust them for very slow (e.g., cellular) or
-      very fast networks to avoid false positives or delayed detection.
+      <strong>Watchdog Tuning:</strong> The default timing settings are
+      generally safe, but you may need to adjust them for very slow (e.g.,
+      cellular) or very fast networks to avoid false positives or delayed
+      detection.
     </li>
   </ul>
 </script>
