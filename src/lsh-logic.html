@@ -1,0 +1,404 @@
+<!-- Node-RED Registration Script -->
+<script type="text/javascript">
+  RED.nodes.registerType("lsh-logic", {
+    category: "function",
+    color: "#4a90e2",
+    defaults: {
+      name: { value: "" },
+      // MQTT Path Settings
+      homieBasePath: { value: "homie/", required: true },
+      lshBasePath: { value: "LSH/", required: true },
+      serviceTopic: { value: "LSH/Node-RED/SRV", required: true },
+      // Context Key Prefixes
+      otherDevicesPrefix: { value: "other_devices", required: true },
+      // File Config
+      longClickConfigPath: {
+        value: "configs/longClickConfig.json",
+        required: true,
+      },
+      // Context Export
+      exposeStateContext: { value: "none", required: true },
+      exposeStateKey: { value: "lsh_state" },
+      exportTopics: { value: "flow", required: true },
+      exportTopicsKey: { value: "lsh_topics" },
+      exposeConfigContext: { value: "none", required: true },
+      exposeConfigKey: { value: "lsh_config" },
+      // Other Actors
+      otherActorsContext: { value: "global", required: true },
+      // Timing
+      clickTimeout: {
+        value: 15,
+        required: true,
+        validate: RED.validators.number(),
+      },
+      clickCleanupInterval: {
+        value: 30,
+        required: true,
+        validate: RED.validators.number(),
+      },
+      watchdogInterval: {
+        value: 2,
+        required: true,
+        validate: RED.validators.number(),
+      },
+      interrogateThreshold: {
+        value: 3,
+        required: true,
+        validate: RED.validators.number(),
+      },
+      pingTimeout: {
+        value: 150,
+        required: true,
+        validate: RED.validators.number(),
+      },
+    },
+    inputs: 1,
+    outputs: 4,
+    icon: "font-awesome/fa-cogs",
+    label: function () {
+      return this.name || "LSH Logic";
+    },
+    inputLabels: "MQTT Messages",
+    outputLabels: ["LSH Commands", "Other Actor Commands", "Alerts", "Debug"],
+  });
+</script>
+
+<!-- Node Configuration Panel Template -->
+<script type="text/html" data-template-name="lsh-logic">
+  <style>
+    .lsh-config-section {
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      padding: 15px;
+      margin-top: 20px;
+    }
+    .lsh-config-section-title {
+      font-size: 14px;
+      font-weight: bold;
+      margin-bottom: 15px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 8px;
+      display: flex;
+      align-items: center;
+      color: #333;
+    }
+    .lsh-config-section-title i {
+      margin-right: 10px;
+      color: #999;
+    }
+  </style>
+
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="LSH Logic Core" />
+  </div>
+
+  <!-- MQTT Path Settings Section -->
+  <div class="lsh-config-section">
+    <div class="lsh-config-section-title">
+      <i class="fa fa-sitemap"></i> MQTT Path Settings
+    </div>
+    <div class="form-row">
+      <label for="node-input-homieBasePath">Homie Base Path</label>
+      <input
+        type="text"
+        id="node-input-homieBasePath"
+        placeholder="e.g., homie/"
+      />
+      <span class="form-tip"
+        >Base path for Homie device state topics. Must end with a '/'.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-lshBasePath">LSH Base Path</label>
+      <input type="text" id="node-input-lshBasePath" placeholder="e.g., LSH/" />
+      <span class="form-tip"
+        >Base path for LSH device topics. Must end with a '/'.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-serviceTopic">Service Topic</label>
+      <input
+        type="text"
+        id="node-input-serviceTopic"
+        placeholder="e.g., LSH/Node-RED/SRV"
+      />
+      <span class="form-tip"
+        >Broadcast topic subscribed to by all devices for global commands (e.g.,
+        ping).</span
+      >
+    </div>
+  </div>
+
+  <!-- Context Key Prefixes Section -->
+  <div class="lsh-config-section">
+    <div class="lsh-config-section-title">
+      <i class="fa fa-database"></i> Context Key Prefixes
+    </div>
+    <div class="form-row">
+      <label for="node-input-otherDevicesPrefix">External State Prefix</label>
+      <input
+        type="text"
+        id="node-input-otherDevicesPrefix"
+        placeholder="e.g., other_devices"
+      />
+      <span class="form-tip"
+        >Prefix for reading external actor states from flow/global
+        context.</span
+      >
+    </div>
+  </div>
+
+  <!-- Configuration File Section -->
+  <div class="lsh-config-section">
+    <div class="lsh-config-section-title">
+      <i class="fa fa-file-text-o"></i> Configuration File
+    </div>
+    <div class="form-row">
+      <label for="node-input-longClickConfigPath">Long Click Config</label>
+      <input
+        type="text"
+        id="node-input-longClickConfigPath"
+        placeholder="configs/longClickConfig.json"
+      />
+      <span class="form-tip"
+        >Path to the main JSON config, relative to your Node-RED user
+        directory.</span
+      >
+    </div>
+  </div>
+
+  <!-- Timing Section -->
+  <div class="lsh-config-section">
+    <div class="lsh-config-section-title">
+      <i class="fa fa-clock-o"></i> Timing Settings
+    </div>
+    <div class="form-row">
+      <label for="node-input-clickTimeout">Click Ack Timeout (s)</label>
+      <input type="number" id="node-input-clickTimeout" style="width: 80px;" />
+      <span class="form-tip"
+        >Seconds to wait for a network click confirmation before it
+        expires.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-clickCleanupInterval">Click Cleanup (s)</label>
+      <input
+        type="number"
+        id="node-input-clickCleanupInterval"
+        style="width: 80px;"
+      />
+      <span class="form-tip"
+        >How often to check for and remove expired, unconfirmed clicks.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-watchdogInterval">Watchdog Interval (s)</label>
+      <input
+        type="number"
+        id="node-input-watchdogInterval"
+        style="width: 80px;"
+      />
+      <span class="form-tip"
+        >Frequency of device health checks (in seconds).</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-interrogateThreshold">Ping Threshold (s)</label>
+      <input
+        type="number"
+        id="node-input-interrogateThreshold"
+        style="width: 80px;"
+      />
+      <span class="form-tip"
+        >Seconds of device silence before sending a ping.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-pingTimeout">Ping Timeout (s)</label>
+      <input type="number" id="node-input-pingTimeout" style="width: 80px;" />
+      <span class="form-tip"
+        >Seconds to wait for a ping response before marking a device as
+        'stale'.</span
+      >
+    </div>
+  </div>
+
+  <!-- Context & External State Section -->
+  <div class="lsh-config-section">
+    <div class="lsh-config-section-title">
+      <i class="fa fa-exchange"></i> Context Interaction
+    </div>
+    <div style="padding-left: 10px;">
+      <h4>Export Internal State</h4>
+      <div class="form-row">
+        <label for="node-input-exposeStateContext">Store in</label>
+        <select id="node-input-exposeStateContext" style="width: 70%;">
+          <option value="none">Nowhere (Disabled)</option>
+          <option value="flow">Flow Context</option>
+          <option value="global">Global Context</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="node-input-exposeStateKey">With key</label>
+        <input type="text" id="node-input-exposeStateKey" style="width: 70%;" />
+      </div>
+      <hr />
+      <h4>Export MQTT Topics</h4>
+      <div class="form-row">
+        <label for="node-input-exportTopics">Store in</label>
+        <select id="node-input-exportTopics" style="width: 70%;">
+          <option value="none">Nowhere (Disabled)</option>
+          <option value="flow">Flow Context</option>
+          <option value="global">Global Context</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="node-input-exportTopicsKey">With key</label>
+        <input
+          type="text"
+          id="node-input-exportTopicsKey"
+          style="width: 70%;"
+        />
+      </div>
+      <hr />
+      <h4>Read External Actor State</h4>
+      <div class="form-row">
+        <label for="node-input-otherActorsContext">From</label>
+        <select id="node-input-otherActorsContext" style="width: 70%;">
+          <option value="flow">Flow Context</option>
+          <option value="global">Global Context</option>
+        </select>
+      </div>
+    </div>
+    <hr />
+    <h4>Export Node Configuration</h4>
+    <div class="form-row">
+      <label for="node-input-exposeConfigContext">Store in</label>
+      <select id="node-input-exposeConfigContext" style="width: 70%;">
+        <option value="none">Nowhere (Disabled)</option>
+        <option value="flow">Flow Context</option>
+        <option value="global">Global Context</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="node-input-exposeConfigKey">With key</label>
+      <input
+        type="text"
+        id="node-input-exposeConfigKey"
+        style="width: 70%;"
+        placeholder="e.g., lsh_config"
+      />
+    </div>
+  </div>
+</script>
+
+<!-- The Help tab documentation for the node -->
+<script type="text/html" data-help-name="lsh-logic">
+  <p>
+    A powerful, all-in-one node that encapsulates the entire automation logic
+    for an LSH (Labo Smart Home) style system. It replaces a complex flow with a
+    single, robust, and maintainable component.
+  </p>
+
+  <h3>Core Features</h3>
+  <ul>
+    <li>
+      <strong>Dynamic Configuration:</strong> Loads and validates a
+      <code>longClickConfig.json</code> file and reloads it automatically on
+      changes.
+    </li>
+    <li>
+      <strong>State Management:</strong> Maintains an in-memory registry of all
+      device states, health, and configurations.
+    </li>
+    <li>
+      <strong>Advanced Click Logic:</strong> Implements "long-click" (smart
+      toggle) and "super-long-click" (turn all off) actions.
+    </li>
+    <li>
+      <strong>Reliable Network Protocol:</strong> Uses a two-phase commit
+      protocol for network-based button clicks to ensure commands are not lost.
+    </li>
+    <li>
+      <strong>Intelligent Watchdog:</strong> Actively monitors device health
+      with a multi-stage ping mechanism to prevent false positives and generate
+      alerts.
+    </li>
+    <li>
+      <strong>Dynamic Topic Generation:</strong> Can export the required MQTT
+      topic lists to a context variable, enabling auto-configuration of MQTT
+      subscriber nodes.
+    </li>
+  </ul>
+
+  <h3>Inputs</h3>
+  <dl class="message-properties">
+    <dt>MQTT Messages</dt>
+    <dd>
+      Accepts standard LSH and Homie protocol messages. The node automatically
+      routes messages based on the topic structure defined in
+      <b>MQTT Path Settings</b>.
+      <ul>
+        <li>
+          LSH Topics (e.g., <code>LSH/my-device/state</code>,
+          <code>/conf</code>, <code>/misc</code>)
+        </li>
+        <li>Homie State Topics (e.g., <code>homie/my-device/$state</code>)</li>
+      </ul>
+    </dd>
+  </dl>
+
+  <h3>Outputs</h3>
+  <ol>
+    <li>
+      <b>LSH Commands:</b> Outputs MQTT messages for devices using the LSH
+      protocol. This includes actuator state commands, network click ACKs,
+      failovers, and watchdog pings.
+    </li>
+    <li>
+      <b>Other Actor Commands:</b> Outputs generic commands intended for
+      external devices (e.g., Tasmota, Zigbee). The message payload is typically
+      a boolean (<code>true</code>/<code>false</code>) representing the desired
+      state, and the topic is the actor's name.
+    </li>
+    <li>
+      <b>Alerts:</b> Outputs formatted, human-readable alert messages for
+      unresponsive devices.
+    </li>
+    <li>
+      <b>Debug:</b> Forwards the original, unprocessed input message for
+      debugging and logging purposes.
+    </li>
+  </ol>
+
+  <h3>Node Configuration</h3>
+  <dl class="message-properties">
+    <dt>MQTT Path Settings</dt>
+    <dd>
+      Defines the base paths for all MQTT topics the node listens to and acts
+      upon. These must match your system's topic structure.
+    </dd>
+    <dt>Configuration File</dt>
+    <dd>
+      Specifies the path to your <code>longClickConfig.json</code> file,
+      relative to your Node-RED user directory (e.g., <code>~/.node-red</code>).
+      This file defines all devices and the actions triggered by their buttons.
+    </dd>
+    <dt>Context Interaction</dt>
+    <dd>
+      Allows the node to share its internal state and the generated MQTT topic
+      lists with the rest of the flow via flow or global context variables. This
+      is useful for building dashboards or dynamically configuring other nodes
+      (like an MQTT-in node). It also defines where to read the state of
+      external devices from.
+    </dd>
+    <dt>Timing Settings</dt>
+    <dd>
+      Allows you to fine-tune all system timeouts and intervals, such as the
+      watchdog frequency and network click confirmation window. This helps adapt
+      the node's behavior to different network conditions and device response
+      times.
+    </dd>
+  </dl>
+</script>
