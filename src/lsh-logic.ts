@@ -235,15 +235,19 @@ export class LshLogicNode {
   /**
    * Cleans up resources when the node is closed or re-deployed.
    */
-  public testCleanup(): void {
+  private _cleanupResources(): void {
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
     if (this.watcher) (this.watcher as any)?.close();
   }
 
+  public testCleanup(): void {
+    this._cleanupResources();
+  }
+
   private async handleClose(done: () => void): Promise<void> {
     this.node.log("Closing LSH Logic node.");
-    this.testCleanup();
+    this._cleanupResources();
     done();
   }
 

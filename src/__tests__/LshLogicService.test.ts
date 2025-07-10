@@ -150,6 +150,27 @@ describe("LshLogicService", () => {
             ]);
             expect(result.logs.some(log => log.includes("Click confirmed"))).toBe(true);
         });
+
+        it("should return a Click Failover message for a click targeting an offline actor", () => {
+            // Arrange
+            service.updateLongClickConfig(mockLongClickConfig);
+            // Ensure actor1 is known but marked as offline
+            service.processMessage("LSH/actor1/conf", { p: LshProtocol.DEVICE_DETAILS, dn: "actor1", ai: ["A1"], bi: [] });
+            service.getDeviceRegistry()["actor1"].connected = false; // Mark as disconnected
+
+            const topic = "LSH/device-sender/misc";
+            const payload = { p: LshProtocol.NETWORK_CLICK, bi: "B1", ct: ClickType.Long, c: false };
+
+            // Act
+            const result = service.processMessage(topic, payload);
+
+            // Assert
+            expect(result.messages[Output.Lsh]).toEqual({
+                topic: "LSH/device-sender/IN",
+                payload: { p: LshProtocol.FAILOVER, bi: "B1", ct: ClickType.Long },
+            });
+            expect(result.warnings.some(w => w.includes("Target actor(s) are offline"))).toBe(true);
+        });
     });
 
     describe("Watchdog", () => {
