@@ -124,6 +124,15 @@ export class LshLogicNode {
   private watchdogInterval: NodeJS.Timeout | null = null;
 
   /**
+   * @internal
+   * @description A map of handler functions for different LSH message types.
+   * This replaces a `switch` statement, making the code more declarative and extensible.
+   */
+  private lshMessageHandlers: {
+    [key in 'conf' | 'state' | 'misc']: (deviceName: string, payload: any) => void;
+  };
+
+  /**
    * Creates an instance of the LshLogicNode.
    * @param node - The Node-RED node instance this class is managing.
    * @param config - The user-defined configuration for this node instance.
@@ -153,6 +162,12 @@ export class LshLogicNode {
 
     // Initialize the declarative routing table.
     this.routes = this._createTopicRoutes();
+
+    this.lshMessageHandlers = {
+      conf: (deviceName, payload) => this._handleConfMessage(deviceName, payload),
+      state: (deviceName, payload) => this._handleStateMessage(deviceName, payload),
+      misc: (deviceName, payload) => this._handleMiscMessage(deviceName, payload),
+    };
 
     this.initialize();
 
@@ -801,76 +816,97 @@ export class LshLogicNode {
 
   /**
    * @internal
-   * @description Internal router for messages on the LSH base path.
-   * It validates and dispatches the message to the appropriate handler.
+   * @description Dispatches an incoming LSH message to the correct handler based on its topic suffix.
    * @param deviceName - The name of the device that sent the message.
    * @param suffix - The final part of the topic (e.g., 'conf', 'state', 'misc').
    * @param payload - The message payload.
    */
   private _handleLshMessage(deviceName: string, suffix: 'conf' | 'state' | 'misc', payload: any): void {
-    switch (suffix) {
-      case "conf":
-        if (this.validateConfPayload(payload)) {
-          this.storeDeviceDetails(deviceName, payload as DeviceConfPayload);
-        } else {
-          this.node.warn(
-            `Invalid 'conf' payload from ${deviceName}: ${this.ajv.errorsText(
-              this.validateConfPayload.errors
-            )}`
-          );
+    const handler = this.lshMessageHandlers[suffix];
+    if (handler) {
+      handler(deviceName, payload);
+    }
+  }
+
+  /**
+   * @internal
+   * @description Handles 'conf' messages by validating the payload and storing device details.
+   * @param deviceName - The name of the device.
+   * @param payload - The 'conf' message payload.
+   */
+  private _handleConfMessage(deviceName: string, payload: any): void {
+    if (this.validateConfPayload(payload)) {
+      this.storeDeviceDetails(deviceName, payload as DeviceConfPayload);
+    } else {
+      this.node.warn(
+        `Invalid 'conf' payload from ${deviceName}: ${this.ajv.errorsText(
+          this.validateConfPayload.errors
+        )}`
+      );
+    }
+  }
+
+  /**
+   * @internal
+   * @description Handles 'state' messages by validating the payload and storing actuator states.
+   * @param deviceName - The name of the device.
+   * @param payload - The 'state' message payload.
+   */
+  private _handleStateMessage(deviceName: string, payload: any): void {
+    if (this.validateStatePayload(payload)) {
+      this.storeDeviceState(deviceName, (payload as DeviceStatePayload).as);
+    } else {
+      this.node.warn(
+        `Invalid 'state' payload from ${deviceName}: ${this.ajv.errorsText(
+          this.validateStatePayload.errors
+        )}`
+      );
+    }
+  }
+
+  /**
+   * @internal
+   * @description Handles 'misc' messages, dispatching them to further logic based on the protocol identifier 'p'.
+   * @param deviceName - The name of the device.
+   * @param payload - The 'misc' message payload.
+   */
+  private _handleMiscMessage(deviceName: string, payload: any): void {
+    if (!this.validateAnyMiscPayload(payload)) {
+      this.node.warn(`Received invalid or unhandled 'misc' payload from ${deviceName}.`);
+      this.send({
+        [Output.Debug]: {
+          payload: {
+            error: "Invalid Misc Payload", topic: `${this.config.lshBasePath}${deviceName}/misc`, receivedPayload: payload,
+          },
+        },
+      });
+      return;
+    }
+
+    const miscPayload = payload as AnyDeviceMiscPayload;
+    switch (miscPayload.p) {
+      case LshProtocol.NETWORK_CLICK:
+        this.handleNetworkClick(deviceName, miscPayload);
+        break;
+      case LshProtocol.DEVICE_BOOT:
+        this.node.log(`Device '${deviceName}' reported a boot event.`);
+        const device = this.deviceManager.getDevice(deviceName);
+        if (device) {
+          device.lastSeenTime = Date.now();
+          device.lastBootTime = Date.now();
+          this.updateExposedState();
         }
         break;
-
-      case "state":
-        if (this.validateStatePayload(payload)) {
-          this.storeDeviceState(deviceName, (payload as DeviceStatePayload).as);
-        } else {
-          this.node.warn(
-            `Invalid 'state' payload from ${deviceName}: ${this.ajv.errorsText(
-              this.validateStatePayload.errors
-            )}`
-          );
-        }
-        break;
-
-      case "misc":
-        if (!this.validateAnyMiscPayload(payload)) {
-          this.node.warn(`Received invalid or unhandled 'misc' payload from ${deviceName}.`);
-          this.send({
-            [Output.Debug]: {
-              payload: {
-                error: "Invalid Misc Payload", topic: `${this.config.lshBasePath}${deviceName}/misc`, receivedPayload: payload,
-              },
-            },
-          });
-        } else {
-          const miscPayload = payload as AnyDeviceMiscPayload;
-          switch (miscPayload.p) {
-            case LshProtocol.NETWORK_CLICK:
-              this.handleNetworkClick(deviceName, miscPayload);
-              break;
-            case LshProtocol.DEVICE_BOOT:
-              this.node.log(`Device '${deviceName}' reported a boot event.`);
-              const device = this.deviceManager.getDevice(deviceName);
-              if (device) {
-                device.lastSeenTime = Date.now();
-                device.lastBootTime = Date.now();
-                this.updateExposedState();
-              }
-              break;
-            case LshProtocol.PING:
-              this.node.log(`Received ping response from '${deviceName}'.`);
-              const pingingDevice = this.deviceManager.getDevice(deviceName);
-              if (pingingDevice) {
-                pingingDevice.lastSeenTime = Date.now();
-                if (pingingDevice.isStale) {
-                  this.node.log(`Device '${deviceName}' is no longer stale.`);
-                  pingingDevice.isStale = false;
-                }
-                this.updateExposedState();
-              }
-              break;
+      case LshProtocol.PING:
+        this.node.log(`Received ping response from '${deviceName}'.`);
+        const pingingDevice = this.deviceManager.getDevice(deviceName);
+        if (pingingDevice) {
+          pingingDevice.lastSeenTime = Date.now();
+          if (pingingDevice.isStale) {
+            this.node.log(`Device '${deviceName}' is no longer stale.`);
+            pingingDevice.isStale = false;
           }
+          this.updateExposedState();
         }
         break;
     }
