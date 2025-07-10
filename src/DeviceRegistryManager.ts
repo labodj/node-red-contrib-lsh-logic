@@ -2,13 +2,14 @@
 
 /**
  * @file Manages the in-memory state of all known devices.
- * This class is responsible for creating, updating, and querying device states,
- * but does not handle I/O (like logging or sending messages).
+ * This class is the single source of truth for device state and is solely
+ * responsible for creating, updating, and querying it. It does not handle
+ * I/O (like logging or sending messages).
  */
 import {
   DeviceRegistry,
   DeviceState,
-  DeviceConfPayload,
+  DeviceDetailsPayload,
   Actor,
   ActuatorIndexMap,
 } from "./types";
@@ -90,14 +91,15 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Updates the registry with configuration details from a device's 'conf' message.
+   * Updates the registry with configuration details from a device's 'conf' message (`d_dd`).
    * @param deviceName - The name of the device.
-   * @param details - The payload from the 'conf' topic.
+   * @param details - The validated payload from the 'conf' topic.
+   * @returns An object indicating if the device details have changed.
    */
-  public storeDeviceDetails(
+  public registerDeviceDetails(
     deviceName: string,
-    details: DeviceConfPayload
-  ): void {
+    details: DeviceDetailsPayload
+  ): { changed: boolean } {
     const device = this._ensureDeviceExists(deviceName);
 
     const actuatorIndexes: ActuatorIndexMap = details.ai.reduce(
@@ -120,16 +122,17 @@ export class DeviceRegistryManager {
     if (device.actuatorStates.length !== details.ai.length) {
       device.actuatorStates = new Array(details.ai.length).fill(false);
     }
+    return { changed: true }; // Receiving details always constitutes a change.
   }
 
   /**
-     * Updates the actuator states for a specific device.
+     * Updates the actuator states for a specific device from a 'state' message (`d_as`).
      * @param deviceName - The name of the device.
      * @param newStates - The array of booleans from the 'state' topic payload.
      * @returns An object indicating if the device was new and if its state changed.
      * @throws An `Error` if the state array length doesn't match the known configuration.
      */
-  public storeDeviceState(
+  public registerActuatorStates(
     deviceName: string,
     newStates: boolean[]
   ): { isNew: boolean, changed: boolean } {
@@ -145,13 +148,11 @@ export class DeviceRegistryManager {
       );
     }
 
-    // Check if the state has actually changed.
     const hasChanged = !areSameArray(device.actuatorStates, newStates);
 
     if (hasChanged) {
       device.actuatorStates = newStates;
     }
-
     device.lastSeenTime = Date.now();
     return { isNew, changed: hasChanged };
   }
@@ -160,9 +161,9 @@ export class DeviceRegistryManager {
    * Updates the connection status of a device based on Homie $state messages.
    * @param deviceName - The name of the device.
    * @param homieState - The state string from the Homie topic (e.g., "ready", "lost").
-   * @returns An object indicating if the connection state changed and the new status.
+   * @returns An object indicating if the connection state changed.
    */
-  public storeConnectionState(
+  public updateConnectionState(
     deviceName: string,
     homieState: string
   ): { changed: boolean; connected: boolean } {
@@ -177,18 +178,52 @@ export class DeviceRegistryManager {
 
     device.connected = isReady;
     if (isReady) {
-      // Business rule: When a device comes online (Homie 'ready'),
-      // its health status is reset to a healthy, non-stale state.
-      // This clears any previous 'stale' or 'unhealthy' flags from the watchdog.
       device.isHealthy = true;
       device.isStale = false;
-      device.lastSeenTime = Date.now();
     }
+    device.lastSeenTime = Date.now();
     return { changed: true, connected: isReady };
   }
+
+  /**
+   * Records a boot event (`d_b`) from a device.
+   * @param deviceName - The name of the device that booted.
+   * @returns An object indicating if the state was changed.
+   */
+  public recordBoot(deviceName: string): { stateChanged: boolean } {
+    const device = this._ensureDeviceExists(deviceName);
+    const now = Date.now();
+    device.lastSeenTime = now;
+    device.lastBootTime = now;
+    // A boot event always resets health status.
+    device.isHealthy = true;
+    device.isStale = false;
+    return { stateChanged: true };
+  }
+
+  /**
+   * Records a ping response (`d_p`) from a device.
+   * @param deviceName - The name of the device that responded.
+   * @returns An object indicating if the state was changed.
+   */
+  public recordPingResponse(deviceName: string): { stateChanged: boolean } {
+    const device = this._ensureDeviceExists(deviceName);
+    let stateChanged = false;
+    if (device.isStale) {
+      device.isStale = false;
+      stateChanged = true;
+    }
+    // Also mark as healthy if it was previously unhealthy.
+    if (!device.isHealthy) {
+      device.isHealthy = true;
+      stateChanged = true;
+    }
+    device.lastSeenTime = Date.now();
+    return { stateChanged };
+  }
+
   /**
    * Updates the health status of a device based on a watchdog check result.
-   * This method is responsible ONLY for mutating the device's state in the registry.
    * @param deviceName - The name of the device to update.
    * @param result - The result from the Watchdog health check.
    * @returns An object indicating if the internal state was changed.
@@ -200,9 +235,8 @@ export class DeviceRegistryManager {
     const device = this.getDevice(deviceName);
     let stateChanged = false;
 
-    // This case covers devices configured but never seen.
     if (!device) {
-      return { stateChanged: false }; // No state to change.
+      return { stateChanged: false };
     }
 
     switch (result.status) {
@@ -215,8 +249,6 @@ export class DeviceRegistryManager {
         break;
 
       case "stale":
-        // If it was already stale, it becomes unhealthy on the next timeout.
-        // Here we just mark it as stale for the first time.
         if (!device.isStale) {
           device.isStale = true;
           stateChanged = true;
@@ -228,23 +260,21 @@ export class DeviceRegistryManager {
           device.isHealthy = false;
           stateChanged = true;
         }
-        // An unhealthy device is by definition not stale anymore, it's worse.
         if (device.isStale) {
           device.isStale = false;
           stateChanged = true;
         }
         break;
 
-      // "needs_ping" does not change the stored state itself, it's an action for the orchestrator.
       case "needs_ping":
         break;
     }
 
     return { stateChanged };
   }
+
   /**
    * Calculates the desired state for a "smart toggle" operation.
-   * This version uses `reduce` for a more functional and declarative style.
    * @param actors - An array of primary LSH actors to consider.
    * @param otherActors - An array of secondary external actor names.
    * @returns An object with the calculated state and diagnostic info.
@@ -254,7 +284,6 @@ export class DeviceRegistryManager {
     otherActors: string[]
   ): { stateToSet: boolean; active: number; total: number; warning?: string } {
 
-    // Calculate active and total counts for LSH devices
     const lshCounts = actors.reduce(
       (acc, actor) => {
         const device = this.registry[actor.name];
@@ -282,14 +311,13 @@ export class DeviceRegistryManager {
     let warning: string | undefined;
     const prefix = this.otherDevicesPrefix;
 
-    // Calculate active and total counts for other (external) actors
     const otherCounts = otherActors.reduce(
       (acc, actorName) => {
         const state = this.otherActorsContext.get(`${prefix}.${actorName}.state`);
         if (typeof state === "boolean") {
           acc.total++;
           if (state === true) acc.active++;
-        } else if (warning === undefined) { // Capture only the first warning
+        } else if (warning === undefined) {
           warning = `State for otherActor '${actorName}' not found or not a boolean.`;
         }
         return acc;
@@ -302,15 +330,13 @@ export class DeviceRegistryManager {
 
     if (totalCount === 0) {
       return {
-        stateToSet: false, // Default to OFF if no valid targets
+        stateToSet: false,
         active: 0,
         total: 0,
         warning: warning ?? "Smart Toggle: No valid actuators found to calculate state.",
       };
     }
 
-    // This is the core "Smart Toggle" logic: turn the lights ON only if
-    // less than half of them are already on. Otherwise, turn them all OFF.
     const shouldTurnOn = activeCount < totalCount / 2.0;
 
     return {
