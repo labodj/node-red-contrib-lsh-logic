@@ -104,7 +104,8 @@ export const deviceConfPayloadSchema = {
     dn: { type: "string", description: "Device Name." },
   },
   required: ["ai", "bi", "dn"],
-  additionalProperties: true, // Allow other properties, as firmware may add them.
+  /** Allows for forward-compatibility. If future firmware versions add extra fields, they will be ignored instead of causing a validation error. */
+  additionalProperties: true,
 };
 
 /**
@@ -151,7 +152,7 @@ export const deviceBootPayloadSchema = {
   additionalProperties: true,
 };
 
-/** Schema for a Ping Response payload ('d_pr'). */
+/** Schema for a Ping payload ('d_p'). */
 export const pingPayloadSchema = {
   type: "object",
   properties: {

@@ -5,11 +5,14 @@ import { Watchdog } from "../Watchdog";
 import { DeviceState } from "../types";
 
 describe("Watchdog", () => {
+  /** Test constant for the interrogation threshold in seconds. */
   const INTERROGATE_SEC = 3;
+  /** Test constant for the ping timeout in seconds. */
   const TIMEOUT_SEC = 5;
+  /** The instance of the Watchdog class under test. */
   let watchdog: Watchdog;
 
-  // A mock device state for testing
+  /** A mock device state object used as a base for various test scenarios. */
   const mockDevice: DeviceState = {
     name: "test-device",
     connected: true,

@@ -9,7 +9,7 @@ describe("formatAlertMessage", () => {
       "‼️ *System Health Alert* ‼️\n\n" +
       "The following devices have stopped responding:\n" +
       "  - *living-room-light*: Ping failed.\n" +
-      "\nPlease check their power and network connection."; // <-- CORREGGI QUESTA RIGA
+      "\nPlease check their power and network connection.";
 
     const result = formatAlertMessage(unhealthyDevices);
     expect(result).toBe(expectedMessage);
