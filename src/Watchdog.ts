@@ -1,3 +1,5 @@
+// src/Watchdog.ts
+
 /**
  * @file Manages device health monitoring, deciding when to ping devices or raise alerts.
  * This class encapsulates the logic for determining device staleness based on
@@ -39,53 +41,56 @@ export class Watchdog {
 
   /**
    * Checks the health of a single device based on its state and the current time.
+   * This method uses guard clauses for improved readability.
    * @param deviceState - The current state of the device to check.
    * @param now - The current timestamp (e.g., from `Date.now()`).
    * @returns A `WatchdogResult` indicating the device's health status.
    */
   public checkDeviceHealth(
-    deviceState: DeviceState,
+    deviceState: DeviceState | undefined,
     now: number
   ): WatchdogResult {
+    // GUARD 1: Device is not in the registry or has never sent ANY message.
+    // This is the condition the test expects.
     if (!deviceState || deviceState.lastSeenTime === 0) {
       return { status: "unhealthy", reason: "Never seen on the network." };
     }
 
     const timeSinceLastSeen = now - deviceState.lastSeenTime;
-    const pingSentTime = this.pingTimestamps.get(deviceState.name) || 0;
 
-    // 1. If seen recently, it's healthy. Clear any pending ping state.
+    // GUARD 2: Device has been seen recently. It's healthy.
     if (timeSinceLastSeen < this.interrogateThresholdMs) {
-      if (pingSentTime) this.pingTimestamps.delete(deviceState.name);
+      this.onDeviceActivity(deviceState.name); // Clear any pending ping
       return { status: "ok" };
     }
 
-    // --- At this point, the device has been silent for too long ---
+    // At this point, we know the device has been silent for too long.
+    const pingSentTime = this.pingTimestamps.get(deviceState.name);
 
-    // 2. If we have already sent a ping...
-    if (pingSentTime > 0) {
-      // 2a. ...check if the ping has timed out.
-      if (now - pingSentTime > this.pingTimeoutMs) {
-        // Ping timed out. It's stale. We'll try pinging again.
-        this.pingTimestamps.set(deviceState.name, now); // Record that we are trying to ping again
-        return { status: "stale" }; // It's stale, might become unhealthy on the next check
+    if (pingSentTime) {
+      // A ping has already been sent. We need to check if it has timed out.
+      const pingHasTimedOut = now - pingSentTime > this.pingTimeoutMs;
+      if (pingHasTimedOut) {
+        // Ping timed out. It's now stale. The orchestrator will ping again.
+        this.pingTimestamps.set(deviceState.name, now); // Set a new ping time for the next attempt
+        return { status: "stale" };
+      } else {
+        // Ping was sent, but we are still within the timeout window. All is OK for now.
+        return { status: "ok" };
       }
-      // 2b. ...otherwise, the ping has not timed out yet. We wait.
-      return { status: "ok" };
+    } else {
+      // Device is silent and we haven't sent a ping yet. Time to send one.
+      this.pingTimestamps.set(deviceState.name, now);
+      return { status: "needs_ping" };
     }
-
-    // 3. If we reach here, the device is silent and we haven't pinged it yet. Time to send a ping.
-    this.pingTimestamps.set(deviceState.name, now);
-    return { status: "needs_ping" };
   }
 
   /**
    * Resets the ping timestamp for a device, typically after receiving a message from it.
+   * This should be called whenever there's activity to prevent false 'stale' states.
    * @param deviceName - The name of the device.
    */
   public onDeviceActivity(deviceName: string): void {
-    if (this.pingTimestamps.has(deviceName)) {
-      this.pingTimestamps.delete(deviceName);
-    }
+    this.pingTimestamps.delete(deviceName);
   }
 }
