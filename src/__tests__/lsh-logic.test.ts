@@ -3,10 +3,10 @@
  * These tests verify that the node correctly delegates tasks to its managers
  * and sends the appropriate messages based on inputs and internal logic.
  */
-import { Node, NodeAPI } from "node-red";
+import { Node, NodeAPI, NodeMessage } from "node-red";
 
 import { LshLogicNode } from "../lsh-logic";
-import { LshLogicNodeDef, Output } from "../types";
+import { LshLogicNodeDef, Output, OutputMessages } from "../types";
 import { ClickTransactionManager } from "../ClickTransactionManager";
 
 // --- MOCK SETUP ---
@@ -14,16 +14,11 @@ jest.mock("fs/promises");
 jest.mock("chokidar", () => ({
   watch: jest.fn().mockReturnValue({ on: jest.fn(), close: jest.fn() }),
 }));
-// Mock the entire ClickTransactionManager class
 jest.mock("../ClickTransactionManager");
 
 const fs = require("fs/promises");
 
-/**
- * Mocks the Node-RED Node object.
- * Jest spies (`jest.fn()`) are used to track calls to node methods
- * like `on`, `send`, `log`, `status`, etc.
- */
+/** Mocks the Node-RED Node object. */
 const mockNode: Partial<Node> = {
   id: "test-node-id",
   on: jest.fn(),
@@ -33,25 +28,18 @@ const mockNode: Partial<Node> = {
   error: jest.fn(),
   status: jest.fn(),
   context: () =>
-    ({
-      flow: { get: jest.fn(), set: jest.fn() },
-      global: { get: jest.fn(), set: jest.fn() },
-    } as any),
+  ({
+    flow: { get: jest.fn(), set: jest.fn() },
+    global: { get: jest.fn(), set: jest.fn() },
+  } as any),
 };
 
-/**
- * Mocks the Node-RED runtime API object.
- * Only the `settings.userDir` property is needed for the tests.
- */
+/** Mocks the Node-RED runtime API object. */
 const mockRED: Partial<NodeAPI> = {
   settings: { userDir: process.cwd() } as any,
 };
 
-/**
- * Mocks the node's user-defined configuration (`LshLogicNodeDef`).
- * Provides a default set of configuration properties for the node instance
- * under test.
- */
+/** Mocks the node's user-defined configuration. */
 const mockConfig: LshLogicNodeDef = {
   id: "test-node-id",
   type: "lsh-logic",
@@ -79,9 +67,27 @@ const mockConfig: LshLogicNodeDef = {
 // --- TESTS ---
 describe("LshLogicNode Orchestrator", () => {
   let instance: LshLogicNode;
-  // Hold a reference to the mocked class constructor
-  const MockedClickTransactionManager =
-    ClickTransactionManager as jest.MockedClass<typeof ClickTransactionManager>;
+  const MockedClickManager = ClickTransactionManager as jest.MockedClass<
+    typeof ClickTransactionManager
+  >;
+
+  /**
+   * Test Helper: Creates the full output array for a `node.send` call.
+   * This makes tests robust against changes in the number of outputs.
+   * @param messages - An object mapping an Output enum member to the expected message.
+   * @returns A full output array with `null` for unspecified outputs.
+   */
+  const createExpectedOutput = (messages: OutputMessages): (NodeMessage | null)[] => {
+    const numOutputs = Object.keys(Output).length / 2;
+    const outputArray: (NodeMessage | null)[] = new Array(numOutputs).fill(null);
+    for (const key in messages) {
+      const outputIndex = parseInt(key, 10);
+      if (!isNaN(outputIndex)) {
+        outputArray[outputIndex] = messages[key as any];
+      }
+    }
+    return outputArray;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -97,13 +103,6 @@ describe("LshLogicNode Orchestrator", () => {
     instance.testCleanup();
   });
 
-  /**
-   * Test helper to simulate an 'input' event on the mock node.
-   * It retrieves the input callback registered in `beforeEach` and invokes it
-   * with a mock message object.
-   * @param topic - The topic of the simulated message.
-   * @param payload - The payload of the simulated message.
-   */
   const simulateInput = (topic: string, payload: any) => {
     const inputCallback = (mockNode.on as jest.Mock).mock.calls.find(
       (call) => call[0] === "input"
@@ -115,130 +114,96 @@ describe("LshLogicNode Orchestrator", () => {
 
   it("should delegate storing device details to its manager", async () => {
     await new Promise(process.nextTick);
-
     const manager = (instance as any).deviceManager;
     const storeDetailsSpy = jest.spyOn(manager, "storeDeviceDetails");
-
     const payload = { dn: "test-device", ai: ["A1"], bi: [] };
     simulateInput("LSH/test-device/conf", payload);
-
     expect(storeDetailsSpy).toHaveBeenCalledWith("test-device", payload);
-    expect(mockNode.log).toHaveBeenCalledWith(
-      expect.stringContaining("Stored/Updated details for device 'test-device'")
-    );
   });
 
-  /**
-   * Tests delegation of click handling to the ClickTransactionManager.
-   */
-  describe("Network Click Delegation", () => {
-    // Hold a reference to the mocked class constructor
-    const MockedClickManager = ClickTransactionManager as jest.MockedClass<
-      typeof ClickTransactionManager
-    >;
-
-    // We don't need a beforeEach here anymore, we'll setup inside each test.
-
-    it("should delegate starting a transaction on a valid click request", async () => {
+  describe("Network Click Handling", () => {
+    it("should send an ACK when a valid new click request is received", async () => {
       await new Promise(process.nextTick);
 
       // Setup
       const mockDeviceConfig = {
         name: "device-sender",
-        longClickButtons: [
-          {
-            id: "B1",
-            actors: [{ name: "actor1", allActuators: true, actuators: [] }],
-            otherActors: [],
-          },
-        ],
+        longClickButtons: [{ id: "B1", actors: [{ name: "actor1", allActuators: true, actuators: [] }], otherActors: [] }],
         superLongClickButtons: [],
       };
       (instance as any).deviceConfigMap.set("device-sender", mockDeviceConfig);
       const deviceManager = (instance as any).deviceManager;
-      deviceManager.storeDeviceDetails("actor1", {
-        dn: "actor1",
-        ai: ["A1"],
-        bi: [],
-      });
-
+      deviceManager.storeDeviceDetails("actor1", { dn: "actor1", ai: ["A1"], bi: [] });
+      deviceManager.storeConnectionState("actor1", "ready");
       const payload = { p: "c_nc", bi: "B1", ct: "lc", c: false };
-      simulateInput("LSH/device-sender/misc", payload);
+      const topic = "LSH/device-sender/misc";
 
-      const managerInstance = MockedClickManager.mock.instances[0];
+      // Action
+      simulateInput(topic, payload);
 
-      // Verify delegation
-      expect(managerInstance.startTransaction).toHaveBeenCalledTimes(1);
-
-      // Get all arguments with which `send` was called
-      const sendCalls = (mockNode.send as jest.Mock).mock.calls;
-
-      // Find the specific call that contains the ACK message
-      const ackCall = sendCalls.find(
-        (call) =>
-          call[0] && // The argument exists
-          call[0][Output.Lsh] && // The LSH output is not null
-          call[0][Output.Lsh].payload.p === "d_nca" // It's an ACK
+      // Verify
+      expect(mockNode.send).toHaveBeenCalledTimes(2);
+      expect(mockNode.send).toHaveBeenCalledWith(
+        createExpectedOutput({
+          [Output.Lsh]: { topic: "LSH/device-sender/IN", payload: { p: "d_nca", bi: "B1", ct: "lc" } },
+        })
       );
-
-      // Assert that we found such a call
-      expect(ackCall).toBeDefined();
-
-      // Optionally, be more specific about the found call
-      expect(ackCall[0]).toEqual([
-        // The first element of the array must be an object that contains AT LEAST these properties
-        expect.objectContaining({
-          topic: "LSH/device-sender/IN",
-          payload: { p: "d_nca", bi: "B1", ct: "lc" },
-        }),
-        // The rest must be null
-        null,
-        null,
-        null,
-      ]);
+      expect(mockNode.send).toHaveBeenCalledWith(
+        createExpectedOutput({
+          [Output.Debug]: { topic, payload },
+        })
+      );
     });
 
-    it("should delegate consuming a transaction on a click confirmation", async () => {
+    it("should execute click logic when a valid confirmation is received", async () => {
       await new Promise(process.nextTick);
 
-      // Get the manager instance created by the LshLogicNode constructor
       const managerInstance = MockedClickManager.mock.instances[0];
+      const mockTransaction = { actors: [{ name: "actor1", allActuators: true, actuators: [] }], otherActors: [] };
+      (managerInstance.consumeTransaction as jest.Mock).mockReturnValue(mockTransaction);
 
-      // Mock the manager to return a valid transaction for this specific test
-      const mockTransaction = { actors: [], otherActors: [] };
-      (managerInstance.consumeTransaction as jest.Mock).mockReturnValue(
-        mockTransaction
-      );
-
+      const deviceManager = (instance as any).deviceManager;
+      deviceManager.storeDeviceDetails("actor1", { dn: "actor1", ai: ["A1"], bi: [] });
+      deviceManager.storeDeviceState("actor1", [false]);
       const payload = { p: "c_nc", bi: "B1", ct: "lc", c: true };
-      simulateInput("LSH/device-sender/misc", payload);
+      const topic = "LSH/device-sender/misc";
 
-      // Verify delegation
-      expect(managerInstance.consumeTransaction).toHaveBeenCalledTimes(1);
-      expect(managerInstance.consumeTransaction).toHaveBeenCalledWith(
-        "device-sender.B1.lc"
+      // Action
+      simulateInput(topic, payload);
+
+      // Verify
+      expect(managerInstance.consumeTransaction).toHaveBeenCalledWith("device-sender.B1.lc");
+      expect(mockNode.send).toHaveBeenCalledTimes(2);
+      expect(mockNode.send).toHaveBeenCalledWith(
+        createExpectedOutput({
+          [Output.Lsh]: { topic: "LSH/actor1/IN", payload: { p: "c_aas", as: [true] } },
+        })
       );
-
-      // Verify the node tries to execute logic as a side-effect
-      expect(mockNode.log).toHaveBeenCalledWith(
-        expect.stringContaining("Click confirmed")
+      expect(mockNode.send).toHaveBeenCalledWith(
+        createExpectedOutput({
+          [Output.Debug]: { topic, payload },
+        })
       );
     });
 
-    it("should warn if a confirmation for a non-existent transaction is received", async () => {
+    it("should warn if a confirmation for an unknown transaction is received", async () => {
       await new Promise(process.nextTick);
 
       const managerInstance = MockedClickManager.mock.instances[0];
-
-      // Mock the manager to return null, as if the transaction expired
       (managerInstance.consumeTransaction as jest.Mock).mockReturnValue(null);
-
       const payload = { p: "c_nc", bi: "B1", ct: "lc", c: true };
-      simulateInput("LSH/device-sender/misc", payload);
+      const topic = "LSH/device-sender/misc";
 
-      expect(managerInstance.consumeTransaction).toHaveBeenCalledTimes(1);
-      expect(mockNode.warn).toHaveBeenCalledWith(
-        expect.stringContaining("expired or unknown click")
+      // Action
+      simulateInput(topic, payload);
+
+      // Verify
+      expect(mockNode.warn).toHaveBeenCalledWith(expect.stringContaining("expired or unknown click"));
+      expect(mockNode.send).toHaveBeenCalledTimes(1);
+      expect(mockNode.send).toHaveBeenCalledWith(
+        createExpectedOutput({
+          [Output.Debug]: { topic, payload },
+        })
       );
     });
   });

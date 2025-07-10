@@ -82,18 +82,27 @@ export type OutputMessages = {
 // --------------------------------------------------------------------------
 
 /**
- * Defines a set of constant strings for LSH protocol identifiers.
+ * Defines a type-safe enum for LSH protocol identifiers.
+ * Using a string enum provides both the value at runtime and a type at compile time.
  */
-export const LshProtocol = {
-  NETWORK_CLICK: "c_nc",
-  NETWORK_CLICK_ACK: "d_nca",
-  CLICK_FAILOVER: "c_f",
-  GENERAL_FAILOVER: "c_gf",
-  APPLY_ALL_ACTUATORS_STATE: "c_aas",
-  APPLY_SINGLE_ACTUATOR_STATE: "c_asas",
-  DEVICE_BOOT: "d_b",
-  PING: "d_p",
-} as const;
+export enum LshProtocol {
+  /** Client -> Node: Network Click request or confirmation. */
+  NETWORK_CLICK = "c_nc",
+  /** Node -> Client: Acknowledgment of a valid Network Click request. */
+  NETWORK_CLICK_ACK = "d_nca",
+  /** Node -> Client: Failover signal for a specific click action that cannot be performed. */
+  CLICK_FAILOVER = "c_f",
+  /** Node -> Client: Failover signal for a system-level issue (e.g., config not loaded). */
+  GENERAL_FAILOVER = "c_gf",
+  /** Node -> Client: Command to set the state of all actuators on a device. */
+  APPLY_ALL_ACTUATORS_STATE = "c_aas",
+  /** Node -> Client: Command to set the state of a single, specific actuator. */
+  APPLY_SINGLE_ACTUATOR_STATE = "c_asas",
+  /** Client -> Node: Notification that the device has booted up. */
+  DEVICE_BOOT = "d_b",
+  /** Node <-> Client: Ping/pong message for health checks. */
+  PING = "d_p",
+}
 
 /** Payload from an LSH device's 'conf' topic. */
 export interface DeviceConfPayload {
@@ -114,7 +123,7 @@ export interface DeviceStatePayload {
 /** Payload for a Network Click ('c_nc'). */
 export interface NetworkClickPayload {
   /** The protocol identifier, must be 'c_nc'. */
-  p: typeof LshProtocol.NETWORK_CLICK;
+  p: LshProtocol.NETWORK_CLICK; // Using the enum member directly for type safety
   /** The ID of the button that was pressed (e.g., 'B1'). */
   bi: string;
   /** The type of click: 'lc' for long-click, 'slc' for super-long-click. */
@@ -122,15 +131,14 @@ export interface NetworkClickPayload {
   /** The phase of the transaction: `false` for the initial request, `true` for the final confirmation. */
   c: boolean;
 }
-
 /** Payload for a Device Boot ('d_b'). */
 export interface DeviceBootPayload {
-  p: typeof LshProtocol.DEVICE_BOOT;
+  p: LshProtocol.DEVICE_BOOT;
 }
 
 /** Payload for a Ping ('d_p'). */
 export interface PingPayload {
-  p: typeof LshProtocol.PING;
+  p: LshProtocol.PING;
 }
 
 /**

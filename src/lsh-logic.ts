@@ -33,6 +33,52 @@ import {
   Actor,
 } from "./types";
 
+
+/**
+ * @internal
+ * @description Defines the structure for a single route in the topic routing table.
+ * Each route contains a regular expression to match against an MQTT topic and a
+ * handler function to execute if the topic matches.
+ */
+type TopicRoute = {
+  /** The regular expression to test against the incoming MQTT topic. */
+  regex: RegExp;
+  /** 
+   * The handler function to be executed on a match.
+   * @param deviceName - The first capture group from the regex, typically the device's name.
+   * @param payload - The payload of the Node-RED message.
+   * @param parts - An array of any additional capture groups from the regex.
+   */
+  handler: (deviceName: string, payload: any, parts: string[]) => void;
+};
+
+/**
+* @internal
+* @description Collects actions to be performed at the end of a watchdog cycle.
+* Using a single object makes it easier to pass these actions between helper methods.
+*/
+type WatchdogActions = {
+  devicesToPing: Set<string>;
+  unhealthyDevicesForAlert: Array<{ name: string; reason: string }>;
+  stateChanged: boolean;
+};
+
+/**
+ * @internal
+ * @description Custom error for handling click validation failures gracefully.
+ * This allows us to throw an error with all necessary context for sending a failover message.
+ */
+class ClickValidationError extends Error {
+  constructor(
+    public readonly reason: string,
+    public readonly failoverType: "general" | "click"
+  ) {
+    super(reason);
+    this.name = "ClickValidationError";
+  }
+}
+
+
 /**
  * Main orchestrator class for the LSH Logic node.
  * It does not contain business logic itself, but coordinates the different
@@ -64,6 +110,12 @@ export class LshLogicNode {
   private clickManager: ClickTransactionManager;
   /** Monitors device health and determines when to ping them. */
   private watchdog: Watchdog;
+  /** 
+   * @internal
+   * @description A declarative routing table that maps MQTT topic patterns to handler functions.
+   * This simplifies the `handleInput` method by replacing conditional logic with a lookup table.
+   */
+  private routes: TopicRoute[];
 
   // Timers for periodic tasks.
   /** Timer for periodically cleaning up expired click transactions. */
@@ -99,6 +151,9 @@ export class LshLogicNode {
       this.config.pingTimeout
     );
 
+    // Initialize the declarative routing table.
+    this.routes = this._createTopicRoutes();
+
     this.initialize();
 
     // Start a timer to periodically clean up expired click transactions.
@@ -122,6 +177,35 @@ export class LshLogicNode {
       this.handleClose(done);
     });
   }
+
+  /**
+   * @internal
+   * @description Creates and returns the topic routing table.
+   * This keeps the constructor cleaner by isolating the route definitions.
+   * @returns An array of `TopicRoute` objects.
+   */
+  private _createTopicRoutes(): TopicRoute[] {
+    return [
+      // Route for Homie connection state messages (e.g., homie/device/$state)
+      {
+        regex: new RegExp(`^${this.config.homieBasePath}([^/]+)/\\$state$`),
+        handler: (deviceName, payload) => {
+          this.watchdog.onDeviceActivity(deviceName);
+          this.storeConnectionState(deviceName, String(payload));
+        },
+      },
+      // Route for all LSH protocol messages (e.g., LSH/device/conf, /state, /misc)
+      {
+        regex: new RegExp(`^${this.config.lshBasePath}([^/]+)/(conf|state|misc)$`),
+        handler: (deviceName, payload, parts) => {
+          this.watchdog.onDeviceActivity(deviceName);
+          const suffix = parts[0] as "conf" | "state" | "misc";
+          this._handleLshMessage(deviceName, suffix, payload);
+        },
+      },
+    ];
+  }
+
 
   /**
    * Cleans up resources for testing purposes or when the node is closed.
@@ -333,16 +417,18 @@ export class LshLogicNode {
    */
   private storeDeviceState(deviceName: string, states: boolean[]): void {
     try {
-      const isNew = this.deviceManager.storeDeviceState(deviceName, states);
+      const { isNew, changed } = this.deviceManager.storeDeviceState(deviceName, states);
       if (isNew) {
         this.node.log(
           `Received state for a new device: ${deviceName}. Creating a partial registry entry.`
         );
       }
-      this.updateExposedState();
-      this.node.log(
-        `Updated state for '${deviceName}': [${states.join(", ")}]`
-      );
+      if (changed) {
+        this.updateExposedState();
+        this.node.log(
+          `Updated state for '${deviceName}': [${states.join(", ")}]`
+        );
+      }
     } catch (error) {
       this.node.error(error instanceof Error ? error.message : String(error));
     }
@@ -367,88 +453,24 @@ export class LshLogicNode {
     }
   }
 
+
   /**
-   * Handles the two-phase commit protocol for "Network Clicks".
-   * This method acts as an orchestrator. It validates the click request and then
-   * delegates the state management of the transaction to the `ClickTransactionManager`.
-   * @param deviceName - The name of the device that sent the click.
-   * @param payload - The validated NetworkClickPayload.
+   * @internal
+   * @description Validates a new network click request against the current system state and configuration.
+   * This method uses guard clauses and throws a `ClickValidationError` on failure.
+   * @returns An object with the validated actors if successful.
+   * @throws {ClickValidationError} If the validation fails for any reason.
    */
-  private handleNetworkClick(
+  private _validateClickRequest(
     deviceName: string,
-    payload: NetworkClickPayload
-  ): void {
-    // --- Step 1: Update device's last seen time ---
-    const device = this.deviceManager.getDevice(deviceName);
-    if (device) {
-      device.lastSeenTime = Date.now();
-      this.updateExposedState();
-    }
-
-    const { bi: buttonId, ct: clickType, c: isConfirmation } = payload;
-    const transactionKey = `${deviceName}.${buttonId}.${clickType}`;
-    const commandTopic = `${this.config.lshBasePath}${deviceName}/IN`;
-
-    // --- Helper function for sending a Click Failover (c_f) response.
-    const sendClickFailover = (reason: string) => {
-      this.node.warn(
-        `Click validation failed for ${transactionKey}: ${reason}. Sending Click Failover (c_f).`
-      );
-      this.send({
-        [Output.Lsh]: {
-          topic: commandTopic,
-          payload: {
-            p: LshProtocol.CLICK_FAILOVER,
-            ct: clickType,
-            bi: buttonId,
-          },
-        },
-      });
-    };
-
-    // --- Helper function for sending a General Failover (c_gf) response.
-    const sendGeneralFailover = (reason: string) => {
-      this.node.error(
-        `System failure on click ${transactionKey}: ${reason}. Sending General Failover (c_gf).`
-      );
-      this.send({
-        [Output.Lsh]: {
-          topic: commandTopic,
-          payload: { p: LshProtocol.GENERAL_FAILOVER },
-        },
-        [Output.Debug]: { payload: { error: reason } },
-      });
-    };
-
-    // --- Step 2: Handle incoming confirmation (Phase 2) ---
-    if (isConfirmation) {
-      // Delegate consuming the transaction to the manager
-      const transaction = this.clickManager.consumeTransaction(transactionKey);
-
-      if (!transaction) {
-        this.node.warn(
-          `Received confirmation for an expired or unknown click: ${transactionKey}.`
-        );
-        return;
-      }
-
-      this.node.log(`Click confirmed for ${transactionKey}. Executing logic.`);
-      this.executeClickLogic(
-        transaction.actors,
-        transaction.otherActors,
-        clickType
-      );
-      return;
-    }
-
-    // --- Step 3: Handle new click request (Phase 1) ---
-
-    // FAILOVER SCENARIO 1: System-level config not loaded.
+    buttonId: string,
+    clickType: "lc" | "slc"
+  ): { actors: Actor[]; otherActors: string[] } {
+    // GUARD: System-level config not loaded.
     if (!this.longClickConfig) {
-      return sendGeneralFailover("longClickConfig is not loaded.");
+      throw new ClickValidationError("longClickConfig is not loaded.", "general");
     }
 
-    // FAILOVER SCENARIO 2: No specific configuration found for this button.
     const deviceConfig = this.deviceConfigMap.get(deviceName);
     const clickTypeKey =
       clickType === "lc" ? "longClickButtons" : "superLongClickButtons";
@@ -456,42 +478,121 @@ export class LshLogicNode {
       (btn) => btn.id === buttonId
     );
 
+    // GUARD: No specific configuration found for this button.
     if (!buttonConfig) {
-      return sendClickFailover(`No action configured for this button.`);
+      throw new ClickValidationError("No action configured for this button.", "click");
     }
 
-    // FAILOVER SCENARIO 3: Configuration exists but has no targets.
     const { actors = [], otherActors = [] } = buttonConfig;
+    // GUARD: Configuration exists but has no targets.
     if (actors.length === 0 && otherActors.length === 0) {
-      return sendClickFailover(`Action configured with no targets.`);
+      throw new ClickValidationError("Action configured with no targets.", "click");
     }
 
-    // FAILOVER SCENARIO 4: One or more target actors are offline.
+    // GUARD: One or more target LSH actors are offline.
     const offlineActors = actors.filter(
       (actor) => !this.deviceManager.getDevice(actor.name)?.connected
     );
     if (offlineActors.length > 0) {
       const names = offlineActors.map((a) => a.name).join(", ");
-      return sendClickFailover(`Target actor(s) are offline: ${names}.`);
+      throw new ClickValidationError(`Target actor(s) are offline: ${names}.`, "click");
     }
 
-    // --- SUCCESS: Validation Passed. Start the transaction. ---
+    // SUCCESS: All validations passed.
+    return { actors, otherActors };
+  }
 
-    // Delegate starting the transaction to the manager
-    this.clickManager.startTransaction(transactionKey, actors, otherActors);
 
-    // Send ACK to the device
-    this.send({
-      [Output.Lsh]: {
-        topic: commandTopic,
-        payload: {
-          p: LshProtocol.NETWORK_CLICK_ACK,
-          ct: clickType,
-          bi: buttonId,
+  /**
+    * Orchestrates the two-phase commit protocol for "Network Clicks".
+    * This method now acts as a dispatcher, delegating to helper methods based
+    * on whether the click is a new request or a confirmation.
+    * @param deviceName - The name of the device that sent the click.
+    * @param payload - The validated NetworkClickPayload.
+    */
+  private handleNetworkClick(
+    deviceName: string,
+    payload: NetworkClickPayload
+  ): void {
+    if (payload.c) { // c: isConfirmation
+      this._processClickConfirmation(deviceName, payload);
+    } else {
+      this._processNewClickRequest(deviceName, payload);
+    }
+  }
+
+  /**
+   * @internal
+   * @description Processes the first phase of a network click: a new request.
+   * It validates the request and, if successful, sends an ACK.
+   * If validation throws, it catches the error and sends the appropriate failover command.
+   */
+  private _processNewClickRequest(
+    deviceName: string,
+    payload: NetworkClickPayload
+  ): void {
+    const { bi: buttonId, ct: clickType } = payload;
+    const transactionKey = `${deviceName}.${buttonId}.${clickType}`;
+    const commandTopic = `${this.config.lshBasePath}${deviceName}/IN`;
+
+    try {
+      // The "happy path" is now clean and linear.
+      const { actors, otherActors } = this._validateClickRequest(
+        deviceName,
+        buttonId,
+        clickType
+      );
+
+      this.clickManager.startTransaction(transactionKey, actors, otherActors);
+
+      // Send ACK to the device, starting Phase 2.
+      this.send({
+        [Output.Lsh]: {
+          topic: commandTopic,
+          payload: { p: LshProtocol.NETWORK_CLICK_ACK, ct: clickType, bi: buttonId },
         },
-      },
-    });
-    this.node.log(`Validation OK for ${transactionKey}. Sending ACK.`);
+      });
+      this.node.log(`Validation OK for ${transactionKey}. Sending ACK.`);
+
+    } catch (error) {
+      // The "error path" is neatly contained in the catch block.
+      if (error instanceof ClickValidationError) {
+        if (error.failoverType === 'general') {
+          this.node.error(`System failure on click ${transactionKey}: ${error.reason}. Sending General Failover (c_gf).`);
+          this.send({ [Output.Lsh]: { topic: commandTopic, payload: { p: LshProtocol.GENERAL_FAILOVER } } });
+        } else {
+          this.node.warn(`Click validation failed for ${transactionKey}: ${error.reason}. Sending Click Failover (c_f).`);
+          this.send({ [Output.Lsh]: { topic: commandTopic, payload: { p: LshProtocol.CLICK_FAILOVER, ct: clickType, bi: buttonId } } });
+        }
+      } else {
+        // Handle unexpected errors
+        this.node.error(`Unexpected error during click processing for ${transactionKey}: ${error}`);
+      }
+    }
+  }
+
+  /**
+   * @internal
+   * @description Processes the second phase of a network click: a confirmation.
+   * It consumes the transaction and executes the click logic.
+   * @param deviceName - The name of the device that sent the click.
+   * @param payload - The validated NetworkClickPayload.
+   */
+  private _processClickConfirmation(
+    deviceName: string,
+    payload: NetworkClickPayload
+  ): void {
+    const { bi: buttonId, ct: clickType } = payload;
+    const transactionKey = `${deviceName}.${buttonId}.${clickType}`;
+
+    const transaction = this.clickManager.consumeTransaction(transactionKey);
+    if (!transaction) {
+      this.node.warn(`Received confirmation for an expired or unknown click: ${transactionKey}.`);
+      return;
+    }
+
+    this.node.log(`Click confirmed for ${transactionKey}. Executing logic.`);
+    this.executeClickLogic(transaction.actors, transaction.otherActors, clickType);
   }
 
   /**
@@ -577,8 +678,7 @@ export class LshLogicNode {
         this.node.warn(toggleResult.warning);
       }
       this.node.log(
-        `Smart Toggle: ${toggleResult.active}/${
-          toggleResult.total
+        `Smart Toggle: ${toggleResult.active}/${toggleResult.total
         } active. Decision: ${toggleResult.stateToSet ? "ON" : "OFF"}`
       );
       stateToSet = toggleResult.stateToSet;
@@ -601,128 +701,184 @@ export class LshLogicNode {
   }
 
   /**
-   * Performs a periodic health check on all registered devices.
-   * Implements a multi-stage logic to avoid false positives.
-   * Corresponds to the original "Check Devices Health" function node.
-   */
+     * Performs a periodic health check on all registered devices.
+     * This method now follows a cleaner, more declarative pattern:
+     * 1. Iterates through all configured devices.
+     * 2. Asks the Watchdog for a health assessment.
+     * 3. Tells the DeviceRegistryManager to update the device's state based on the assessment.
+     * 4. Collects and performs necessary actions (sending pings and alerts) at the end.
+     */
   private async runWatchdogCheck(): Promise<void> {
-    if (!this.longClickConfig || this.longClickConfig.devices.length === 0)
+    if (!this.longClickConfig || this.longClickConfig.devices.length === 0) {
       return;
+    }
 
     const now = Date.now();
-    const devicesToPing: string[] = [];
-    const unhealthyDevicesForAlert: { name: string; reason: string }[] = [];
-    let stateChanged = false;
+    const actions: WatchdogActions = {
+      devicesToPing: new Set<string>(),
+      unhealthyDevicesForAlert: [],
+      stateChanged: false,
+    };
 
+    // The orchestrator owns the loop, making the flow explicit.
     for (const deviceConfig of this.longClickConfig.devices) {
       const deviceName = deviceConfig.name;
       const deviceState = this.deviceManager.getDevice(deviceName);
 
-      // The device is configured but not in the registry yet.
-      if (!deviceState) {
-        unhealthyDevicesForAlert.push({
-          name: deviceName,
-          reason: "Never seen on the network.",
-        });
-        continue;
-      }
-
+      // 1. Ask the Watchdog for a pure, logical assessment.
       const result = this.watchdog.checkDeviceHealth(deviceState, now);
 
+      // 2. Tell the manager to update its state based on the result.
+      const { stateChanged } = this.deviceManager.updateHealthFromResult(deviceName, result);
+      if (stateChanged) {
+        actions.stateChanged = true;
+      }
+
+      // 3. The orchestrator collects actions based on the assessment.
       switch (result.status) {
-        case "ok":
-          if (!deviceState.isHealthy || deviceState.isStale) {
-            this.node.log(`Device ${deviceName} is back online.`);
-            deviceState.isHealthy = true;
-            deviceState.isStale = false;
-            stateChanged = true;
-          }
-          break;
         case "needs_ping":
-          this.node.log(
-            `Device ${deviceName} is silent. Sending interrogation ping.`
-          );
-          devicesToPing.push(deviceName);
+          actions.devicesToPing.add(deviceName);
           break;
         case "stale":
-          if (deviceState.isStale) {
-            // It was already stale, now it's unhealthy
-            if (deviceState.isHealthy) {
-              // Report only on the first transition to unhealthy
-              unhealthyDevicesForAlert.push({
-                name: deviceName,
-                reason: `No response for > ${this.config.pingTimeout}s.`,
-              });
-              deviceState.isHealthy = false;
-              stateChanged = true;
-            }
-          } else {
-            // First time it's stale
-            this.node.warn(
-              `Device ${deviceName} has become "stale" (ping not answered).`
-            );
-            deviceState.isStale = true;
-            stateChanged = true;
-          }
-          devicesToPing.push(deviceName); // Try pinging again
+          // When a device becomes stale, it's considered unhealthy for alerting.
+          actions.unhealthyDevicesForAlert.push({ name: deviceName, reason: "No response to ping." });
+          // We also try pinging it again.
+          actions.devicesToPing.add(deviceName);
           break;
         case "unhealthy":
-          if (deviceState.isHealthy) {
-            unhealthyDevicesForAlert.push({
-              name: deviceName,
-              reason: result.reason,
-            });
-            deviceState.isHealthy = false;
-            stateChanged = true;
-          }
+          actions.unhealthyDevicesForAlert.push({ name: deviceName, reason: result.reason });
           break;
       }
     }
 
-    if (stateChanged) this.updateExposedState();
-
-    if (devicesToPing.length > 0) {
-      const totalConfiguredDevices = this.longClickConfig.devices.length;
-
-      // Optimization: If all devices are silent, it might indicate a wider network issue
-      // or that this node just started. A single broadcast ping is more efficient.
-      if (devicesToPing.length === totalConfiguredDevices) {
-        this.node.log(
-          `All ${totalConfiguredDevices} devices are silent. Sending a single broadcast ping.`
-        );
-        const pingCommand = {
-          topic: this.config.serviceTopic,
-          payload: { p: LshProtocol.PING },
-        };
-        this.send({ [Output.Lsh]: pingCommand });
-      } else {
-        this.node.log(
-          `Sending staggered pings to ${devicesToPing.length} device(s)...`
-        );
-        for (const deviceName of devicesToPing) {
-          const pingCommand = {
-            topic: `${this.config.lshBasePath}${deviceName}/IN`,
-            payload: { p: LshProtocol.PING },
-          };
-          this.send({ [Output.Lsh]: pingCommand });
-          // Add a small, random delay (jitter) to stagger the pings and avoid a network burst.
-          await sleep(Math.random() * 200 + 50);
-        }
-      }
+    // 4. The orchestrator executes the collected actions.
+    if (actions.stateChanged) {
+      this.updateExposedState();
     }
+    if (actions.devicesToPing.size > 0) {
+      await this._sendPings(actions);
+    }
+    if (actions.unhealthyDevicesForAlert.length > 0) {
+      this._sendAlerts(actions);
+    }
+  }
 
-    if (unhealthyDevicesForAlert.length > 0) {
-      this.send({
-        [Output.Alerts]: {
-          payload: formatAlertMessage(unhealthyDevicesForAlert),
-        },
-      });
+  // --- Watchdog Helper Methods ---
+
+  /**
+   * @internal
+   * @description Sends ping commands to a list of devices.
+   * It uses a single broadcast ping if all devices need pinging.
+   * @param actions - The collected watchdog actions.
+   */
+  private async _sendPings(actions: WatchdogActions): Promise<void> {
+    const devicesToPing = Array.from(actions.devicesToPing);
+    const totalConfiguredDevices = this.longClickConfig!.devices.length;
+
+    if (devicesToPing.length === totalConfiguredDevices) {
+      this.node.log(`All ${totalConfiguredDevices} devices are silent. Sending a single broadcast ping.`);
+      this.send({ [Output.Lsh]: { topic: this.config.serviceTopic, payload: { p: LshProtocol.PING } } });
+    } else {
+      this.node.log(`Sending staggered pings to ${devicesToPing.length} device(s)...`);
+      for (const deviceName of devicesToPing) {
+        const pingCommand = { topic: `${this.config.lshBasePath}${deviceName}/IN`, payload: { p: LshProtocol.PING } };
+        this.send({ [Output.Lsh]: pingCommand });
+        await sleep(Math.random() * 200 + 50);
+      }
     }
   }
 
   /**
-   * The main handler for all incoming messages. It routes messages
-   * to the appropriate logic based on their MQTT topic.
+   * @internal
+   * @description Formats and sends an alert message for unhealthy devices.
+   * @param actions - The collected watchdog actions.
+   */
+  private _sendAlerts(actions: WatchdogActions): void {
+    this.send({
+      [Output.Alerts]: { payload: formatAlertMessage(actions.unhealthyDevicesForAlert) },
+    });
+  }
+
+  /**
+   * @internal
+   * @description Internal router for messages on the LSH base path.
+   * It validates and dispatches the message to the appropriate handler.
+   * @param deviceName - The name of the device that sent the message.
+   * @param suffix - The final part of the topic (e.g., 'conf', 'state', 'misc').
+   * @param payload - The message payload.
+   */
+  private _handleLshMessage(deviceName: string, suffix: 'conf' | 'state' | 'misc', payload: any): void {
+    switch (suffix) {
+      case "conf":
+        if (this.validateConfPayload(payload)) {
+          this.storeDeviceDetails(deviceName, payload as DeviceConfPayload);
+        } else {
+          this.node.warn(
+            `Invalid 'conf' payload from ${deviceName}: ${this.ajv.errorsText(
+              this.validateConfPayload.errors
+            )}`
+          );
+        }
+        break;
+
+      case "state":
+        if (this.validateStatePayload(payload)) {
+          this.storeDeviceState(deviceName, (payload as DeviceStatePayload).as);
+        } else {
+          this.node.warn(
+            `Invalid 'state' payload from ${deviceName}: ${this.ajv.errorsText(
+              this.validateStatePayload.errors
+            )}`
+          );
+        }
+        break;
+
+      case "misc":
+        if (!this.validateAnyMiscPayload(payload)) {
+          this.node.warn(`Received invalid or unhandled 'misc' payload from ${deviceName}.`);
+          this.send({
+            [Output.Debug]: {
+              payload: {
+                error: "Invalid Misc Payload", topic: `${this.config.lshBasePath}${deviceName}/misc`, receivedPayload: payload,
+              },
+            },
+          });
+        } else {
+          const miscPayload = payload as AnyDeviceMiscPayload;
+          switch (miscPayload.p) {
+            case LshProtocol.NETWORK_CLICK:
+              this.handleNetworkClick(deviceName, miscPayload);
+              break;
+            case LshProtocol.DEVICE_BOOT:
+              this.node.log(`Device '${deviceName}' reported a boot event.`);
+              const device = this.deviceManager.getDevice(deviceName);
+              if (device) {
+                device.lastSeenTime = Date.now();
+                device.lastBootTime = Date.now();
+                this.updateExposedState();
+              }
+              break;
+            case LshProtocol.PING:
+              this.node.log(`Received ping response from '${deviceName}'.`);
+              const pingingDevice = this.deviceManager.getDevice(deviceName);
+              if (pingingDevice) {
+                pingingDevice.lastSeenTime = Date.now();
+                if (pingingDevice.isStale) {
+                  this.node.log(`Device '${deviceName}' is no longer stale.`);
+                  pingingDevice.isStale = false;
+                }
+                this.updateExposedState();
+              }
+              break;
+          }
+        }
+        break;
+    }
+  }
+
+  /**
+   * The main handler for all incoming messages. It dispatches messages to the
+   * appropriate logic by matching their topic against the declarative routing table.
    * @param msg - The incoming Node-RED message.
    * @param done - The function to call when processing is complete.
    */
@@ -736,131 +892,22 @@ export class LshLogicNode {
       const topic = msg.topic || "";
       let processed = false;
 
-      // The message routing logic follows a specific priority:
-      // 1. Homie topics for connection state are checked first.
-      // 2. LSH-specific topics are checked next.
-      // Messages that don't match are logged but otherwise ignored.
+      // Iterate through the routing table to find a matching handler.
+      for (const route of this.routes) {
+        const match = topic.match(route.regex);
+        if (match) {
+          // The first capture group is always the device name.
+          const deviceName = match[1];
+          // Subsequent capture groups are other dynamic parts of the topic.
+          const otherParts = match.slice(2);
 
-      // 1. Handle Homie connection state messages (e.g., homie/device/$state)
-      if (topic.startsWith(this.config.homieBasePath)) {
-        const parts = topic
-          .substring(this.config.homieBasePath.length)
-          .split("/");
-        if (parts.length === 2 && parts[1] === "$state") {
-          const deviceName = parts[0];
-          // Any valid message counts as activity.
-          this.watchdog.onDeviceActivity(deviceName);
-          this.storeConnectionState(deviceName, String(msg.payload));
+          route.handler(deviceName, msg.payload, otherParts);
           processed = true;
-        }
-      }
-      // 2. Handle LSH protocol messages (e.g., LSH/device/conf, /state, /misc)
-      else if (topic.startsWith(this.config.lshBasePath)) {
-        const parts = topic
-          .substring(this.config.lshBasePath.length)
-          .split("/");
-        if (parts.length === 2) {
-          const [deviceName, suffix] = parts;
-
-          // Any valid LSH message from a device also counts as activity.
-          this.watchdog.onDeviceActivity(deviceName);
-
-          switch (suffix) {
-            case "conf":
-              if (this.validateConfPayload(msg.payload)) {
-                this.storeDeviceDetails(
-                  deviceName,
-                  msg.payload as DeviceConfPayload
-                );
-              } else {
-                this.node.warn(
-                  `Invalid 'conf' payload from ${deviceName}: ${this.ajv.errorsText(
-                    this.validateConfPayload.errors
-                  )}`
-                );
-              }
-              processed = true;
-              break;
-
-            case "state":
-              if (this.validateStatePayload(msg.payload)) {
-                this.storeDeviceState(
-                  deviceName,
-                  (msg.payload as DeviceStatePayload).as
-                );
-              } else {
-                this.node.warn(
-                  `Invalid 'state' payload from ${deviceName}: ${this.ajv.errorsText(
-                    this.validateStatePayload.errors
-                  )}`
-                );
-              }
-              processed = true;
-              break;
-
-            case "misc":
-              if (!this.validateAnyMiscPayload(msg.payload)) {
-                this.node.warn(
-                  `Received invalid or unhandled 'misc' payload from ${deviceName}.`
-                );
-                this.send({
-                  [Output.Debug]: {
-                    payload: {
-                      error: "Invalid Misc Payload",
-                      topic: msg.topic,
-                      receivedPayload: msg.payload,
-                    },
-                  },
-                });
-              } else {
-                const miscPayload = msg.payload as AnyDeviceMiscPayload;
-
-                switch (miscPayload.p) {
-                  case LshProtocol.NETWORK_CLICK:
-                    this.handleNetworkClick(deviceName, miscPayload);
-                    break;
-                  case LshProtocol.DEVICE_BOOT:
-                    this.node.log(
-                      `Device '${deviceName}' reported a boot event.`
-                    );
-                    const device = this.deviceManager.getDevice(deviceName);
-                    if (device) {
-                      device.lastSeenTime = Date.now();
-                      device.lastBootTime = Date.now();
-                      this.updateExposedState();
-                    }
-                    break;
-                  case LshProtocol.PING:
-                    this.node.log(
-                      `Received ping response from '${deviceName}'.`
-                    );
-                    // This is a special case of activity already handled by the watchdog's internal state.
-                    // The main effect is updating the device state to not be 'stale'.
-                    const pingingDevice =
-                      this.deviceManager.getDevice(deviceName);
-                    if (pingingDevice) {
-                      pingingDevice.lastSeenTime = Date.now();
-                      if (pingingDevice.isStale) {
-                        this.node.log(
-                          `Device '${deviceName}' is no longer stale.`
-                        );
-                        pingingDevice.isStale = false;
-                      }
-                      this.updateExposedState();
-                    }
-                    break;
-                }
-              }
-              processed = true;
-              break;
-          }
+          break; // Stop after the first matching route is found.
         }
       }
 
       if (!processed) {
-        // This is not an error, just a log entry for visibility during debugging.
-        // It allows the user to see all messages passing through the node,
-        // even those on topics the node doesn't actively handle.
         this.node.log(`Message on unhandled topic: ${topic}`);
       }
     } catch (error) {
