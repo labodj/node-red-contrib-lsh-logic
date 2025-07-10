@@ -4,6 +4,16 @@
  * have the expected structure before being processed by the node.
  */
 
+import Ajv, { ValidateFunction } from "ajv";
+import {
+  AnyMiscTopicPayload,
+  ClickType,
+  DeviceActuatorsStatePayload,
+  DeviceDetailsPayload,
+  LongClickConfig
+} from "./types";
+
+
 /**
  * Schema for a single button action configuration, used within `longClickConfigSchema`.
  * It defines the structure for specifying which actors are controlled by a button.
@@ -138,7 +148,7 @@ const networkClickPayloadSchema = {
   properties: {
     p: { const: "c_nc", description: "Protocol: Network Click." },
     bi: { type: "string", description: "Button ID that was pressed." },
-    ct: { enum: ["lc", "slc"], description: "Click Type: 'lc' or 'slc'." },
+    ct: { enum: Object.values(ClickType), description: "Click Type: 'lc' or 'slc'." },
     c: {
       type: "boolean",
       description:
@@ -186,3 +196,27 @@ export const anyMiscTopicPayloadSchema = {
   ],
   required: ["p"],
 };
+
+/** An interface describing the collection of all validation functions for the app. */
+export interface AppValidators {
+  validateLongClickConfig: ValidateFunction<LongClickConfig>;
+  validateDeviceDetails: ValidateFunction<DeviceDetailsPayload>;
+  validateActuatorStates: ValidateFunction<DeviceActuatorsStatePayload>;
+  validateAnyMiscTopic: ValidateFunction<AnyMiscTopicPayload>;
+}
+
+/**
+ * Factory function to create and configure an AJV instance and compile all schemas.
+ * This centralizes AJV setup and ensures consistency.
+ * @returns An object containing all compiled validation functions for the application.
+ */
+export function createAppValidators(): AppValidators {
+  const ajv = new Ajv({ discriminator: true, allErrors: true });
+
+  return {
+    validateLongClickConfig: ajv.compile<LongClickConfig>(longClickConfigSchema),
+    validateDeviceDetails: ajv.compile<DeviceDetailsPayload>(deviceDetailsPayloadSchema),
+    validateActuatorStates: ajv.compile<DeviceActuatorsStatePayload>(deviceActuatorsStatePayloadSchema),
+    validateAnyMiscTopic: ajv.compile<AnyMiscTopicPayload>(anyMiscTopicPayloadSchema),
+  };
+}
