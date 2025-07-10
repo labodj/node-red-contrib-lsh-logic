@@ -21,14 +21,20 @@ interface ContextReader {
 }
 
 export class DeviceRegistryManager {
+  /** The main in-memory database of all device states, keyed by device name. */
   private registry: DeviceRegistry = {};
+  /** The prefix used to construct context keys for reading external device states. */
   private otherDevicesPrefix: string;
+  /** A reference to the context reader (flow or global) for fetching external states. */
   private otherActorsContext: ContextReader;
 
   /**
-   * Constructs a new DeviceRegistryManager.
-   * @param otherDevicesPrefix - The prefix for context keys of external devices.
-   * @param otherActorsContext - A context reader to get external device states.
+   * Creates a default, empty state object for a new device.
+   * This "shell" entry is typically created when a message is received
+   * from a device before its 'conf' message has been processed.
+   * @param deviceName - The name of the new device.
+   * @returns The newly created `DeviceState` object.
+   * @private
    */
   constructor(otherDevicesPrefix: string, otherActorsContext: ContextReader) {
     this.otherDevicesPrefix = otherDevicesPrefix;

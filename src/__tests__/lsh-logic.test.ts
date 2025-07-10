@@ -3,7 +3,6 @@
  * These tests verify that the node correctly delegates tasks to its managers
  * and sends the appropriate messages based on inputs and internal logic.
  */
-import * as path from "path";
 import { Node, NodeAPI } from "node-red";
 
 import { LshLogicNode } from "../lsh-logic";
@@ -22,7 +21,8 @@ const fs = require("fs/promises");
 
 /**
  * Mocks the Node-RED Node object.
- * Jest spies (`jest.fn()`) are used to track calls to node methods.
+ * Jest spies (`jest.fn()`) are used to track calls to node methods
+ * like `on`, `send`, `log`, `status`, etc.
  */
 const mockNode: Partial<Node> = {
   id: "test-node-id",
@@ -41,13 +41,16 @@ const mockNode: Partial<Node> = {
 
 /**
  * Mocks the Node-RED runtime API object.
+ * Only the `settings.userDir` property is needed for the tests.
  */
 const mockRED: Partial<NodeAPI> = {
   settings: { userDir: process.cwd() } as any,
 };
 
 /**
- * Mocks the node's user-defined configuration.
+ * Mocks the node's user-defined configuration (`LshLogicNodeDef`).
+ * Provides a default set of configuration properties for the node instance
+ * under test.
  */
 const mockConfig: LshLogicNodeDef = {
   id: "test-node-id",
@@ -94,6 +97,13 @@ describe("LshLogicNode Orchestrator", () => {
     instance.testCleanup();
   });
 
+  /**
+   * Test helper to simulate an 'input' event on the mock node.
+   * It retrieves the input callback registered in `beforeEach` and invokes it
+   * with a mock message object.
+   * @param topic - The topic of the simulated message.
+   * @param payload - The payload of the simulated message.
+   */
   const simulateInput = (topic: string, payload: any) => {
     const inputCallback = (mockNode.on as jest.Mock).mock.calls.find(
       (call) => call[0] === "input"
@@ -160,7 +170,6 @@ describe("LshLogicNode Orchestrator", () => {
       // Verify delegation
       expect(managerInstance.startTransaction).toHaveBeenCalledTimes(1);
 
-      // --- NUOVO ASSERT PER SEND ---
       // Get all arguments with which `send` was called
       const sendCalls = (mockNode.send as jest.Mock).mock.calls;
 

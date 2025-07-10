@@ -10,14 +10,21 @@ import { DeviceState } from "./types";
  * This is a discriminated union, allowing for type-safe handling of each case.
  */
 export type WatchdogResult =
+  /** The device has been seen recently and is considered healthy. */
   | { status: "ok" }
+  /** The device has been silent for too long and requires a ping. */
   | { status: "needs_ping" }
+  /** A ping was sent, but it timed out. The device may become unhealthy. */
   | { status: "stale" }
+  /** The device is considered unhealthy for a specific reason (e.g., never seen). */
   | { status: "unhealthy"; reason: string };
 
 export class Watchdog {
+  /** Milliseconds of silence before a device is considered in need of a ping. */
   private readonly interrogateThresholdMs: number;
+  /** Milliseconds to wait for a ping response before a device is considered stale. */
   private readonly pingTimeoutMs: number;
+  /** Stores timestamps of when a ping was last sent to a device, keyed by device name. */
   private pingTimestamps: Map<string, number> = new Map();
 
   /**
@@ -47,27 +54,27 @@ export class Watchdog {
     const timeSinceLastSeen = now - deviceState.lastSeenTime;
     const pingSentTime = this.pingTimestamps.get(deviceState.name) || 0;
 
-    // 1. Is the device online and healthy?
+    // 1. If seen recently, it's healthy. Clear any pending ping state.
     if (timeSinceLastSeen < this.interrogateThresholdMs) {
       if (pingSentTime) this.pingTimestamps.delete(deviceState.name);
       return { status: "ok" };
     }
 
-    // --- Device has been silent for too long ---
+    // --- At this point, the device has been silent for too long ---
 
-    // 2. Have we already sent a ping?
+    // 2. If we have already sent a ping...
     if (pingSentTime > 0) {
-      // Yes. Has the ping timed out?
+      // 2a. ...check if the ping has timed out.
       if (now - pingSentTime > this.pingTimeoutMs) {
-        // Ping timed out. The device is officially problematic.
+        // Ping timed out. It's stale. We'll try pinging again.
         this.pingTimestamps.set(deviceState.name, now); // Record that we are trying to ping again
         return { status: "stale" }; // It's stale, might become unhealthy on the next check
       }
-      // Ping sent, but not yet timed out. We wait.
+      // 2b. ...otherwise, the ping has not timed out yet. We wait.
       return { status: "ok" };
     }
 
-    // 3. First time we've seen it silent. Send a ping.
+    // 3. If we reach here, the device is silent and we haven't pinged it yet. Time to send a ping.
     this.pingTimestamps.set(deviceState.name, now);
     return { status: "needs_ping" };
   }

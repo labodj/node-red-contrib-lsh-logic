@@ -15,31 +15,48 @@ import { NodeDef, NodeMessage } from "node-red";
  */
 export interface LshLogicNodeDef extends NodeDef {
   // MQTT & Context Prefixes
-  otherDevicesPrefix: string;
+  /** Base path for Homie device state topics (e.g., 'homie/'). */
   homieBasePath: string;
+  /** Base path for LSH device command and state topics (e.g., 'LSH/'). */
   lshBasePath: string;
+  /** Broadcast topic for global commands like a system-wide ping. */
   serviceTopic: string;
+  /** Prefix for context keys when reading external device states. */
+  otherDevicesPrefix: string;
 
   // File Configuration
+  /** Path to the main JSON config, relative to the Node-RED user directory. */
   longClickConfigPath: string;
 
   // Context Export Settings
+  /** The context (flow or global) to store the full device state registry in, or 'none'. */
   exposeStateContext: "none" | "flow" | "global";
+  /** The context key to use for the exposed state registry. */
   exposeStateKey: string;
+  /** The context (flow or global) to store the generated MQTT topic list in, or 'none'. */
   exportTopics: "none" | "flow" | "global";
+  /** The context key to use for the exported topic list. */
   exportTopicsKey: string;
+  /** The context (flow or global) to store the node's own configuration in, or 'none'. */
   exposeConfigContext: "none" | "flow" | "global";
+  /** The context key to use for the exposed configuration. */
   exposeConfigKey: string;
 
   // External State Settings
+  /** The context (flow or global) from which to read the state of external actors. */
   otherActorsContext: "flow" | "global";
 
   // Timing Settings
+  /** Seconds to wait for a network click confirmation before it expires. */
   clickTimeout: number;
-  watchdogInterval: number;
-  interrogateThreshold: number;
-  pingTimeout: number;
+  /** Frequency in seconds for checking and cleaning up expired click transactions. */
   clickCleanupInterval: number;
+  /** Frequency in seconds of the main device health check loop. */
+  watchdogInterval: number;
+  /** Seconds of device silence before sending an interrogation ping. */
+  interrogateThreshold: number;
+  /** Seconds to wait for a ping response before marking a device as 'stale'. */
+  pingTimeout: number;
 }
 
 /**
@@ -80,21 +97,29 @@ export const LshProtocol = {
 
 /** Payload from an LSH device's 'conf' topic. */
 export interface DeviceConfPayload {
+  /** An array of actuator IDs (e.g., ['A1', 'A2']). */
   ai: string[];
+  /** An array of button IDs (e.g., ['B1']). */
   bi: string[];
+  /** The display name of the device. */
   dn: string;
 }
 
 /** Payload from an LSH device's 'state' topic. */
 export interface DeviceStatePayload {
+  /** An array representing the ON/OFF state of each actuator. */
   as: boolean[];
 }
 
 /** Payload for a Network Click ('c_nc'). */
 export interface NetworkClickPayload {
+  /** The protocol identifier, must be 'c_nc'. */
   p: typeof LshProtocol.NETWORK_CLICK;
+  /** The ID of the button that was pressed (e.g., 'B1'). */
   bi: string;
+  /** The type of click: 'lc' for long-click, 'slc' for super-long-click. */
   ct: "lc" | "slc";
+  /** The phase of the transaction: `false` for the initial request, `true` for the final confirmation. */
   c: boolean;
 }
 
@@ -122,15 +147,21 @@ export type AnyDeviceMiscPayload =
 
 /** Configuration for a target actor within a button action. */
 export interface Actor {
+  /** The name of the target device. */
   name: string;
+  /** If true, the action applies to all actuators on the target device. */
   allActuators: boolean;
+  /** If `allActuators` is false, this specifies which actuator IDs to target. */
   actuators: string[];
 }
 
 /** Defines an action triggered by a button press. */
 export interface ButtonAction {
+  /** The ID of the button that triggers this action (e.g., 'B1'). */
   id: string;
+  /** A list of primary LSH actors to control. */
   actors: Actor[];
+  /** A list of secondary, external actors to control. */
   otherActors: string[];
 }
 
@@ -160,16 +191,27 @@ export interface ActuatorIndexMap {
  * including its configuration, connection status, and actuator states.
  */
 export interface DeviceState {
+  /** The unique name of the device, used as the primary key. */
   name: string;
+  /** The Homie connection state (`true` if $state is 'ready'). */
   connected: boolean;
+  /** Overall health status (`false` if unresponsive or never seen). */
   isHealthy: boolean;
+  /** `true` if a ping was sent but not yet answered within the timeout. */
   isStale: boolean;
+  /** Timestamp of the last message received from the device. */
   lastSeenTime: number;
+  /** Timestamp of the last boot event ('d_b') from the device. */
   lastBootTime: number;
+  /** Timestamp of the last 'conf' message from the device. */
   lastDetailsTime: number;
+  /** An ordered array of actuator IDs (e.g., ['A1', 'A2']). */
   actuatorsIDs: string[];
+  /** An array of button IDs, if any (e.g., ['B1', 'B2']). */
   buttonsIDs: string[] | undefined;
+  /** An ordered array of the current states for each actuator. */
   actuatorStates: boolean[];
+  /** A map for O(1) lookup of an actuator's index by its ID. */
   actuatorIndexes: ActuatorIndexMap;
 }
 
@@ -180,8 +222,11 @@ export interface DeviceRegistry {
 
 /** Defines the data stored for a pending network click transaction. */
 export interface PendingClickTransaction {
+  /** The primary actors (LSH devices) targeted by the click. */
   actors: Actor[];
+  /** The secondary actors (external devices) targeted by the click. */
   otherActors: string[];
+  /** The timestamp when the transaction was started. */
   timestamp: number;
 }
 

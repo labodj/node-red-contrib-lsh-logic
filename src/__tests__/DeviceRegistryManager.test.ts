@@ -5,7 +5,9 @@ import { DeviceRegistryManager } from "../DeviceRegistryManager";
 import { DeviceConfPayload, Actor } from "../types";
 
 describe("DeviceRegistryManager", () => {
+  /** The instance of the DeviceRegistryManager class under test. */
   let manager: DeviceRegistryManager;
+  /** A mock context reader to simulate reading from Node-RED's flow/global context. */
   let mockContextReader: { get: jest.Mock };
 
   beforeEach(() => {

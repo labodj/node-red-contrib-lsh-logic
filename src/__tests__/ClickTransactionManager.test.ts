@@ -5,7 +5,9 @@ import { ClickTransactionManager } from "../ClickTransactionManager";
 import { Actor } from "../types";
 
 describe("ClickTransactionManager", () => {
+  /** The instance of the ClickTransactionManager class under test. */
   let manager: ClickTransactionManager;
+  /** Test constant for the click timeout in seconds. */
   const CLICK_TIMEOUT_SEC = 10;
 
   beforeEach(() => {

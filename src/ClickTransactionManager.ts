@@ -6,7 +6,9 @@
 import { ClickTransactionRegistry, Actor } from "./types";
 
 export class ClickTransactionManager {
+  /** A registry of all ongoing click transactions, keyed by a unique identifier. */
   private pendingClicks: ClickTransactionRegistry = {};
+  /** The configured timeout for click transactions, in milliseconds. */
   private readonly clickTimeoutMs: number;
 
   /**

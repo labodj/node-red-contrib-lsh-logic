@@ -58,13 +58,17 @@ export class LshLogicNode {
   private deviceConfigMap: Map<string, DeviceConfigEntry> = new Map();
   /** Watches the config file for changes to enable hot-reloading. */
   private watcher: chokidar.FSWatcher | null = null;
-  /** In-memory database of all known devices and their current states. */
+  /** Manages the in-memory state of all known devices. */
   private deviceManager: DeviceRegistryManager;
+  /** Manages the state and lifecycle of network click transactions. */
   private clickManager: ClickTransactionManager;
+  /** Monitors device health and determines when to ping them. */
   private watchdog: Watchdog;
 
   // Timers for periodic tasks.
+  /** Timer for periodically cleaning up expired click transactions. */
   private cleanupInterval: NodeJS.Timeout | null = null;
+  /** Timer for periodically running device health checks. */
   private watchdogInterval: NodeJS.Timeout | null = null;
 
   /**
@@ -153,6 +157,7 @@ export class LshLogicNode {
    * are the `NodeMessage` objects to be sent on that output.
    */
   private send(messages: OutputMessages): void {
+    // TypeScript enums have both numeric and string keys. Dividing by 2 gets the actual number of outputs
     const outputArray: (NodeMessage | null)[] = new Array(
       Object.keys(Output).length / 2
     ).fill(null);
@@ -264,6 +269,12 @@ export class LshLogicNode {
     }
   }
 
+  /**
+   * Sets up a file watcher (chokidar) to monitor the long-click configuration file.
+   * If the file changes, it triggers a hot-reload of the configuration.
+   * @param filePath - The absolute path to the configuration file to watch.
+   * @private
+   */
   private setupFileWatcher(filePath: string): void {
     if (this.watcher) this.watcher.close();
     this.watcher = chokidar.watch(filePath);
@@ -369,7 +380,7 @@ export class LshLogicNode {
     const transactionKey = `${deviceName}.${buttonId}.${clickType}`;
     const commandTopic = `${this.config.lshBasePath}${deviceName}/IN`;
 
-    // --- Helper functions for sending responses ---
+    // --- Helper function for sending a Click Failover (c_f) response.
     const sendClickFailover = (reason: string) => {
       this.node.warn(
         `Click validation failed for ${transactionKey}: ${reason}. Sending Click Failover (c_f).`
@@ -386,6 +397,7 @@ export class LshLogicNode {
       });
     };
 
+    // --- Helper function for sending a General Failover (c_gf) response.
     const sendGeneralFailover = (reason: string) => {
       this.node.error(
         `System failure on click ${transactionKey}: ${reason}. Sending General Failover (c_gf).`
@@ -663,6 +675,8 @@ export class LshLogicNode {
     if (devicesToPing.length > 0) {
       const totalConfiguredDevices = this.longClickConfig.devices.length;
 
+      // Optimization: If all devices are silent, it might indicate a wider network issue
+      // or that this node just started. A single broadcast ping is more efficient.
       if (devicesToPing.length === totalConfiguredDevices) {
         this.node.log(
           `All ${totalConfiguredDevices} devices are silent. Sending a single broadcast ping.`
@@ -682,7 +696,8 @@ export class LshLogicNode {
             payload: { p: LshProtocol.PING },
           };
           this.send({ [Output.Lsh]: pingCommand });
-          await sleep(Math.random() * 200 + 50); // Staggering is still useful
+          // Add a small, random delay (jitter) to stagger the pings and avoid a network burst.
+          await sleep(Math.random() * 200 + 50);
         }
       }
     }
@@ -702,10 +717,7 @@ export class LshLogicNode {
    * @param msg - The incoming Node-RED message.
    * @param done - The function to call when processing is complete.
    */
-  private handleInput(
-    msg: NodeMessage,
-    done: (err?: Error) => void
-  ): void {
+  private handleInput(msg: NodeMessage, done: (err?: Error) => void): void {
     if (!this.config || !this.longClickConfig) {
       this.node.warn("Configuration not loaded, ignoring message.");
       return done();
@@ -903,8 +915,19 @@ export class LshLogicNode {
   }
 }
 
-// Define the function for Node-RED
+/**
+ * The main module definition for Node-RED.
+ * This function is called by the Node-RED runtime when the node is loaded.
+ * It registers the node's type and its constructor function.
+ * @param RED - The Node-RED runtime API object.
+ */
 const nodeRedModule = function (RED: NodeAPI) {
+  /**
+   * The constructor function for the `lsh-logic` node, as called by the Node-RED runtime.
+   * This function creates the Node-RED node instance and initializes the main LshLogicNode orchestrator.
+   * @param this - The `Node` instance being constructed.
+   * @param config - The configuration properties set by the user in the editor.
+   */
   function LshLogicNodeWrapper(this: Node, config: LshLogicNodeDef) {
     RED.nodes.createNode(this, config);
     new LshLogicNode(this, config, RED);
