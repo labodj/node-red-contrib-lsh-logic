@@ -98,6 +98,18 @@ describe("Watchdog", () => {
     }
   });
 
+  it('should return "unhealthy" for a device configured but never seen (undefined state)', () => {
+    const now = Date.now();
+    const result = watchdog.checkDeviceHealth(undefined, now);
+
+    expect(result.status).toBe("unhealthy");
+    if (result.status === "unhealthy") {
+      expect(result.reason).toContain("Never seen");
+    } else {
+      fail('Expected status to be "unhealthy" but it was not.');
+    }
+  });
+
   it('should return "ok" for a device that just had activity', () => {
     let now = Date.now();
     let device: DeviceState = {
