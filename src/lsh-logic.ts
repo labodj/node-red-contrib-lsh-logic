@@ -86,16 +86,16 @@ class ClickValidationError extends Error {
  * and handles all I/O with the Node-RED environment.
  */
 export class LshLogicNode {
-  private node: Node;
-  private config: LshLogicNodeDef;
-  private RED: NodeAPI;
+  private readonly node: Node;
+  private readonly config: LshLogicNodeDef;
+  private readonly RED: NodeAPI;
 
   // Schema validators, pre-compiled for performance.
-  private ajv: Ajv;
-  private validateLongClickConfig: ValidateFunction;
-  private validateDeviceDetails: ValidateFunction;
-  private validateActuatorStates: ValidateFunction;
-  private validateAnyMiscTopic: ValidateFunction;
+  private readonly ajv: Ajv;
+  private readonly validateLongClickConfig: ValidateFunction;
+  private readonly validateDeviceDetails: ValidateFunction;
+  private readonly validateActuatorStates: ValidateFunction;
+  private readonly validateAnyMiscTopic: ValidateFunction;
 
   // --- INTERNAL STATE ---
   /** Holds the parsed long-click configuration from the JSON file. */
@@ -105,17 +105,17 @@ export class LshLogicNode {
   /** Watches the config file for changes to enable hot-reloading. */
   private watcher: chokidar.FSWatcher | null = null;
   /** Manages the in-memory state of all known devices. */
-  private deviceManager: DeviceRegistryManager;
+  private readonly deviceManager: DeviceRegistryManager;
   /** Manages the state and lifecycle of network click transactions. */
-  private clickManager: ClickTransactionManager;
+  private readonly clickManager: ClickTransactionManager;
   /** Monitors device health and determines when to ping them. */
-  private watchdog: Watchdog;
+  private readonly watchdog: Watchdog;
   /** 
    * @internal
    * @description A declarative routing table that maps MQTT topic patterns to handler functions.
    * This simplifies the `handleInput` method by replacing conditional logic with a lookup table.
    */
-  private routes: TopicRoute[];
+  private readonly routes: TopicRoute[];
 
   // Timers for periodic tasks.
   /** Timer for periodically cleaning up expired click transactions. */
