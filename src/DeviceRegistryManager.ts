@@ -308,7 +308,6 @@ export class DeviceRegistryManager {
       { active: 0, total: 0 }
     );
 
-    let warning: string | undefined;
     const prefix = this.otherDevicesPrefix;
 
     const otherCounts = otherActors.reduce(
@@ -317,14 +316,15 @@ export class DeviceRegistryManager {
         if (typeof state === "boolean") {
           acc.total++;
           if (state === true) acc.active++;
-        } else if (warning === undefined) {
-          warning = `State for otherActor '${actorName}' not found or not a boolean.`;
+        } else {
+          // Collect all warnings instead of just the first one
+          acc.warnings.push(`State for otherActor '${actorName}' not found or not a boolean.`);
         }
         return acc;
       },
-      { active: 0, total: 0 }
+      { active: 0, total: 0, warnings: [] as string[] } // Add a warnings array to the accumulator
     );
-
+    const warning = otherCounts.warnings.join(' ');
     const totalCount = lshCounts.total + otherCounts.total;
     const activeCount = lshCounts.active + otherCounts.active;
 
