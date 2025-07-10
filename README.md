@@ -71,23 +71,27 @@ The node's behavior is customized through the editor panel, which includes:
 
 This is the core configuration file that defines your devices and their button actions. It should be placed in your Node-RED user directory (e.g., in a `configs/` subfolder). The file is automatically reloaded and re-validated if you make any changes.
 
-**Example `longClickConfig.json`:**
-
 ```json
 {
   "devices": [
     {
+      // The unique MQTT name of the device sending the clicks.
       "name": "living-room-switch",
       "longClickButtons": [
         {
+          // The button ID reported by the device (e.g., "B1", "B2").
           "id": "B1",
+          // A list of LSH devices to control.
           "actors": [
             {
+              // The target device's name.
               "name": "living-room-ceiling-light",
+              // If true, control all actuators on this target.
               "allActuators": true,
               "actuators": []
             }
           ],
+          // A list of non-LSH devices (e.g., Tasmota, Zigbee) to control via Output 2.
           "otherActors": [
             "tasmota_living_room_lamp"
           ]
@@ -96,17 +100,10 @@ This is the core configuration file that defines your devices and their button a
       "superLongClickButtons": [
         {
           "id": "B1",
+          // A super-long-click on this button will turn off all these devices.
           "actors": [
-            {
-              "name": "living-room-ceiling-light",
-              "allActuators": true,
-              "actuators": []
-            },
-            {
-              "name": "kitchen-light",
-              "allActuators": true,
-              "actuators": []
-            }
+            { "name": "living-room-ceiling-light", "allActuators": true, "actuators": [] },
+            { "name": "kitchen-light", "allActuators": true, "actuators": [] }
           ],
           "otherActors": [
             "tasmota_living_room_lamp",
@@ -116,6 +113,8 @@ This is the core configuration file that defines your devices and their button a
       ]
     },
     {
+      // This device is only an actor (it gets controlled), it doesn't send clicks.
+      // It must be listed here for the system to be aware of it for health checks.
       "name": "living-room-ceiling-light",
       "longClickButtons": [],
       "superLongClickButtons": []
