@@ -40,19 +40,19 @@ export class Watchdog {
   }
 
   /**
-   * Checks the health of a single device based on its state and the current time.
-   * This method uses guard clauses for improved readability.
-   * @param deviceState - The current state of the device to check.
-   * @param now - The current timestamp (e.g., from `Date.now()`).
-   * @returns A `WatchdogResult` indicating the device's health status.
-   */
+     * Checks the health of a single device based on its state and the current time.
+     * This method uses guard clauses for improved readability.
+     * @param deviceState - The current state of the device to check.
+     * @param now - The current timestamp (e.g., from `Date.now()`).
+     * @returns A `WatchdogResult` indicating the device's health status.
+     */
   public checkDeviceHealth(
     deviceState: DeviceState | undefined,
     now: number
   ): WatchdogResult {
-    // GUARD 1: Device is not in the registry or has never sent ANY message.
-    // This is the condition the test expects.
-    if (!deviceState || deviceState.lastSeenTime === 0) {
+    // GUARD 1: The device is configured in longClickConfig.json but has never
+    // appeared on the network (its state object doesn't exist in the registry).
+    if (!deviceState) {
       return { status: "unhealthy", reason: "Never seen on the network." };
     }
 
