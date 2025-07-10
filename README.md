@@ -1,14 +1,14 @@
 # Node-RED Contrib LSH Logic
 
 [![NPM version](https://badge.fury.io/js/node-red-contrib-lsh-logic.svg)](https://badge.fury.io/js/node-red-contrib-lsh-logic)
-[![Build Status](https://github.com/your-username/node-red-contrib-lsh-logic/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/node-red-contrib-lsh-logic/actions/workflows/ci.yml)
+[![Build Status](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml/badge.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 A single, powerful Node-RED node to manage advanced automation logic for an LSH (Labo Smart Home) style system. Built with TypeScript for maximum reliability.
 
 This node replaces a complex flow of function nodes with a single, robust, and stateful component that manages device state, implements advanced click logic, and monitors device health.
 
-![Node Appearance](https://raw.githubusercontent.com/your-username/node-red-contrib-lsh-logic/main/images/node-appearance.png)
+![Node Appearance](images/node-appearance.png)
 
 ---
 
