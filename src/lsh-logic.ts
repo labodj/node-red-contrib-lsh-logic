@@ -13,19 +13,19 @@ import { DeviceRegistryManager } from "./DeviceRegistryManager";
 import { ClickTransactionManager } from "./ClickTransactionManager";
 import { Watchdog } from "./Watchdog";
 import {
-  anyMiscPayloadSchema,
+  anyMiscTopicPayloadSchema,
   longClickConfigSchema,
-  deviceConfPayloadSchema,
-  deviceStatePayloadSchema,
+  deviceDetailsPayloadSchema,
+  deviceActuatorsStatePayloadSchema,
 } from "./schemas";
 import { sleep, formatAlertMessage } from "./utils";
 import {
   LshLogicNodeDef,
   LongClickConfig,
   DeviceConfigEntry,
-  DeviceConfPayload,
-  DeviceStatePayload,
-  AnyDeviceMiscPayload,
+  DeviceDetailsPayload,
+  DeviceActuatorsStatePayload,
+  AnyMiscTopicPayload,
   NetworkClickPayload,
   Output,
   OutputMessages,
@@ -93,9 +93,9 @@ export class LshLogicNode {
   // Schema validators, pre-compiled for performance.
   private ajv: Ajv;
   private validateLongClickConfig: ValidateFunction;
-  private validateConfPayload: ValidateFunction;
-  private validateStatePayload: ValidateFunction;
-  private validateAnyMiscPayload: ValidateFunction;
+  private validateDeviceDetails: ValidateFunction;
+  private validateActuatorStates: ValidateFunction;
+  private validateAnyMiscTopic: ValidateFunction;
 
   // --- INTERNAL STATE ---
   /** Holds the parsed long-click configuration from the JSON file. */
@@ -124,15 +124,6 @@ export class LshLogicNode {
   private watchdogInterval: NodeJS.Timeout | null = null;
 
   /**
-   * @internal
-   * @description A map of handler functions for different LSH message types.
-   * This replaces a `switch` statement, making the code more declarative and extensible.
-   */
-  private lshMessageHandlers: {
-    [key in 'conf' | 'state' | 'misc']: (deviceName: string, payload: any) => void;
-  };
-
-  /**
    * Creates an instance of the LshLogicNode.
    * @param node - The Node-RED node instance this class is managing.
    * @param config - The user-defined configuration for this node instance.
@@ -146,9 +137,9 @@ export class LshLogicNode {
     // Initialize AJV and pre-compile all schemas for performance.
     this.ajv = new Ajv({ discriminator: true });
     this.validateLongClickConfig = this.ajv.compile(longClickConfigSchema);
-    this.validateConfPayload = this.ajv.compile(deviceConfPayloadSchema);
-    this.validateStatePayload = this.ajv.compile(deviceStatePayloadSchema);
-    this.validateAnyMiscPayload = this.ajv.compile(anyMiscPayloadSchema);
+    this.validateDeviceDetails = this.ajv.compile(deviceDetailsPayloadSchema);
+    this.validateActuatorStates = this.ajv.compile(deviceActuatorsStatePayloadSchema);
+    this.validateAnyMiscTopic = this.ajv.compile(anyMiscTopicPayloadSchema);
 
     this.deviceManager = new DeviceRegistryManager(
       this.config.otherDevicesPrefix,
@@ -162,12 +153,6 @@ export class LshLogicNode {
 
     // Initialize the declarative routing table.
     this.routes = this._createTopicRoutes();
-
-    this.lshMessageHandlers = {
-      conf: (deviceName, payload) => this._handleConfMessage(deviceName, payload),
-      state: (deviceName, payload) => this._handleStateMessage(deviceName, payload),
-      misc: (deviceName, payload) => this._handleMiscMessage(deviceName, payload),
-    };
 
     this.initialize();
 
@@ -206,16 +191,36 @@ export class LshLogicNode {
         regex: new RegExp(`^${this.config.homieBasePath}([^/]+)/\\$state$`),
         handler: (deviceName, payload) => {
           this.watchdog.onDeviceActivity(deviceName);
-          this.storeConnectionState(deviceName, String(payload));
+          // Delegate state mutation to the manager and react to the result.
+          const { changed, connected } = this.deviceManager.updateConnectionState(deviceName, String(payload));
+          if (changed) {
+            this.node.log(`Device '${deviceName}' ${connected ? "connected" : "disconnected"}.`);
+            this.updateExposedState();
+          }
         },
       },
-      // Route for all LSH protocol messages (e.g., LSH/device/conf, /state, /misc)
+      // Route for LSH device configuration messages (e.g., LSH/device/conf)
       {
-        regex: new RegExp(`^${this.config.lshBasePath}([^/]+)/(conf|state|misc)$`),
-        handler: (deviceName, payload, parts) => {
+        regex: new RegExp(`^${this.config.lshBasePath}([^/]+)/(conf)$`),
+        handler: (deviceName, payload) => {
           this.watchdog.onDeviceActivity(deviceName);
-          const suffix = parts[0] as "conf" | "state" | "misc";
-          this._handleLshMessage(deviceName, suffix, payload);
+          this._handleConfMessage(deviceName, payload);
+        },
+      },
+      // Route for LSH device state messages (e.g., LSH/device/state)
+      {
+        regex: new RegExp(`^${this.config.lshBasePath}([^/]+)/(state)$`),
+        handler: (deviceName, payload) => {
+          this.watchdog.onDeviceActivity(deviceName);
+          this._handleStateMessage(deviceName, payload);
+        },
+      },
+      // Route for LSH miscellaneous messages (e.g., LSH/device/misc)
+      {
+        regex: new RegExp(`^${this.config.lshBasePath}([^/]+)/(misc)$`),
+        handler: (deviceName, payload) => {
+          this.watchdog.onDeviceActivity(deviceName);
+          this._handleMiscMessage(deviceName, payload);
         },
       },
     ];
@@ -257,13 +262,18 @@ export class LshLogicNode {
    */
   private send(messages: OutputMessages): void {
     // TypeScript enums have both numeric and string keys. Dividing by 2 gets the actual number of outputs
-    const outputArray: (NodeMessage | null)[] = new Array(
-      Object.keys(Output).length / 2
-    ).fill(null);
-    outputArray[Output.Lsh] = messages[Output.Lsh] || null;
-    outputArray[Output.OtherActors] = messages[Output.OtherActors] || null;
-    outputArray[Output.Alerts] = messages[Output.Alerts] || null;
-    outputArray[Output.Debug] = messages[Output.Debug] || null;
+    const numOutputs = Object.keys(Output).length / 2;
+    const outputArray: (NodeMessage | null)[] = new Array(numOutputs).fill(null);
+    for (const keyString in messages) {
+      if (messages.hasOwnProperty(keyString)) {
+        const keyNum = Number(keyString);
+        // A `for...in` loop on a numeric enum also iterates over the reverse mapping (e.g., "Lsh": 0).
+        // The `!isNaN` check ensures we only process the numeric keys ("0", "1", etc.).
+        if (!isNaN(keyNum) && keyNum >= 0 && keyNum < numOutputs) {
+          outputArray[keyNum] = messages[keyNum as Output] || null;
+        }
+      }
+    }
     if (outputArray.some((msg) => msg !== null)) {
       this.node.send(outputArray);
     }
@@ -410,66 +420,6 @@ export class LshLogicNode {
   }
 
   /**
-   * Stores device configuration details by delegating to the DeviceRegistryManager.
-   * @param deviceName - The name of the device.
-   * @param details - The payload from the 'conf' topic.
-   */
-  private storeDeviceDetails(
-    deviceName: string,
-    details: DeviceConfPayload
-  ): void {
-    this.deviceManager.storeDeviceDetails(deviceName, details);
-    this.updateExposedState();
-    this.node.log(`Stored/Updated details for device '${deviceName}'.`);
-  }
-  /**
-   * Corresponds to the original "Store state" function node.
-   * Updates the actuator state array for a specific device.
-   * If the device is not yet registered, it creates a partial "shell"
-   * entry and stores the state, awaiting a 'conf' message.
-   * @param deviceName - The name of the device.
-   * @param states - The boolean array from the 'state' topic payload.
-   */
-  private storeDeviceState(deviceName: string, states: boolean[]): void {
-    try {
-      const { isNew, changed } = this.deviceManager.storeDeviceState(deviceName, states);
-      if (isNew) {
-        this.node.log(
-          `Received state for a new device: ${deviceName}. Creating a partial registry entry.`
-        );
-      }
-      if (changed) {
-        this.updateExposedState();
-        this.node.log(
-          `Updated state for '${deviceName}': [${states.join(", ")}]`
-        );
-      }
-    } catch (error) {
-      this.node.error(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  /**
-   * Corresponds to the original "Store connection state" function node (from Homie).
-   * Updates the connection status of a device.
-   * @param deviceName - The name of the device.
-   * @param homieState - The state from the Homie $state topic (e.g., "ready", "lost").
-   */
-  private storeConnectionState(deviceName: string, homieState: string): void {
-    const { changed, connected } = this.deviceManager.storeConnectionState(
-      deviceName,
-      homieState
-    );
-    if (changed) {
-      this.node.log(
-        `Device '${deviceName}' ${connected ? "connected" : "disconnected"}.`
-      );
-      this.updateExposedState();
-    }
-  }
-
-
-  /**
    * @internal
    * @description Validates a new network click request against the current system state and configuration.
    * This method uses guard clauses and throws a `ClickValidationError` on failure.
@@ -577,7 +527,7 @@ export class LshLogicNode {
           this.send({ [Output.Lsh]: { topic: commandTopic, payload: { p: LshProtocol.GENERAL_FAILOVER } } });
         } else {
           this.node.warn(`Click validation failed for ${transactionKey}: ${error.reason}. Sending Click Failover (c_f).`);
-          this.send({ [Output.Lsh]: { topic: commandTopic, payload: { p: LshProtocol.CLICK_FAILOVER, ct: clickType, bi: buttonId } } });
+          this.send({ [Output.Lsh]: { topic: commandTopic, payload: { p: LshProtocol.FAILOVER, ct: clickType, bi: buttonId } } });
         }
       } else {
         // Handle unexpected errors
@@ -700,9 +650,7 @@ export class LshLogicNode {
     }
 
     const lshCommands = this.buildStateCommands(actors, stateToSet);
-    if (lshCommands.length > 0) {
-      lshCommands.forEach((cmd) => this.send({ [Output.Lsh]: cmd }));
-    }
+    lshCommands.forEach((cmd) => this.send({ [Output.Lsh]: cmd }));
 
     if (otherActors.length > 0) {
       this.send({
@@ -816,31 +764,21 @@ export class LshLogicNode {
 
   /**
    * @internal
-   * @description Dispatches an incoming LSH message to the correct handler based on its topic suffix.
-   * @param deviceName - The name of the device that sent the message.
-   * @param suffix - The final part of the topic (e.g., 'conf', 'state', 'misc').
-   * @param payload - The message payload.
-   */
-  private _handleLshMessage(deviceName: string, suffix: 'conf' | 'state' | 'misc', payload: any): void {
-    const handler = this.lshMessageHandlers[suffix];
-    if (handler) {
-      handler(deviceName, payload);
-    }
-  }
-
-  /**
-   * @internal
-   * @description Handles 'conf' messages by validating the payload and storing device details.
+   * @description Handles 'conf' messages by validating the payload and delegating storage.
    * @param deviceName - The name of the device.
    * @param payload - The 'conf' message payload.
    */
   private _handleConfMessage(deviceName: string, payload: any): void {
-    if (this.validateConfPayload(payload)) {
-      this.storeDeviceDetails(deviceName, payload as DeviceConfPayload);
+    if (this.validateDeviceDetails(payload)) {
+      const { changed } = this.deviceManager.registerDeviceDetails(deviceName, payload as DeviceDetailsPayload);
+      if (changed) {
+        this.node.log(`Stored/Updated details for device '${deviceName}'.`);
+        this.updateExposedState();
+      }
     } else {
       this.node.warn(
         `Invalid 'conf' payload from ${deviceName}: ${this.ajv.errorsText(
-          this.validateConfPayload.errors
+          this.validateDeviceDetails.errors
         )}`
       );
     }
@@ -848,17 +786,32 @@ export class LshLogicNode {
 
   /**
    * @internal
-   * @description Handles 'state' messages by validating the payload and storing actuator states.
+   * @description Handles 'state' messages by validating the payload and delegating storage.
    * @param deviceName - The name of the device.
    * @param payload - The 'state' message payload.
    */
   private _handleStateMessage(deviceName: string, payload: any): void {
-    if (this.validateStatePayload(payload)) {
-      this.storeDeviceState(deviceName, (payload as DeviceStatePayload).as);
+    if (this.validateActuatorStates(payload)) {
+      try {
+        const { isNew, changed } = this.deviceManager.registerActuatorStates(deviceName, (payload as DeviceActuatorsStatePayload).as);
+        if (isNew) {
+          this.node.log(
+            `Received state for a new device: ${deviceName}. Creating a partial registry entry.`
+          );
+        }
+        if (changed) {
+          this.node.log(
+            `Updated state for '${deviceName}': [${(payload as DeviceActuatorsStatePayload).as.join(", ")}]`
+          );
+          this.updateExposedState();
+        }
+      } catch (error) {
+        this.node.error(error instanceof Error ? error.message : String(error));
+      }
     } else {
       this.node.warn(
         `Invalid 'state' payload from ${deviceName}: ${this.ajv.errorsText(
-          this.validateStatePayload.errors
+          this.validateActuatorStates.errors
         )}`
       );
     }
@@ -871,42 +824,30 @@ export class LshLogicNode {
    * @param payload - The 'misc' message payload.
    */
   private _handleMiscMessage(deviceName: string, payload: any): void {
-    if (!this.validateAnyMiscPayload(payload)) {
-      this.node.warn(`Received invalid or unhandled 'misc' payload from ${deviceName}.`);
-      this.send({
-        [Output.Debug]: {
-          payload: {
-            error: "Invalid Misc Payload", topic: `${this.config.lshBasePath}${deviceName}/misc`, receivedPayload: payload,
-          },
-        },
-      });
+    if (!this.validateAnyMiscTopic(payload)) {
+      this.node.warn(`Invalid 'misc' payload from ${deviceName}: ${this.ajv.errorsText(this.validateAnyMiscTopic.errors)}`);
       return;
     }
 
-    const miscPayload = payload as AnyDeviceMiscPayload;
+    const miscPayload = payload as AnyMiscTopicPayload;
     switch (miscPayload.p) {
       case LshProtocol.NETWORK_CLICK:
         this.handleNetworkClick(deviceName, miscPayload);
         break;
       case LshProtocol.DEVICE_BOOT:
         this.node.log(`Device '${deviceName}' reported a boot event.`);
-        const device = this.deviceManager.getDevice(deviceName);
-        if (device) {
-          device.lastSeenTime = Date.now();
-          device.lastBootTime = Date.now();
+        // Delegate state mutation to the manager, then react.
+        if (this.deviceManager.recordBoot(deviceName).stateChanged) {
           this.updateExposedState();
         }
         break;
       case LshProtocol.PING:
-        this.node.log(`Received ping response from '${deviceName}'.`);
-        const pingingDevice = this.deviceManager.getDevice(deviceName);
-        if (pingingDevice) {
-          pingingDevice.lastSeenTime = Date.now();
-          if (pingingDevice.isStale) {
-            this.node.log(`Device '${deviceName}' is no longer stale.`);
-            pingingDevice.isStale = false;
-          }
+        // Delegate state mutation to the manager, then react.
+        if (this.deviceManager.recordPingResponse(deviceName).stateChanged) {
+          this.node.log(`Device '${deviceName}' is now responsive.`);
           this.updateExposedState();
+        } else {
+          this.node.log(`Received ping response from '${deviceName}'.`);
         }
         break;
     }
@@ -919,7 +860,7 @@ export class LshLogicNode {
    * @param done - The function to call when processing is complete.
    */
   private handleInput(msg: NodeMessage, done: (err?: Error) => void): void {
-    if (!this.config || !this.longClickConfig) {
+    if (!this.longClickConfig) {
       this.node.warn("Configuration not loaded, ignoring message.");
       return done();
     }
