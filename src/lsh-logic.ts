@@ -110,12 +110,12 @@ export class LshLogicNode {
     }, watchdogIntervalMs);
 
     // Register handlers for Node-RED events.
-    this.node.on("input", (msg, send, done) => {
-      this.handleInput(msg, send, done);
+    this.node.on("input", (msg, _send, done) => {
+      this.handleInput(msg, done);
     });
 
-    this.node.on("close", (removed: boolean, done: () => void) => {
-      this.handleClose(removed, done);
+    this.node.on("close", (done: () => void) => {
+      this.handleClose(done);
     });
   }
 
@@ -353,12 +353,10 @@ export class LshLogicNode {
    * delegates the state management of the transaction to the `ClickTransactionManager`.
    * @param deviceName - The name of the device that sent the click.
    * @param payload - The validated NetworkClickPayload.
-   * @param send - The function to send messages to the node's outputs.
    */
   private handleNetworkClick(
     deviceName: string,
-    payload: NetworkClickPayload,
-    send: (msg: NodeMessage | (NodeMessage | null)[]) => void
+    payload: NetworkClickPayload
   ): void {
     // --- Step 1: Update device's last seen time ---
     const device = this.deviceManager.getDevice(deviceName);
@@ -417,8 +415,7 @@ export class LshLogicNode {
       this.executeClickLogic(
         transaction.actors,
         transaction.otherActors,
-        clickType,
-        send
+        clickType
       );
       return;
     }
@@ -539,13 +536,11 @@ export class LshLogicNode {
    * @param actors - The primary target actors (LSH).
    * @param otherActors - The secondary target actors (external).
    * @param clickType - The type of click ('lc' or 'slc').
-   * @param send - The function to send messages.
    */
   private executeClickLogic(
     actors: Actor[],
     otherActors: string[],
-    clickType: "lc" | "slc",
-    send: (msg: NodeMessage | (NodeMessage | null)[]) => void
+    clickType: "lc" | "slc"
   ): void {
     let stateToSet: boolean;
 
@@ -582,20 +577,6 @@ export class LshLogicNode {
         },
       });
     }
-  }
-
-  /**
-   * Formats and sends an alert message to the third output if there are any unhealthy devices.
-   * @param unhealthyDevices - An array of objects, each detailing an unhealthy device and the reason.
-   */
-  private sendAlerts(
-    unhealthyDevices: { name: string; reason: string }[]
-  ): void {
-    if (unhealthyDevices.length === 0) {
-      return;
-    }
-    const alertMessage = formatAlertMessage(unhealthyDevices);
-    this.send({ [Output.Alerts]: { payload: alertMessage } });
   }
 
   /**
@@ -719,12 +700,10 @@ export class LshLogicNode {
    * The main handler for all incoming messages. It routes messages
    * to the appropriate logic based on their MQTT topic.
    * @param msg - The incoming Node-RED message.
-   * @param send - The function to send messages to outputs.
    * @param done - The function to call when processing is complete.
    */
   private handleInput(
     msg: NodeMessage,
-    send: (msg: NodeMessage | (NodeMessage | null)[]) => void,
     done: (err?: Error) => void
   ): void {
     if (!this.config || !this.longClickConfig) {
@@ -812,7 +791,7 @@ export class LshLogicNode {
 
                 switch (miscPayload.p) {
                   case LshProtocol.NETWORK_CLICK:
-                    this.handleNetworkClick(deviceName, miscPayload, send);
+                    this.handleNetworkClick(deviceName, miscPayload);
                     break;
                   case LshProtocol.DEVICE_BOOT:
                     this.node.log(
@@ -869,10 +848,9 @@ export class LshLogicNode {
 
   /**
    * Cleans up resources when the node is removed or Node-RED is shut down.
-   * @param removed - True if the node is being permanently removed.
    * @param done - Callback to signal completion.
    */
-  private async handleClose(removed: boolean, done: () => void): Promise<void> {
+  private async handleClose(done: () => void): Promise<void> {
     this.node.log("Closing LSH Logic node.");
     this.testCleanup(); // Use the same cleanup method
     done();
