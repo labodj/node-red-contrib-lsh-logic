@@ -74,12 +74,38 @@ export enum Output {
  * allowing messages to be targeted to specific outputs.
  */
 export type OutputMessages = {
-  [key in Output]?: NodeMessage;
+  [key in Output]?: NodeMessage | NodeMessage[];
 };
+
+/**
+ * @internal
+ * @description Describes the set of actions for the Node-RED adapter to perform
+ * based on the result of a service layer operation.
+ */
+export interface ServiceResult {
+  /** Messages to be sent to the node's outputs. */
+  messages: OutputMessages;
+  /** Informational messages to be logged. */
+  logs: string[];
+  /** Warning messages to be logged. */
+  warnings: string[];
+  /** Error messages to be logged. */
+  errors: string[];
+  /** Flag indicating if the public-facing state has changed and should be exposed. */
+  stateChanged: boolean;
+}
 
 // --------------------------------------------------------------------------
 // LSH Protocol and Payloads
 // --------------------------------------------------------------------------
+
+/**
+ * Defines the types of network clicks for improved type safety and readability.
+ */
+export enum ClickType {
+  Long = "lc",
+  SuperLong = "slc",
+}
 
 /**
  * Defines a type-safe enum for LSH protocol identifiers.
@@ -146,8 +172,8 @@ export interface DeviceActuatorsStatePayload {
 /** Payload: Command_Network Click (`c_nc`). Sent by the client when a button is long-pressed via the 'misc' topic. */
 export interface NetworkClickPayload {
   p: LshProtocol.NETWORK_CLICK;
-  /** The type of click: 'lc' for long-click, 'slc' for super-long-click. */
-  ct: "lc" | "slc";
+  /** The type of click, e.g., long-click or super-long-click. */
+  ct: ClickType;
   /** The ID of the button that was pressed (e.g., 'ID1'). */
   bi: string;
   /** The phase of the transaction: `false` for the initial request, `true` for the final confirmation. */
@@ -205,12 +231,11 @@ export interface ApplySingleActuatorStatePayload {
 /** Payload: Data_Network Click Ack (`d_nca`). Sent by the node to acknowledge a network click request. */
 export interface NetworkClickAckPayload {
   p: LshProtocol.NETWORK_CLICK_ACK;
-  /** The type of click being acknowledged: 'lc' or 'slc'. */
-  ct: "lc" | "slc";
+  /** The type of click being acknowledged. */
+  ct: ClickType;
   /** The ID of the button whose click is being acknowledged. */
   bi: string;
 }
-
 /** Payload: Command_General Failover (`c_gf`). Sent by the node to indicate a system-level failure. */
 export interface GeneralFailoverPayload {
   p: LshProtocol.GENERAL_FAILOVER;
@@ -219,8 +244,8 @@ export interface GeneralFailoverPayload {
 /** Payload: Command_Failover (`c_f`). Sent by the node to indicate a click-specific action has failed. */
 export interface FailoverPayload {
   p: LshProtocol.FAILOVER;
-  /** The type of click that failed: 'lc' or 'slc'. */
-  ct: "lc" | "slc";
+  /** The type of click that failed. */
+  ct: ClickType;
   /** The ID of the button whose action failed. */
   bi: string;
 }
