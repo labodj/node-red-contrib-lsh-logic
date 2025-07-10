@@ -27,9 +27,9 @@ export class DeviceRegistryManager {
   /** The main in-memory database of all device states, keyed by device name. */
   private registry: DeviceRegistry = {};
   /** The prefix used to construct context keys for reading external device states. */
-  private otherDevicesPrefix: string;
+  private readonly otherDevicesPrefix: string;
   /** A reference to the context reader (flow or global) for fetching external states. */
-  private otherActorsContext: ContextReader;
+  private readonly otherActorsContext: ContextReader;
 
   constructor(otherDevicesPrefix: string, otherActorsContext: ContextReader) {
     this.otherDevicesPrefix = otherDevicesPrefix;
