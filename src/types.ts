@@ -216,7 +216,7 @@ export interface DeviceState {
   /** An ordered array of actuator IDs (e.g., ['A1', 'A2']). */
   actuatorsIDs: string[];
   /** An array of button IDs, if any (e.g., ['B1', 'B2']). */
-  buttonsIDs: string[] | undefined;
+  buttonsIDs: string[];
   /** An ordered array of the current states for each actuator. */
   actuatorStates: boolean[];
   /** A map for O(1) lookup of an actuator's index by its ID. */
