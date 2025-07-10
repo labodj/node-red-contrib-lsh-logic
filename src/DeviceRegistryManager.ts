@@ -12,11 +12,8 @@ import {
   Actor,
   ActuatorIndexMap,
 } from "./types";
+import { areSameArray } from "./utils";
 import { WatchdogResult } from "./Watchdog";
-
-/** Simple array comparison function  */
-const areSameArray = <T>(a: T[], b: T[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
-
 /**
  * An interface describing an object that can read values from a context store.
  * This decouples the manager from the specifics of Node-RED's context.
