@@ -1,3 +1,5 @@
-export const preset = "ts-jest";
-export const testEnvironment = "node";
-export const testMatch = ["**/__tests__/**/*.test.ts"];
+module.exports = {
+  preset: "ts-jest",
+  testEnvironment: "node",
+  testMatch: ["**/__tests__/**/*.test.ts"],
+};
