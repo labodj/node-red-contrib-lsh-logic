@@ -175,17 +175,20 @@ export class LshLogicNode {
    * This is the main entry point for the node's setup logic.
    */
   private async initialize(): Promise<void> {
+    // Initializing state: node is starting up.
     this.node.status({ fill: "blue", shape: "dot", text: "Initializing..." });
     try {
       const userDir = this.RED.settings.userDir || process.cwd();
       const configPath = path.resolve(userDir, this.config.longClickConfigPath);
       await this.loadLongClickConfig(configPath);
       this.setupFileWatcher(configPath);
+      // Ready state: initialization complete and config loaded.
       this.node.status({ fill: "green", shape: "dot", text: "Ready" });
       this.node.log("Node initialized and configuration loaded.");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.node.error(`Critical error during initialization: ${msg}`);
+      // Error state: a critical failure occurred, node is non-operational.
       this.node.status({ fill: "red", shape: "ring", text: "Config Error" });
     }
   }
@@ -263,6 +266,9 @@ export class LshLogicNode {
       this.deviceConfigMap.clear();
       throw error; // Re-throw to be caught by the caller
     } finally {
+      // This block ensures that the exposed context and topics are always
+      // updated, even if loading fails. In case of failure, it will expose
+      // an empty/null config, correctly reflecting the node's internal state.
       this.updateExposedState();
       this.updateExposedConfig();
       this.updateExportedTopics();
@@ -280,6 +286,7 @@ export class LshLogicNode {
     this.watcher = chokidar.watch(filePath);
     this.watcher.on("change", (path) => {
       this.node.log(`Configuration file changed: ${path}. Reloading...`);
+      // Reloading state: config file changed, attempting to reload.
       this.node.status({
         fill: "yellow",
         shape: "dot",
@@ -288,10 +295,12 @@ export class LshLogicNode {
       this.loadLongClickConfig(path)
         .then(() => {
           this.node.log(`Configuration successfully reloaded from ${path}.`);
+          // Back to ready state after successful reload.
           this.node.status({ fill: "green", shape: "dot", text: "Ready" });
         })
         .catch((err) => {
           this.node.error(`Error reloading ${path}: ${err.message}`);
+          // Error state: reload failed, node may be in an inconsistent state.
           this.node.status({
             fill: "red",
             shape: "ring",
@@ -727,7 +736,12 @@ export class LshLogicNode {
       const topic = msg.topic || "";
       let processed = false;
 
-      // 1. Handle Homie messages
+      // The message routing logic follows a specific priority:
+      // 1. Homie topics for connection state are checked first.
+      // 2. LSH-specific topics are checked next.
+      // Messages that don't match are logged but otherwise ignored.
+
+      // 1. Handle Homie connection state messages (e.g., homie/device/$state)
       if (topic.startsWith(this.config.homieBasePath)) {
         const parts = topic
           .substring(this.config.homieBasePath.length)
@@ -740,7 +754,7 @@ export class LshLogicNode {
           processed = true;
         }
       }
-      // 2. Handle LSH messages
+      // 2. Handle LSH protocol messages (e.g., LSH/device/conf, /state, /misc)
       else if (topic.startsWith(this.config.lshBasePath)) {
         const parts = topic
           .substring(this.config.lshBasePath.length)
@@ -844,6 +858,9 @@ export class LshLogicNode {
       }
 
       if (!processed) {
+        // This is not an error, just a log entry for visibility during debugging.
+        // It allows the user to see all messages passing through the node,
+        // even those on topics the node doesn't actively handle.
         this.node.log(`Message on unhandled topic: ${topic}`);
       }
     } catch (error) {

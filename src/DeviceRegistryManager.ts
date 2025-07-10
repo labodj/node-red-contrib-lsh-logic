@@ -181,6 +181,9 @@ export class DeviceRegistryManager {
 
     device.connected = isReady;
     if (isReady) {
+      // Business rule: When a device comes online (Homie 'ready'),
+      // its health status is reset to a healthy, non-stale state.
+      // This clears any previous 'stale' or 'unhealthy' flags from the watchdog.
       device.isHealthy = true;
       device.isStale = false;
       device.lastSeenTime = Date.now();
@@ -245,6 +248,8 @@ export class DeviceRegistryManager {
       };
     }
 
+    // This is the core "Smart Toggle" logic: turn the lights ON only if
+    // less than half of them are already on. Otherwise, turn them all OFF.
     const shouldTurnOn = activeCount < totalCount / 2.0;
     return {
       stateToSet: shouldTurnOn,
