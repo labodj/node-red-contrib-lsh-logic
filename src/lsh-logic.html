@@ -27,7 +27,7 @@
       otherActorsContext: { value: "global", required: true },
       // Timing
       clickTimeout: {
-        value: 15,
+        value: 5,
         required: true,
         validate: RED.validators.number(),
       },
@@ -37,12 +37,12 @@
         validate: RED.validators.number(),
       },
       watchdogInterval: {
-        value: 2,
+        value: 120,
         required: true,
         validate: RED.validators.number(),
       },
       interrogateThreshold: {
-        value: 3,
+        value: 180,
         required: true,
         validate: RED.validators.number(),
       },

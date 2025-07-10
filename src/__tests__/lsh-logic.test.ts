@@ -6,7 +6,7 @@
 import { Node, NodeAPI, NodeMessage } from "node-red";
 
 import { LshLogicNode } from "../lsh-logic";
-import { LshLogicNodeDef, Output, OutputMessages } from "../types";
+import { LshLogicNodeDef, LshProtocol, Output, OutputMessages } from "../types";
 import { ClickTransactionManager } from "../ClickTransactionManager";
 
 // --- MOCK SETUP ---
@@ -81,9 +81,11 @@ describe("LshLogicNode Orchestrator", () => {
     const numOutputs = Object.keys(Output).length / 2;
     const outputArray: (NodeMessage | null)[] = new Array(numOutputs).fill(null);
     for (const key in messages) {
-      const outputIndex = parseInt(key, 10);
-      if (!isNaN(outputIndex)) {
-        outputArray[outputIndex] = messages[key as any];
+      if (messages.hasOwnProperty(key)) {
+        const keyNum = Number(key);
+        if (!isNaN(keyNum)) {
+          outputArray[keyNum] = messages[keyNum as Output] || null;
+        }
       }
     }
     return outputArray;
@@ -115,10 +117,10 @@ describe("LshLogicNode Orchestrator", () => {
   it("should delegate storing device details to its manager", async () => {
     await new Promise(process.nextTick);
     const manager = (instance as any).deviceManager;
-    const storeDetailsSpy = jest.spyOn(manager, "storeDeviceDetails");
-    const payload = { dn: "test-device", ai: ["A1"], bi: [] };
+    const registerDetailsSpy = jest.spyOn(manager, "registerDeviceDetails");
+    const payload = { p: LshProtocol.DEVICE_DETAILS, dn: "test-device", ai: ["A1"], bi: [] };
     simulateInput("LSH/test-device/conf", payload);
-    expect(storeDetailsSpy).toHaveBeenCalledWith("test-device", payload);
+    expect(registerDetailsSpy).toHaveBeenCalledWith("test-device", payload);
   });
 
   describe("Network Click Handling", () => {
@@ -133,8 +135,8 @@ describe("LshLogicNode Orchestrator", () => {
       };
       (instance as any).deviceConfigMap.set("device-sender", mockDeviceConfig);
       const deviceManager = (instance as any).deviceManager;
-      deviceManager.storeDeviceDetails("actor1", { dn: "actor1", ai: ["A1"], bi: [] });
-      deviceManager.storeConnectionState("actor1", "ready");
+      deviceManager.registerDeviceDetails("actor1", { p: LshProtocol.DEVICE_DETAILS, dn: "actor1", ai: ["A1"], bi: [] });
+      deviceManager.updateConnectionState("actor1", "ready");
       const payload = { p: "c_nc", bi: "B1", ct: "lc", c: false };
       const topic = "LSH/device-sender/misc";
 
@@ -163,8 +165,8 @@ describe("LshLogicNode Orchestrator", () => {
       (managerInstance.consumeTransaction as jest.Mock).mockReturnValue(mockTransaction);
 
       const deviceManager = (instance as any).deviceManager;
-      deviceManager.storeDeviceDetails("actor1", { dn: "actor1", ai: ["A1"], bi: [] });
-      deviceManager.storeDeviceState("actor1", [false]);
+      deviceManager.registerDeviceDetails("actor1", { p: LshProtocol.DEVICE_DETAILS, dn: "actor1", ai: ["A1"], bi: [] });
+      deviceManager.registerActuatorStates("actor1", [false]);
       const payload = { p: "c_nc", bi: "B1", ct: "lc", c: true };
       const topic = "LSH/device-sender/misc";
 
