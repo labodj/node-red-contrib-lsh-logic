@@ -48,8 +48,10 @@ export class DeviceRegistryManager {
     if (!this.registry[deviceName]) {
       this.registry[deviceName] = {
         name: deviceName,
-        connected: true, // Assume connected until a 'lost' message is received
-        isHealthy: true,
+        // Start by assuming the device is disconnected and unhealthy.
+        // It must prove it's online via a 'ready' or 'boot' message.
+        connected: false,
+        isHealthy: false,
         isStale: false,
         lastSeenTime: 0,
         lastBootTime: 0,
@@ -180,13 +182,15 @@ export class DeviceRegistryManager {
     if (isReady) {
       device.isHealthy = true;
       device.isStale = false;
+    } else {
+      device.isHealthy = false;
     }
     device.lastSeenTime = Date.now();
     return { changed: true, connected: isReady };
   }
 
   /**
-   * Records a boot event (`d_b`) from a device.
+   * Records a boot event (`d_b`) from a device, updating its state to connected and healthy.
    * @param deviceName - The name of the device that booted.
    * @returns An object indicating if the state was changed.
    */
@@ -195,7 +199,7 @@ export class DeviceRegistryManager {
     const now = Date.now();
     device.lastSeenTime = now;
     device.lastBootTime = now;
-    // A boot event always resets health status.
+    device.connected = true;
     device.isHealthy = true;
     device.isStale = false;
     return { stateChanged: true };
