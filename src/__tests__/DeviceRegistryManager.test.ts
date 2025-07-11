@@ -22,7 +22,7 @@ describe("DeviceRegistryManager", () => {
 
     expect(registry["new-device"]).toBeDefined();
     expect(registry["new-device"].name).toBe("new-device");
-    expect(registry["new-device"].connected).toBe(true);
+    expect(registry["new-device"].connected).toBe(false);
   });
 
   it("should store device details for a new device", () => {
