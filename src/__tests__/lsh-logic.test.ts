@@ -1,161 +1,249 @@
 /**
  * @file Integration tests for the LshLogicNode adapter class.
- * These tests verify that the node correctly interfaces with the LshLogicService
- * and the Node-RED runtime, delegating business logic and processing results.
  */
 import { Node, NodeAPI } from "node-red";
 import { LshLogicNode } from "../lsh-logic";
-import { LshLogicNodeDef, Output, ServiceResult } from "../types";
-import { LshLogicService } from "../LshLogicService";
-import { sleep } from "../utils";
+import { LshLogicNodeDef, ServiceResult, Output } from "../types";
 
-// --- MOCK SETUP ---
 jest.mock("fs/promises");
 jest.mock("chokidar", () => ({
-  watch: jest.fn().mockReturnValue({ on: jest.fn(), close: jest.fn() }),
-}));
-// Mock the entire service class
-jest.mock("../LshLogicService");
-// Mock the sleep utility to avoid actual delays in tests
-jest.mock("../utils", () => ({
-  ...jest.requireActual("../utils"), // keep original formatAlertMessage etc.
-  sleep: jest.fn().mockResolvedValue(undefined),
+  watch: jest.fn().mockImplementation(() => ({
+    on: jest.fn().mockReturnThis(),
+    close: jest.fn().mockResolvedValue(undefined),
+  })),
 }));
 
 const fs = require("fs/promises");
-const MockedLshLogicService = LshLogicService as jest.MockedClass<typeof LshLogicService>;
+const MOCK_CONFIG_CONTENT = JSON.stringify({
+  devices: [{ name: "test-device" }],
+});
 
-/** Mocks the Node-RED Node object. */
-const mockNode: Partial<Node> = {
-  id: "test-node-id",
-  on: jest.fn(),
-  send: jest.fn(),
-  log: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-  status: jest.fn(),
-  context: () =>
-  ({
+const createMockNode = (): jest.Mocked<Node> => ({
+  id: "test-node-id", type: "lsh-logic", z: "flow-id", name: "Test LSH Logic",
+  on: jest.fn(), send: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn(), status: jest.fn(),
+  context: jest.fn().mockReturnValue({
     flow: { get: jest.fn(), set: jest.fn() },
     global: { get: jest.fn(), set: jest.fn() },
-  } as any),
-};
+  }),
+} as any);
 
-/** Mocks the Node-RED runtime API object. */
 const mockRED: Partial<NodeAPI> = {
+  nodes: { createNode: jest.fn() } as any,
   settings: { userDir: process.cwd() } as any,
 };
 
-/** Mocks the node's user-defined configuration. */
 const mockConfig: LshLogicNodeDef = {
-  id: "test-node-id",
-  type: "lsh-logic",
-  name: "Test LSH Logic",
-  z: "flow-id",
-  homieBasePath: "homie/",
-  lshBasePath: "LSH/",
-  serviceTopic: "LSH/Node-RED/SRV",
-  otherDevicesPrefix: "other_devices",
-  otherActorsContext: "global",
-  longClickConfigPath: "configs/fake.json",
-  clickTimeout: 15,
-  clickCleanupInterval: 30,
-  watchdogInterval: 2,
-  interrogateThreshold: 3,
-  pingTimeout: 150,
-  exposeStateContext: "none",
-  exposeStateKey: "",
-  exportTopics: "none",
-  exportTopicsKey: "",
-  exposeConfigContext: "none",
-  exposeConfigKey: "",
+  id: "test-node-id", type: "lsh-logic", name: "Test LSH Logic", z: "flow-id",
+  homieBasePath: "homie/", lshBasePath: "LSH/", serviceTopic: "LSH/Node-RED/SRV",
+  otherDevicesPrefix: "other_devices", otherActorsContext: "global",
+  systemConfigPath: "configs/fake.json", clickTimeout: 15, clickCleanupInterval: 30,
+  watchdogInterval: 120, interrogateThreshold: 3, pingTimeout: 15, initialStateTimeout: 0.01,
+  exposeStateContext: "none", exposeStateKey: "lsh_state",
+  exportTopics: "none", exportTopicsKey: "lsh_topics",
+  exposeConfigContext: "none", exposeConfigKey: "lsh_config",
+};
+
+// Helper to wait for the async initialization to complete
+const awaitInitialization = async () => {
+  jest.runOnlyPendingTimers();
+  await Promise.resolve();
+  jest.runOnlyPendingTimers();
+  await Promise.resolve();
 };
 
 describe("LshLogicNode Adapter", () => {
-  let instance: LshLogicNode;
-  let mockService: jest.Mocked<LshLogicService>;
+  let mockNodeInstance: jest.Mocked<Node>;
+  let nodeInstance: LshLogicNode;
 
-  beforeEach(async () => {
-    jest.clearAllMocks();
-    MockedLshLogicService.mockClear();
-    fs.readFile.mockResolvedValue(JSON.stringify({ devices: [] }));
-
-    instance = new LshLogicNode(mockNode as Node, mockConfig, mockRED as NodeAPI);
-    await new Promise(process.nextTick);
-
-    mockService = MockedLshLogicService.mock.instances[0] as jest.Mocked<LshLogicService>;
+  beforeEach(() => {
+    jest.useFakeTimers();
+    fs.readFile.mockResolvedValue(MOCK_CONFIG_CONTENT);
+    mockNodeInstance = createMockNode();
   });
 
-  afterEach(() => {
-    instance.testCleanup();
-  });
-
-  const simulateInput = async (topic: string, payload: any) => {
-    const inputCallback = (mockNode.on as jest.Mock).mock.calls.find(
-      (call) => call[0] === "input"
-    )?.[1];
-    if (inputCallback) {
-      const done = jest.fn();
-      await inputCallback({ topic, payload }, mockNode.send, done);
-      return done;
+  afterEach(async () => {
+    if ((nodeInstance as any)?.cleanupInterval) {
+      await (nodeInstance as any)._cleanupResources();
     }
-  };
-
-  it("should instantiate LshLogicService with correct dependencies", () => {
-    expect(MockedLshLogicService).toHaveBeenCalledTimes(1);
-    expect(MockedLshLogicService).toHaveBeenCalledWith(
-      expect.any(Object), // config object
-      expect.any(Object), // context reader
-      expect.objectContaining({ // validators object
-        validateDeviceDetails: expect.any(Function),
-        validateActuatorStates: expect.any(Function),
-        validateAnyMiscTopic: expect.any(Function),
-      })
-    );
+    jest.restoreAllMocks();
+    jest.clearAllMocks();
+    jest.useRealTimers();
   });
 
-  it("should delegate message processing and handle the result", async () => {
-    // Arrange
-    const serviceResult: ServiceResult = {
-      messages: { [Output.Lsh]: { topic: "test/lsh", payload: "test" } },
-      logs: ["log message"],
-      warnings: ["warning message"],
-      errors: [],
-      stateChanged: true
-    };
-    mockService.processMessage.mockReturnValue(serviceResult);
-    const updateStateSpy = jest.spyOn(instance as any, 'updateExposedState').mockImplementation(() => { });
+  it("should initialize correctly", async () => {
+    nodeInstance = new LshLogicNode(mockNodeInstance, mockConfig, mockRED as NodeAPI);
+    await awaitInitialization();
 
-    // Act
-    await simulateInput("any/topic", {});
-
-    // Assert
-    expect(mockService.processMessage).toHaveBeenCalledWith("any/topic", {});
-    expect(mockNode.log).toHaveBeenCalledWith("log message");
-    expect(mockNode.warn).toHaveBeenCalledWith("warning message");
-    expect(updateStateSpy).toHaveBeenCalled();
-    expect(mockNode.send).toHaveBeenCalledWith(expect.arrayContaining([serviceResult.messages[Output.Lsh]]));
+    expect(mockNodeInstance.status).toHaveBeenCalledWith({ fill: "blue", shape: "dot", text: "Initializing..." });
+    expect(fs.readFile).toHaveBeenCalled();
+    expect(mockNodeInstance.status).toHaveBeenCalledWith({ fill: "green", shape: "dot", text: "Ready" });
   });
 
-  it("should handle staggered sends correctly", async () => {
-    // Arrange
-    const staggeredMessages = [
-      { topic: "dev1/IN", payload: "ping" },
-      { topic: "dev2/IN", payload: "ping" },
-    ];
+  it("should handle file read error during initialization", async () => {
+    const fileError = new Error("File not found");
+    fs.readFile.mockRejectedValue(fileError);
+    nodeInstance = new LshLogicNode(mockNodeInstance, mockConfig, mockRED as NodeAPI);
+    await awaitInitialization();
+
+    expect(mockNodeInstance.error).toHaveBeenCalledWith(`Critical error during initialization: ${fileError.message}`);
+    expect(mockNodeInstance.status).toHaveBeenCalledWith({ fill: "red", shape: "ring", text: "Config Error" });
+  });
+
+  it("should handle errors from the service during message processing", async () => {
+    nodeInstance = new LshLogicNode(mockNodeInstance, mockConfig, mockRED as NodeAPI);
+    await awaitInitialization();
+    mockNodeInstance.send.mockClear();
+
+    const testError = new Error("Service layer explosion!");
+    const serviceInNode = (nodeInstance as any).service;
+    jest.spyOn(serviceInNode, 'processMessage').mockImplementation(() => { throw testError; });
+
+    const inputCallback = mockNodeInstance.on.mock.calls.find(call => call[0] === "input")?.[1];
+    const mockDone = jest.fn();
+
+    if (inputCallback) {
+      await (inputCallback as any)({ topic: "t", payload: "p" }, jest.fn(), mockDone);
+    }
+
+    expect(mockNodeInstance.error).toHaveBeenCalledWith("Error processing message: Service layer explosion!");
+    expect(mockDone).toHaveBeenCalledWith(testError);
+    expect(mockNodeInstance.send).not.toHaveBeenCalled();
+  });
+
+  it("should suppress 'device recovered' alerts during the warm-up period", async () => {
+    nodeInstance = new LshLogicNode(mockNodeInstance, mockConfig, mockRED as NodeAPI);
+    await awaitInitialization();
+    mockNodeInstance.send.mockClear();
+
+    (nodeInstance as any).isWarmingUp = true;
     const serviceResult: ServiceResult = {
-      messages: { [Output.Lsh]: staggeredMessages },
+      messages: { [Output.Alerts]: { payload: "✅ System Health Recovery..." } },
       logs: [], warnings: [], errors: [], stateChanged: false
     };
-    mockService.processMessage.mockReturnValue(serviceResult);
 
-    // Act
-    await simulateInput("any/topic", {});
+    await nodeInstance.processServiceResult(serviceResult);
 
-    // Assert
-    expect(mockNode.send).toHaveBeenCalledTimes(2); // Called once for each message in the array
-    expect(mockNode.send).toHaveBeenCalledWith(expect.arrayContaining([staggeredMessages[0]]));
-    expect(mockNode.send).toHaveBeenCalledWith(expect.arrayContaining([staggeredMessages[1]]));
-    expect(sleep).toHaveBeenCalledTimes(2); // Sleep is called for each message
+    expect(mockNodeInstance.send).not.toHaveBeenCalled();
+    expect(mockNodeInstance.log).toHaveBeenCalledWith("Suppressing 'device recovered' alert during warm-up period.");
+  });
+
+  it("should send LSH messages in a staggered sequence", async () => {
+    nodeInstance = new LshLogicNode(mockNodeInstance, mockConfig, mockRED as NodeAPI);
+    await awaitInitialization();
+    mockNodeInstance.send.mockClear();
+
+    const sleepMock = jest.spyOn(require("../utils"), "sleep").mockResolvedValue(undefined);
+    const lshMsg1 = { topic: "LSH/dev1/IN", payload: "p1" };
+    const lshMsg2 = { topic: "LSH/dev2/IN", payload: "p2" };
+    const otherMsg = { payload: "other" };
+
+    const serviceResult: ServiceResult = {
+      messages: { [Output.Lsh]: [lshMsg1, lshMsg2], [Output.OtherActors]: otherMsg },
+      logs: [], warnings: [], errors: [], stateChanged: false
+    };
+
+    await nodeInstance.processServiceResult(serviceResult);
+
+    expect(mockNodeInstance.send).toHaveBeenCalledTimes(3);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(1, [lshMsg1, null, null, null, null]);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(2, [lshMsg2, null, null, null, null]);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(3, [null, otherMsg, null, null, null]);
+  });
+
+  it("should update the exposed state in the context", async () => {
+    const config: LshLogicNodeDef = { ...mockConfig, exposeStateContext: "flow", exposeStateKey: "my_state" };
+    nodeInstance = new LshLogicNode(mockNodeInstance, config, mockRED as NodeAPI);
+    await awaitInitialization();
+    mockNodeInstance.context().flow.set.mockClear();
+
+    const serviceInNode = (nodeInstance as any).service;
+    const MOCK_REGISTRY = { "device-1": { name: "device-1" } };
+    jest.spyOn(serviceInNode, 'getDeviceRegistry').mockReturnValue(MOCK_REGISTRY as any);
+
+    const serviceResult: ServiceResult = { messages: {}, logs: [], warnings: [], errors: [], stateChanged: true };
+    await nodeInstance.processServiceResult(serviceResult);
+
+    const flowContext = mockNodeInstance.context().flow;
+    expect(flowContext.set).toHaveBeenCalledWith("my_state", expect.objectContaining({
+      devices: MOCK_REGISTRY
+    }));
+  });
+
+  it("should log a message when the cleanup timer finds expired clicks", async () => {
+    nodeInstance = new LshLogicNode(mockNodeInstance, mockConfig, mockRED as NodeAPI);
+    await awaitInitialization();
+
+    const serviceInNode = (nodeInstance as any).service;
+    const cleanupSpy = jest.spyOn(serviceInNode, 'cleanupPendingClicks').mockReturnValue("Cleaned up 2 clicks.");
+
+    jest.advanceTimersByTime(mockConfig.clickCleanupInterval * 1000);
+    await Promise.resolve();
+
+    expect(cleanupSpy).toHaveBeenCalled();
+    expect(mockNodeInstance.log).toHaveBeenCalledWith("Cleaned up 2 clicks.");
+  });
+
+  it("should run the watchdog check periodically", async () => {
+    nodeInstance = new LshLogicNode(mockNodeInstance, mockConfig, mockRED as NodeAPI);
+    await awaitInitialization();
+
+    const serviceInNode = (nodeInstance as any).service;
+    const watchdogSpy = jest.spyOn(serviceInNode, 'runWatchdogCheck').mockReturnValue({
+      messages: {}, logs: [], warnings: [], errors: [], stateChanged: false
+    });
+    const processResultSpy = jest.spyOn(nodeInstance, 'processServiceResult');
+
+    jest.advanceTimersByTime(mockConfig.watchdogInterval * 1000);
+    await Promise.resolve();
+
+    expect(watchdogSpy).toHaveBeenCalled();
+    expect(processResultSpy).toHaveBeenCalled();
+  });
+
+  it("should handle non-Error exceptions during message processing", async () => {
+    nodeInstance = new LshLogicNode(mockNodeInstance, mockConfig, mockRED as NodeAPI);
+    await awaitInitialization();
+    mockNodeInstance.send.mockClear();
+
+    const nonError = "A simple string error"; // Not an instance of Error
+    const serviceInNode = (nodeInstance as any).service;
+    jest.spyOn(serviceInNode, 'processMessage').mockImplementation(() => { throw nonError; });
+
+    const inputCallback = mockNodeInstance.on.mock.calls.find(call => call[0] === "input")?.[1];
+    const mockDone = jest.fn();
+
+    if (inputCallback) {
+      await (inputCallback as any)({ topic: "t", payload: "p" }, jest.fn(), mockDone);
+    }
+
+    // Assert that the error message uses the string
+    expect(mockNodeInstance.error).toHaveBeenCalledWith(`Error processing message: ${nonError}`);
+    // Assert that done() is called with a new Error object
+    expect(mockDone).toHaveBeenCalledWith(new Error(nonError));
+  });
+
+  it("should handle input messages with no topic", async () => {
+    nodeInstance = new LshLogicNode(mockNodeInstance, mockConfig, mockRED as NodeAPI);
+    await awaitInitialization();
+
+    const serviceInNode = (nodeInstance as any).service;
+    const processMessageSpy = jest.spyOn(serviceInNode, 'processMessage').mockReturnValue({
+      messages: {}, logs: [], warnings: [], errors: [], stateChanged: false
+    });
+
+    const inputCallback = mockNodeInstance.on.mock.calls.find(call => call[0] === "input")?.[1];
+    const mockDone = jest.fn();
+
+    // Message without 'topic'
+    const msgWithoutTopic = { payload: "some_payload" };
+
+    if (inputCallback) {
+      await (inputCallback as any)(msgWithoutTopic, jest.fn(), mockDone);
+    }
+
+    // Assert that processMessage is called with an empty string as topic
+    expect(processMessageSpy).toHaveBeenCalledWith("", "some_payload");
+    // Called without errors
+    expect(mockDone).toHaveBeenCalledWith();
   });
 });
