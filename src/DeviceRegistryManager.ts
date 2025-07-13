@@ -1,10 +1,8 @@
-// src/DeviceRegistryManager.ts
-
 /**
  * @file Manages the in-memory state of all known devices.
- * This class is the single source of truth for device state and is solely
- * responsible for creating, updating, and querying it. It does not handle
- * I/O (like logging or sending messages).
+ * @description This class acts as the single source of truth for device state and is solely
+ * responsible for creating, updating, and querying it. It is decoupled from
+ * Node-RED and does not perform I/O (like logging or sending messages).
  */
 import {
   DeviceRegistry,
@@ -15,32 +13,39 @@ import {
 } from "./types";
 import { areSameArray } from "./utils";
 import { WatchdogResult } from "./Watchdog";
+
 /**
  * An interface describing an object that can read values from a context store.
- * This decouples the manager from the specifics of Node-RED's context.
+ * This decouples the manager from Node-RED's context API for easier testing.
  */
 interface ContextReader {
-  get(key: string): any;
+  get(key: string): unknown;
 }
 
+/**
+ * Manages the in-memory state of all known devices.
+ */
 export class DeviceRegistryManager {
   /** The main in-memory database of all device states, keyed by device name. */
   private registry: DeviceRegistry = {};
   /** The prefix used to construct context keys for reading external device states. */
   private readonly otherDevicesPrefix: string;
-  /** A reference to the context reader (flow or global) for fetching external states. */
+  /** A reference to the context reader for fetching external states (e.g., from flow or global context). */
   private readonly otherActorsContext: ContextReader;
 
+  /**
+   * @param otherDevicesPrefix - The prefix for context keys (e.g., "other_devices").
+   * @param otherActorsContext - A context reader for external device states.
+   */
   constructor(otherDevicesPrefix: string, otherActorsContext: ContextReader) {
     this.otherDevicesPrefix = otherDevicesPrefix;
     this.otherActorsContext = otherActorsContext;
   }
 
   /**
+   * Ensures a device entry exists in the registry. If not, it creates a new
+   * default entry. This implements a "create-on-write" pattern.
    * @internal
-   * @description A private helper to ensure a device entry exists in the registry.
-   * If it doesn't, a new "shell" entry is created and returned.
-   * This consolidates repetitive creation logic.
    * @param deviceName - The name of the device.
    * @returns The existing or newly created `DeviceState` object.
    */
@@ -48,11 +53,12 @@ export class DeviceRegistryManager {
     if (!this.registry[deviceName]) {
       this.registry[deviceName] = {
         name: deviceName,
-        // Start by assuming the device is disconnected and unhealthy.
-        // It must prove it's online via a 'ready' or 'boot' message.
+        // A new device is assumed to be disconnected and unhealthy until it
+        // proves it's online via a 'ready' message, boot, or ping response.
         connected: false,
         isHealthy: false,
         isStale: false,
+        alertSent: false,
         lastSeenTime: 0,
         lastBootTime: 0,
         lastDetailsTime: 0,
@@ -65,17 +71,16 @@ export class DeviceRegistryManager {
     return this.registry[deviceName];
   }
 
-
   /**
-   * Returns the entire device registry.
-   * @returns The current device registry object.
+   * Returns a deep copy of the entire device registry.
+   * This prevents external code from accidentally modifying the internal state.
+   * @returns A deep copy of the current device registry object.
    */
   public getRegistry(): DeviceRegistry {
-    return this.registry;
+    return JSON.parse(JSON.stringify(this.registry)) as DeviceRegistry;
   }
-
   /**
-   * Retrieves a single device state by its name.
+   * Retrieves a single device's state by its name.
    * @param deviceName - The name of the device to retrieve.
    * @returns The `DeviceState` object or `undefined` if not found.
    */
@@ -84,8 +89,8 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Prunes (removes) a device from the registry.
-   * This is used when a device is removed from the configuration file.
+   * Prunes (removes) a device from the registry. Used when a device is
+   * removed from the system configuration file.
    * @param deviceName - The name of the device to remove.
    */
   public pruneDevice(deviceName: string): void {
@@ -93,7 +98,7 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Updates the registry with configuration details from a device's 'conf' message (`d_dd`).
+   * Updates the registry with configuration details from a device's 'conf' message.
    * @param deviceName - The name of the device.
    * @param details - The validated payload from the 'conf' topic.
    * @returns An object indicating if the device details have changed.
@@ -103,6 +108,14 @@ export class DeviceRegistryManager {
     details: DeviceDetailsPayload
   ): { changed: boolean } {
     const device = this._ensureDeviceExists(deviceName);
+
+    const oldActuatorIDs = [...device.actuatorsIDs];
+    const oldButtonIDs = [...device.buttonsIDs];
+    let changed = false;
+
+    if (!areSameArray(oldActuatorIDs, details.ai) || !areSameArray(oldButtonIDs, details.bi)) {
+      changed = true;
+    }
 
     const actuatorIndexes: ActuatorIndexMap = details.ai.reduce(
       (acc, id, index) => {
@@ -120,31 +133,33 @@ export class DeviceRegistryManager {
       buttonsIDs: details.bi,
       actuatorIndexes,
     });
-
+    // If the number of actuators has changed, the old state array is invalid.
+    // Reset it to the new correct length, initialized to all 'false'.
     if (device.actuatorStates.length !== details.ai.length) {
-      device.actuatorStates = new Array(details.ai.length).fill(false);
+      device.actuatorStates = new Array<boolean>(details.ai.length).fill(false);
+      changed = true;
     }
-    return { changed: true }; // Receiving details always constitutes a change.
+
+    return { changed };
   }
 
   /**
-     * Updates the actuator states for a specific device from a 'state' message (`d_as`).
-     * @param deviceName - The name of the device.
-     * @param newStates - The array of booleans from the 'state' topic payload.
-     * @returns An object indicating if the device was new and if its state changed.
-     * @throws An `Error` if the state array length doesn't match the known configuration.
-     */
+   * Updates the actuator states for a specific device from a 'state' message.
+   * @param deviceName - The name of the device.
+   * @param newStates - The array of booleans from the 'state' topic payload.
+   * @returns An object indicating if the device was new, if its state changed, and if its config is missing.
+   * @throws An `Error` if the state array length doesn't match the known configuration.
+   */
   public registerActuatorStates(
     deviceName: string,
     newStates: boolean[]
-  ): { isNew: boolean, changed: boolean } {
+  ): { isNew: boolean; changed: boolean; configIsMissing: boolean } {
     const isNew = !this.registry[deviceName];
     const device = this._ensureDeviceExists(deviceName);
 
-    if (
-      device.lastDetailsTime > 0 &&
-      device.actuatorsIDs.length !== newStates.length
-    ) {
+    const configIsMissing = device.lastDetailsTime === 0;
+
+    if (!configIsMissing && device.actuatorsIDs.length !== newStates.length) {
       throw new Error(
         `State mismatch for ${deviceName}: expected ${device.actuatorsIDs.length} states, received ${newStates.length}.`
       );
@@ -156,78 +171,111 @@ export class DeviceRegistryManager {
       device.actuatorStates = newStates;
     }
     device.lastSeenTime = Date.now();
-    return { isNew, changed: hasChanged };
+    return { isNew, changed: hasChanged, configIsMissing };
   }
 
   /**
-   * Updates the connection status of a device based on Homie $state messages.
+   * Updates a device's status based on Homie `$state` messages. This is the
+   * primary driver for the `connected` property.
    * @param deviceName - The name of the device.
    * @param homieState - The state string from the Homie topic (e.g., "ready", "lost").
-   * @returns An object indicating if the connection state changed.
+   * @returns An object describing the state transition.
    */
   public updateConnectionState(
     deviceName: string,
     homieState: string
-  ): { changed: boolean; connected: boolean } {
+  ): {
+    changed: boolean;
+    connected: boolean;
+    wentOffline: boolean;
+    cameOnline: boolean;
+  } {
+    const existedBefore = !!this.registry[deviceName];
     const device = this._ensureDeviceExists(deviceName);
 
     const wasConnected = device.connected;
     const isReady = homieState === "ready";
 
+    const wentOffline = wasConnected && !isReady;
+    const cameOnline = existedBefore && !wasConnected && isReady;
+
     if (wasConnected === isReady) {
-      return { changed: false, connected: isReady };
+      return {
+        changed: false,
+        connected: isReady,
+        wentOffline: false,
+        cameOnline: false,
+      };
     }
 
     device.connected = isReady;
+    device.lastSeenTime = Date.now();
+
     if (isReady) {
+      // When a device connects, it's considered healthy and not stale.
       device.isHealthy = true;
       device.isStale = false;
+      device.alertSent = false;
     } else {
+      // A disconnected device can be neither healthy nor stale.
       device.isHealthy = false;
+      device.isStale = false;
     }
-    device.lastSeenTime = Date.now();
-    return { changed: true, connected: isReady };
+
+    return { changed: true, connected: isReady, wentOffline, cameOnline };
   }
 
   /**
-   * Records a boot event (`d_b`) from a device, updating its state to connected and healthy.
+   * Records a boot event from a device, marking it as connected and healthy.
    * @param deviceName - The name of the device that booted.
    * @returns An object indicating if the state was changed.
    */
   public recordBoot(deviceName: string): { stateChanged: boolean } {
     const device = this._ensureDeviceExists(deviceName);
+
+    const willChange = !device.connected || !device.isHealthy || device.isStale;
+
     const now = Date.now();
     device.lastSeenTime = now;
     device.lastBootTime = now;
     device.connected = true;
     device.isHealthy = true;
     device.isStale = false;
-    return { stateChanged: true };
+
+    return { stateChanged: willChange };
   }
 
   /**
-   * Records a ping response (`d_p`) from a device.
+   * Records a ping response from a device, marking it as healthy. A ping
+   * response is a strong indicator of LSH-level health.
    * @param deviceName - The name of the device that responded.
-   * @returns An object indicating if the state was changed.
+   * @returns An object describing the state transition.
    */
-  public recordPingResponse(deviceName: string): { stateChanged: boolean } {
+  public recordPingResponse(deviceName: string): {
+    stateChanged: boolean;
+    cameOnline: boolean;
+  } {
+    const existedBefore = !!this.registry[deviceName];
     const device = this._ensureDeviceExists(deviceName);
-    let stateChanged = false;
-    if (device.isStale) {
-      device.isStale = false;
-      stateChanged = true;
-    }
-    // Also mark as healthy if it was previously unhealthy.
-    if (!device.isHealthy) {
-      device.isHealthy = true;
-      stateChanged = true;
-    }
+
+    const wasHealthy = device.isHealthy;
+    const wasStale = device.isStale;
+
+    // A response to a ping means the device's LSH logic is healthy.
+    const cameOnline = existedBefore && (!wasHealthy || wasStale);
+    device.isHealthy = true;
+    device.isStale = false;
+    device.alertSent = false;
     device.lastSeenTime = Date.now();
-    return { stateChanged };
+
+    const stateChanged = !wasHealthy || wasStale;
+    return { stateChanged, cameOnline };
   }
 
   /**
    * Updates the health status of a device based on a watchdog check result.
+   * This cleanly separates the *decision* (made by the Watchdog) from the *action*
+   * of updating the device's state record.
    * @param deviceName - The name of the device to update.
    * @param result - The result from the Watchdog health check.
    * @returns An object indicating if the internal state was changed.
@@ -237,11 +285,11 @@ export class DeviceRegistryManager {
     result: WatchdogResult
   ): { stateChanged: boolean } {
     const device = this.getDevice(deviceName);
-    let stateChanged = false;
-
     if (!device) {
       return { stateChanged: false };
     }
+
+    let stateChanged = false;
 
     switch (result.status) {
       case "ok":
@@ -260,16 +308,15 @@ export class DeviceRegistryManager {
         break;
 
       case "unhealthy":
-        if (device.isHealthy) {
+        // The watchdog has declared the device unhealthy. This overrides previous states.
+        if (device.isHealthy || device.isStale) {
           device.isHealthy = false;
-          stateChanged = true;
-        }
-        if (device.isStale) {
-          device.isStale = false;
+          device.isStale = false; // An unhealthy device is not considered stale.
           stateChanged = true;
         }
         break;
 
+      // "needs_ping" does not change the health status itself.
       case "needs_ping":
         break;
     }
@@ -278,7 +325,26 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Calculates the desired state for a "smart toggle" operation.
+   * Records that an alert for a device's unhealthy state has been sent.
+   * This creates a device entry if one doesn't exist.
+   * @param deviceName - The name of the device for which an alert was sent.
+   * @returns An object indicating if the state was changed.
+   */
+  public recordAlertSent(deviceName: string): { stateChanged: boolean } {
+    const device = this._ensureDeviceExists(deviceName);
+    if (device.alertSent) {
+      return { stateChanged: false };
+    }
+    device.isHealthy = false; // A device with an alert is not healthy
+    device.alertSent = true;
+    return { stateChanged: true };
+  }
+
+  /**
+   * Calculates the desired state for a "smart toggle" operation. The rule is:
+   * if less than 50% of targeted actuators are ON, turn them all ON; otherwise, turn them all OFF.
+   * This prevents a single "on" light from causing the whole group to turn off.
+   * This logic considers both primary LSH actors and secondary external actors.
    * @param actors - An array of primary LSH actors to consider.
    * @param otherActors - An array of secondary external actor names.
    * @returns An object with the calculated state and diagnostic info.
@@ -287,7 +353,6 @@ export class DeviceRegistryManager {
     actors: Actor[],
     otherActors: string[]
   ): { stateToSet: boolean; active: number; total: number; warning?: string } {
-
     const lshCounts = actors.reduce(
       (acc, actor) => {
         const device = this.registry[actor.name];
@@ -299,7 +364,10 @@ export class DeviceRegistryManager {
         } else {
           for (const actuatorId of actor.actuators) {
             const index = device.actuatorIndexes[actuatorId];
-            if (index !== undefined && device.actuatorStates[index] !== undefined) {
+            if (
+              index !== undefined &&
+              device.actuatorStates[index] !== undefined
+            ) {
               acc.total++;
               if (device.actuatorStates[index]) {
                 acc.active++;
@@ -313,31 +381,36 @@ export class DeviceRegistryManager {
     );
 
     const prefix = this.otherDevicesPrefix;
-
     const otherCounts = otherActors.reduce(
       (acc, actorName) => {
-        const state = this.otherActorsContext.get(`${prefix}.${actorName}.state`);
+        const state = this.otherActorsContext.get(
+          `${prefix}.${actorName}.state`
+        );
         if (typeof state === "boolean") {
           acc.total++;
           if (state === true) acc.active++;
         } else {
-          // Collect all warnings instead of just the first one
-          acc.warnings.push(`State for otherActor '${actorName}' not found or not a boolean.`);
+          acc.warnings.push(
+            `State for otherActor '${actorName}' not found or not a boolean.`
+          );
         }
         return acc;
       },
-      { active: 0, total: 0, warnings: [] as string[] } // Add a warnings array to the accumulator
+      { active: 0, total: 0, warnings: [] as string[] }
     );
-    const warning = otherCounts.warnings.join(' ');
+
+    const warning = otherCounts.warnings.join(" ");
     const totalCount = lshCounts.total + otherCounts.total;
     const activeCount = lshCounts.active + otherCounts.active;
 
     if (totalCount === 0) {
       return {
-        stateToSet: false,
+        stateToSet: false, // Default to OFF if no valid actuators are found.
         active: 0,
         total: 0,
-        warning: warning ?? "Smart Toggle: No valid actuators found to calculate state.",
+        warning: warning
+          ? warning
+          : "Smart Toggle: No valid actuators found to calculate state.",
       };
     }
 
