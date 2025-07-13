@@ -1,7 +1,7 @@
 /**
  * @file Manages the state and lifecycle of two-phase commit network click transactions.
  * This class handles the creation, consumption, and expiration of pending clicks,
- * abstracting the timing logic away from the main orchestrator.
+ * abstracting the timing logic away from the main service orchestrator.
  */
 import { ClickTransactionRegistry, Actor } from "./types";
 
@@ -20,10 +20,11 @@ export class ClickTransactionManager {
   }
 
   /**
-   * Starts a new click transaction, storing the associated actors.
+   * Starts a new click transaction, storing the associated actors and a timestamp.
+   * This is the first phase of the two-phase commit protocol.
    * @param transactionKey - A unique key for the transaction (e.g., 'deviceName.B1.lc').
-   * @param actors - The primary actors to be controlled.
-   * @param otherActors - The secondary actors to be controlled.
+   * @param actors - The primary LSH actors to be controlled.
+   * @param otherActors - The secondary external actors to be controlled.
    */
   public startTransaction(
     transactionKey: string,
@@ -38,9 +39,10 @@ export class ClickTransactionManager {
   }
 
   /**
-   * Confirms a transaction and retrieves its details for execution.
-   * If the transaction exists, it is consumed (removed).
-   * @param transactionKey - The unique key for the transaction.
+   * Confirms and consumes a transaction, retrieving its details for execution.
+   * If the transaction exists, it is removed from the pending registry to prevent re-execution.
+   * This is the second phase of the two-phase commit protocol.
+   * @param transactionKey - The unique key for the transaction to consume.
    * @returns The transaction details if it was pending, otherwise `null`.
    */
   public consumeTransaction(
@@ -50,7 +52,7 @@ export class ClickTransactionManager {
     if (!transaction) {
       return null;
     }
-    // The transaction is confirmed, remove it from the pending list.
+    // The transaction is confirmed, so remove it from the pending list.
     delete this.pendingClicks[transactionKey];
     return {
       actors: transaction.actors,
@@ -60,6 +62,8 @@ export class ClickTransactionManager {
 
   /**
    * Periodically cleans up and removes expired click transactions.
+   * This prevents memory leaks from unconfirmed clicks (e.g., if a device
+   * loses power after sending the initial request).
    * @returns The number of transactions that were cleaned up.
    */
   public cleanupExpired(): number {
@@ -75,7 +79,7 @@ export class ClickTransactionManager {
   }
 
   /**
-   * Gets the current number of pending clicks. Useful for testing.
+   * Gets the current number of pending clicks. Useful for testing and monitoring.
    * @returns The number of pending clicks.
    */
   public getPendingCount(): number {
