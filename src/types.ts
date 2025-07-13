@@ -1,7 +1,8 @@
 /**
  * @file Contains all shared type and interface definitions for the LSH Logic project.
  * This file serves as the single source of truth for data structures,
- * ensuring consistency across different modules.
+ * ensuring consistency across different modules. Centralizing type definitions
+ * leverages TypeScript's static analysis to prevent common bugs.
  */
 
 import { NodeDef, NodeMessage } from "node-red";
@@ -11,10 +12,11 @@ import { NodeDef, NodeMessage } from "node-red";
 // --------------------------------------------------------------------------
 
 /**
- * Defines the configuration options for the LSH Logic node, set by the user in the Node-RED editor.
+ * Defines the configuration options for the LSH Logic node, as set by the user
+ * in the Node-RED editor. Each property directly corresponds to a field in the
+ * node's configuration panel.
  */
 export interface LshLogicNodeDef extends NodeDef {
-  // MQTT & Context Prefixes
   /** Base path for Homie device state topics (e.g., 'homie/'). */
   homieBasePath: string;
   /** Base path for LSH device command and state topics (e.g., 'LSH/'). */
@@ -23,12 +25,8 @@ export interface LshLogicNodeDef extends NodeDef {
   serviceTopic: string;
   /** Prefix for context keys when reading external device states. */
   otherDevicesPrefix: string;
-
-  // File Configuration
   /** Path to the main JSON config, relative to the Node-RED user directory. */
-  longClickConfigPath: string;
-
-  // Context Export Settings
+  systemConfigPath: string;
   /** The context (flow or global) to store the full device state registry in, or 'none'. */
   exposeStateContext: "none" | "flow" | "global";
   /** The context key to use for the exposed state registry. */
@@ -41,12 +39,8 @@ export interface LshLogicNodeDef extends NodeDef {
   exposeConfigContext: "none" | "flow" | "global";
   /** The context key to use for the exposed configuration. */
   exposeConfigKey: string;
-
-  // External State Settings
   /** The context (flow or global) from which to read the state of external actors. */
   otherActorsContext: "flow" | "global";
-
-  // Timing Settings
   /** Seconds to wait for a network click confirmation before it expires. */
   clickTimeout: number;
   /** Frequency in seconds for checking and cleaning up expired click transactions. */
@@ -57,21 +51,30 @@ export interface LshLogicNodeDef extends NodeDef {
   interrogateThreshold: number;
   /** Seconds to wait for a ping response before marking a device as 'stale'. */
   pingTimeout: number;
+  /** Seconds to wait for initial Homie states before running active verification. */
+  initialStateTimeout: number;
 }
 
 /**
- * Provides a type-safe mapping of the node's output ports to their corresponding index.
+ * Provides a type-safe mapping of the node's physical output ports to their
+ * corresponding index. Using an enum makes the code self-documenting.
  */
 export enum Output {
+  /** Output for commands to LSH protocol devices. */
   Lsh = 0,
+  /** Output for commands to other (non-LSH) devices. */
   OtherActors = 1,
+  /** Output for system health alerts (e.g., for Telegram). */
   Alerts = 2,
-  Debug = 3,
+  /** Output for dynamic MQTT topic configuration messages. */
+  Configuration = 3,
+  /** Output for forwarding the original, unprocessed input message. */
+  Debug = 4,
 }
 
 /**
  * Defines the structure for the object passed to the `send` method,
- * allowing messages to be targeted to specific outputs.
+ * allowing messages to be targeted to specific outputs by their enum key.
  */
 export type OutputMessages = {
   [key in Output]?: NodeMessage | NodeMessage[];
@@ -80,7 +83,9 @@ export type OutputMessages = {
 /**
  * @internal
  * @description Describes the set of actions for the Node-RED adapter to perform
- * based on the result of a service layer operation.
+ * based on the result of a service layer operation. This is a crucial part of the
+ * architecture, allowing the service to remain pure by describing *what* should
+ * happen (e.g., send messages, log warnings) without actually performing I/O.
  */
 export interface ServiceResult {
   /** Messages to be sent to the node's outputs. */
@@ -109,7 +114,8 @@ export enum ClickType {
 
 /**
  * Defines a type-safe enum for LSH protocol identifiers.
- * Using a string enum provides both the value at runtime and a type at compile time.
+ * Using a string enum prevents typos and makes the code more understandable
+ * compared to using raw strings like "d_dd" throughout the application.
  */
 export enum LshProtocol {
   // Client -> Node (ESP -> Controllino)
@@ -149,38 +155,39 @@ export enum LshProtocol {
 
 // --------------------------------------------------------------------------
 // Client -> Node Payloads (ESP -> Controllino)
+// These interfaces define the expected structure of messages received from devices.
 // --------------------------------------------------------------------------
 
-/** Payload: Data_Device Details (`d_dd`). Sent by the client to report its configuration via the 'conf' topic. */
+/** Payload: Data_Device Details (`d_dd`). Sent by a device to report its static configuration via the 'conf' topic. */
 export interface DeviceDetailsPayload {
   p: LshProtocol.DEVICE_DETAILS;
   /** The display name of the device (e.g., 'c1'). */
   dn: string;
-  /** An array of actuator IDs (e.g., ['ID1', 'ID2']). */
+  /** An array of actuator IDs (e.g., ['A1', 'A2']). */
   ai: string[];
-  /** An array of button IDs (e.g., ['ID1', 'ID2']). */
+  /** An array of button IDs (e.g., ['B1']). */
   bi: string[];
 }
 
-/** Payload: Data_Actuators State (`d_as`). Sent by the client to report the state of its actuators via the 'state' topic. */
+/** Payload: Data_Actuators State (`d_as`). Sent by a device to report the live state of its actuators via the 'state' topic. */
 export interface DeviceActuatorsStatePayload {
   p: LshProtocol.DEVICE_ACTUATORS_STATE;
   /** An array representing the ON/OFF state of each actuator. */
   as: boolean[];
 }
 
-/** Payload: Command_Network Click (`c_nc`). Sent by the client when a button is long-pressed via the 'misc' topic. */
+/** Payload: Command_Network Click (`c_nc`). Sent by a device when a button is long-pressed, via the 'misc' topic. */
 export interface NetworkClickPayload {
   p: LshProtocol.NETWORK_CLICK;
   /** The type of click, e.g., long-click or super-long-click. */
   ct: ClickType;
-  /** The ID of the button that was pressed (e.g., 'ID1'). */
+  /** The ID of the button that was pressed (e.g., 'B1'). */
   bi: string;
   /** The phase of the transaction: `false` for the initial request, `true` for the final confirmation. */
   c: boolean;
 }
 
-/** Payload: Data_Boot (`d_b`). Sent by the client upon startup via the 'misc' topic. */
+/** Payload: Data_Boot (`d_b`). Sent by a device upon startup, via the 'misc' topic. */
 export interface DeviceBootPayload {
   p: LshProtocol.DEVICE_BOOT;
 }
@@ -191,7 +198,9 @@ export interface PingPayload {
 }
 
 /**
- * A discriminated union of all possible payloads received from a client device on the 'misc' topic.
+ * A discriminated union of all possible payloads received on a device's 'misc' topic.
+ * This powerful TypeScript pattern allows the type of the payload to be inferred
+ * based on the value of the 'p' property.
  */
 export type AnyMiscTopicPayload =
   | NetworkClickPayload
@@ -200,35 +209,36 @@ export type AnyMiscTopicPayload =
 
 // --------------------------------------------------------------------------
 // Node -> Client Payloads (Controllino -> ESP)
+// These interfaces define the structure of command messages sent to devices.
 // --------------------------------------------------------------------------
 
-/** Payload: Command_Send Device Details (`c_sdd`). Sent by the node to request the client's configuration. */
+/** Payload: Command_Send Device Details (`c_sdd`). Sent to request a device's configuration. */
 export interface SendDeviceDetailsPayload {
   p: LshProtocol.SEND_DEVICE_DETAILS;
 }
 
-/** Payload: Command_Send Actuators State (`c_sas`). Sent by the node to request the client's actuator states. */
+/** Payload: Command_Send Actuators State (`c_sas`). Sent to request a device's current actuator states. */
 export interface SendActuatorsStatePayload {
   p: LshProtocol.SEND_ACTUATORS_STATE;
 }
 
-/** Payload: Command_Apply Actuators State (`c_aas`). Sent by the node to set all actuator states on a client. */
+/** Payload: Command_Apply All Actuators State (`c_aas`). Sent to set all actuator states on a device. */
 export interface ApplyAllActuatorsStatePayload {
   p: LshProtocol.APPLY_ALL_ACTUATORS_STATE;
   /** An array representing the desired ON/OFF state for each actuator. */
   as: boolean[];
 }
 
-/** Payload: Command_Apply Single Actuator State (`c_asas`). Sent by the node to set a single actuator's state. */
+/** Payload: Command_Apply Single Actuator State (`c_asas`). Sent to set a single actuator's state. */
 export interface ApplySingleActuatorStatePayload {
   p: LshProtocol.APPLY_SINGLE_ACTUATOR_STATE;
-  /** The ID of the target actuator (e.g., 'C100'). */
+  /** The ID of the target actuator (e.g., 'A1'). */
   ai: string;
   /** The desired state for the actuator. */
   as: boolean;
 }
 
-/** Payload: Data_Network Click Ack (`d_nca`). Sent by the node to acknowledge a network click request. */
+/** Payload: Data_Network Click Ack (`d_nca`). Sent to acknowledge a valid network click request. */
 export interface NetworkClickAckPayload {
   p: LshProtocol.NETWORK_CLICK_ACK;
   /** The type of click being acknowledged. */
@@ -236,12 +246,12 @@ export interface NetworkClickAckPayload {
   /** The ID of the button whose click is being acknowledged. */
   bi: string;
 }
-/** Payload: Command_General Failover (`c_gf`). Sent by the node to indicate a system-level failure. */
+/** Payload: Command_General Failover (`c_gf`). Sent to indicate a system-level failure (e.g., config not loaded). */
 export interface GeneralFailoverPayload {
   p: LshProtocol.GENERAL_FAILOVER;
 }
 
-/** Payload: Command_Failover (`c_f`). Sent by the node to indicate a click-specific action has failed. */
+/** Payload: Command_Failover (`c_f`). Sent to indicate a click-specific action has failed (e.g., target offline). */
 export interface FailoverPayload {
   p: LshProtocol.FAILOVER;
   /** The type of click that failed. */
@@ -250,18 +260,19 @@ export interface FailoverPayload {
   bi: string;
 }
 
-/** Payload: Reboot (`rbt`). Sent by the node to command the client to reboot. */
+/** Payload: Reboot (`rbt`). Sent to command the device to reboot. */
 export interface RebootPayload {
   p: LshProtocol.REBOOT;
 }
 
-/** Payload: Reset (`rst`). Sent by the node to command the client to perform a factory reset. */
+/** Payload: Reset (`rst`). Sent to command the device to perform a factory reset. */
 export interface ResetPayload {
   p: LshProtocol.RESET;
 }
 
 // --------------------------------------------------------------------------
-// Configuration File Structure (`longClickConfig.json`)
+// Configuration File Structure (`system-config.json`)
+// These interfaces define the structure of the main configuration file.
 // --------------------------------------------------------------------------
 
 /** Configuration for a target actor within a button action. */
@@ -280,24 +291,25 @@ export interface ButtonAction {
   id: string;
   /** A list of primary LSH actors to control. */
   actors: Actor[];
-  /** A list of secondary, external actors to control. */
+  /** A list of secondary, external actors to control (e.g., Tasmota, Zigbee devices). */
   otherActors: string[];
 }
 
-/** A single device's entry from the long-click configuration file. */
-export interface DeviceConfigEntry {
+/** A single device's entry from the system configuration file. */
+export interface DeviceEntry {
   name: string;
-  longClickButtons: ButtonAction[];
-  superLongClickButtons: ButtonAction[];
+  longClickButtons?: ButtonAction[];
+  superLongClickButtons?: ButtonAction[];
 }
 
-/** The root structure of the `longClickConfig.json` file. */
-export interface LongClickConfig {
-  devices: DeviceConfigEntry[];
+/** The root structure of the `system-config.json` file. */
+export interface SystemConfig {
+  devices: DeviceEntry[];
 }
 
 // --------------------------------------------------------------------------
 // Internal State Management
+// These interfaces define the structure of the in-memory state.
 // --------------------------------------------------------------------------
 
 /** A map for O(1) lookup of an actuator's index by its ID. */
@@ -312,13 +324,13 @@ export interface ActuatorIndexMap {
 export interface DeviceState {
   /** The unique name of the device, used as the primary key. */
   name: string;
-  /** The Homie connection state (`true` if $state is 'ready'). */
+  /** The Homie connection state (`true` if $state is 'ready'). Managed by Homie messages. */
   connected: boolean;
-  /** Overall health status (`false` if unresponsive or never seen). */
+  /** Overall LSH-level health status (`false` if unresponsive or never seen). Managed by ping/pong and other LSH messages. */
   isHealthy: boolean;
-  /** `true` if a ping was sent but not yet answered within the timeout. */
+  /** `true` if a ping was sent but not yet answered within the timeout. A temporary warning state. */
   isStale: boolean;
-  /** Timestamp of the last message received from the device. */
+  /** Timestamp of the last message of any kind received from the device. */
   lastSeenTime: number;
   /** Timestamp of the last boot event ('d_b') from the device. */
   lastBootTime: number;
@@ -328,13 +340,15 @@ export interface DeviceState {
   actuatorsIDs: string[];
   /** An array of button IDs, if any (e.g., ['B1', 'B2']). */
   buttonsIDs: string[];
-  /** An ordered array of the current states for each actuator. */
+  /** An ordered array of the current boolean states for each actuator. */
   actuatorStates: boolean[];
-  /** A map for O(1) lookup of an actuator's index by its ID. */
+  /** A map for O(1) lookup of an actuator's index by its ID. Pre-computed for performance. */
   actuatorIndexes: ActuatorIndexMap;
+  /** `true` if an alert for this device being offline has already been sent, to prevent alert spam. */
+  alertSent: boolean;
 }
 
-/** In-memory database of all known devices and their current states. */
+/** The in-memory "database" of all known devices and their current states. */
 export interface DeviceRegistry {
   [deviceName: string]: DeviceState;
 }
@@ -345,7 +359,7 @@ export interface PendingClickTransaction {
   actors: Actor[];
   /** The secondary actors (external devices) targeted by the click. */
   otherActors: string[];
-  /** The timestamp when the transaction was started. */
+  /** The timestamp when the transaction was started, used for expiration. */
   timestamp: number;
 }
 
