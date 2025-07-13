@@ -1,7 +1,8 @@
 /**
  * @file This is the main entry point for the LSH Logic node in Node-RED.
  * It defines the `LshLogicNode` class, which acts as a thin adapter layer,
- * connecting the Node-RED runtime to the core `LshLogicService`.
+ * connecting the Node-RED runtime to the core `LshLogicService`. This class
+ * is responsible for all interactions with the Node-RED environment.
  */
 import { Node, NodeMessage, NodeAPI } from "node-red";
 import * as fs from "fs/promises";
@@ -11,12 +12,12 @@ import { ValidateFunction } from "ajv";
 
 import { LshLogicService } from "./LshLogicService";
 import { createAppValidators } from "./schemas";
-import { LshLogicNodeDef, LongClickConfig, Output, OutputMessages, ServiceResult } from "./types";
+import { LshLogicNodeDef, SystemConfig, Output, OutputMessages, ServiceResult } from "./types";
 import { sleep } from "./utils";
 
 /**
  * The adapter class that bridges the Node-RED environment and the LshLogicService.
- * It handles all I/O with the Node-RED runtime (receiving messages, sending messages,
+ * It handles all I/O with the Node-RED runtime (receiving/sending messages,
  * logging, setting status) and delegates all business logic to the service.
  */
 export class LshLogicNode {
@@ -29,6 +30,9 @@ export class LshLogicNode {
   private watcher: chokidar.FSWatcher | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private watchdogInterval: NodeJS.Timeout | null = null;
+  private initialVerificationTimer: NodeJS.Timeout | null = null;
+  private finalVerificationTimer: NodeJS.Timeout | null = null;
+  public isWarmingUp: boolean = false;
 
   /**
    * Creates an instance of the LshLogicNode.
@@ -41,13 +45,13 @@ export class LshLogicNode {
     this.config = config;
     this.RED = RED;
 
-    // Create all validators in one go using the factory function
     const validators = createAppValidators();
 
-    // Instantiate the core logic service, passing it dependencies
+    // Instantiate the core logic service, injecting its dependencies.
     this.service = new LshLogicService(
       {
         lshBasePath: this.config.lshBasePath,
+        homieBasePath: this.config.homieBasePath,
         serviceTopic: this.config.serviceTopic,
         otherDevicesPrefix: this.config.otherDevicesPrefix,
         clickTimeout: this.config.clickTimeout,
@@ -55,46 +59,26 @@ export class LshLogicNode {
         pingTimeout: this.config.pingTimeout,
       },
       this.getContext(this.config.otherActorsContext),
-      validators // Pass the whole validators object
+      validators
     );
 
-    this.initialize(validators.validateLongClickConfig);
-
-    // Start a timer to periodically clean up expired click transactions.
-    const cleanupIntervalMs = this.config.clickCleanupInterval * 1000;
-    this.cleanupInterval = setInterval(() => {
-      const log = this.service.cleanupPendingClicks();
-      if (log) this.node.log(log);
-    }, cleanupIntervalMs);
-
-    // Start the watchdog timer to monitor device health.
-    const watchdogIntervalMs = this.config.watchdogInterval * 1000;
-    this.watchdogInterval = setInterval(async () => {
-      const result = this.service.runWatchdogCheck();
-      await this.processServiceResult(result);
-    }, watchdogIntervalMs);
-
-    // Register handlers for Node-RED events
-    this.node.on("input", (msg, _send, done) => {
-      this.handleInput(msg, done);
-    });
-
-    this.node.on("close", (done: () => void) => {
-      this.handleClose(done);
-    });
+    void this.initialize(validators.validateSystemConfig);
+    this.setupTimers();
+    this.registerNodeEventHandlers();
   }
 
-  /**
-   * Initializes the node, loads the configuration file, and sets up the file watcher.
-   * @param validateLongClickConfig The pre-compiled validation function for the main config.
-   */
-  private async initialize(validateLongClickConfig: ValidateFunction): Promise<void> {
+  private async initialize(validateSystemConfig: ValidateFunction): Promise<void> {
     this.node.status({ fill: "blue", shape: "dot", text: "Initializing..." });
     try {
       const userDir = this.RED.settings.userDir || process.cwd();
-      const configPath = path.resolve(userDir, this.config.longClickConfigPath);
-      await this.loadLongClickConfig(configPath, validateLongClickConfig);
-      this.setupFileWatcher(configPath, validateLongClickConfig);
+      const configPath = path.resolve(userDir, this.config.systemConfigPath);
+
+      await this.loadSystemConfig(configPath, validateSystemConfig);
+      this.setupFileWatcher(configPath, validateSystemConfig);
+
+      const startupResult = this.service.getStartupCommands();
+      await this.processServiceResult(startupResult);
+
       this.node.status({ fill: "green", shape: "dot", text: "Ready" });
       this.node.log("Node initialized and configuration loaded.");
     } catch (error) {
@@ -105,10 +89,52 @@ export class LshLogicNode {
   }
 
   /**
+   * Sets up all periodic timers for the node (watchdog and cleanup).
+   */
+  private setupTimers(): void {
+    const cleanupIntervalMs = this.config.clickCleanupInterval * 1000;
+    this.cleanupInterval = setInterval(() => {
+      const log = this.service.cleanupPendingClicks();
+      if (log) this.node.log(log);
+    }, cleanupIntervalMs);
+
+    const watchdogIntervalMs = this.config.watchdogInterval * 1000;
+    this.watchdogInterval = setInterval(() => {
+      // Create an async IIFE and void it to satisfy the no-misused-promises rule for setInterval.
+      void (async () => {
+        const result = this.service.runWatchdogCheck();
+        await this.processServiceResult(result);
+      })();
+    }, watchdogIntervalMs);
+  }
+
+  /**
+   * Registers handlers for Node-RED lifecycle events ('input' and 'close').
+   */
+  private registerNodeEventHandlers(): void {
+    this.node.on("input", (msg, _send, done) => {
+      void this.handleInput(msg, done);
+    });
+
+    this.node.on("close", (done: () => void) => {
+      // Event handlers should not return promises. Use void on an async IIFE to prevent this.
+      void (async () => {
+        try {
+          await this.handleClose();
+        } catch (err) {
+          this.node.error(`Error during node close: ${String(err)}`);
+        } finally {
+          done();
+        }
+      })();
+    });
+  }
+
+  /**
    * The main handler for all incoming messages from Node-RED.
    * It delegates processing to the service and handles the result.
    * @param msg The incoming Node-RED message.
-   * @param done The callback to signal completion.
+   * @param done The callback to signal completion to the Node-RED runtime.
    */
   private async handleInput(msg: NodeMessage, done: (err?: Error) => void): Promise<void> {
     try {
@@ -121,16 +147,17 @@ export class LshLogicNode {
       return;
     }
 
+    // Forward the original message to the debug output.
     this.send({ [Output.Debug]: msg });
     done();
   }
 
   /**
-   * Takes a result from the service layer and performs the required Node-RED actions.
-   * This includes logging, sending messages, and handling special cases like staggered sends.
+   * Takes a result from the service layer and performs the required Node-RED actions
+   * (logging, sending messages, updating state).
    * @param result The ServiceResult object from a service method call.
    */
-  private async processServiceResult(result: ServiceResult): Promise<void> {
+  public async processServiceResult(result: ServiceResult): Promise<void> {
     result.logs.forEach((log) => this.node.log(log));
     result.warnings.forEach((warn) => this.node.warn(warn));
     result.errors.forEach((err) => this.node.error(err));
@@ -139,46 +166,66 @@ export class LshLogicNode {
       this.updateExposedState();
     }
 
+    if (this.isWarmingUp && result.messages[Output.Alerts]) {
+      try {
+        // Added a type check to make this code safer and fix a linting error.
+        const alertPayload = (result.messages[Output.Alerts] as NodeMessage).payload;
+        if (typeof alertPayload === 'string' && alertPayload.startsWith("✅")) {
+          this.node.log("Suppressing 'device recovered' alert during warm-up period.");
+          delete result.messages[Output.Alerts];
+        }
+      } catch (_) {
+      }
+    }
+
     if (Object.keys(result.messages).length > 0) {
       const lshMessages = result.messages[Output.Lsh];
-      // Check if the LSH output contains an array, which indicates staggered messages
+      // A message array indicates a request for staggered sending.
+      // The service layer requests this for bulk actions like pings to avoid overwhelming the network.
       if (Array.isArray(lshMessages) && lshMessages.length > 1) {
         this.node.log(`Sending ${lshMessages.length} messages in a staggered sequence.`);
-        // Handle staggered sending here by iterating and sleeping
         for (const msg of lshMessages) {
           this.send({ [Output.Lsh]: msg });
+          // Sleep for a short, random interval to avoid a "thundering herd."
           await sleep(Math.random() * 200 + 50);
         }
-        // Remove the staggered messages from the result object so they aren't sent again by the final send call
+        // The staggered messages have been sent, so remove them from the result object.
         delete result.messages[Output.Lsh];
       }
 
-      // Send any remaining messages (or all if no staggering was needed)
+      // Send any remaining messages (or all if no staggering was needed).
       this.send(result.messages);
     }
   }
 
   /**
-   * Loads, parses, and validates the long-click configuration JSON file.
+   * Loads, parses, and validates the `system-config.json` file.
+   * This now also triggers the initial state verification sequence.
    * @param filePath The absolute path to the configuration file.
-   * @param validateLongClickConfig The pre-compiled validation function for the main config.
+   * @param validateFn The pre-compiled validation function for the config.
    */
-  private async loadLongClickConfig(filePath: string, validateLongClickConfig: ValidateFunction): Promise<void> {
+  private async loadSystemConfig(filePath: string, validateFn: ValidateFunction): Promise<void> {
+    // Clear any pending verification timers from a previous load.
+    if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
+    if (this.finalVerificationTimer) clearTimeout(this.finalVerificationTimer);
+    this.initialVerificationTimer = null;
+    this.finalVerificationTimer = null;
+
     try {
       this.node.log(`Loading config from: ${filePath}`);
       const fileContent = await fs.readFile(filePath, "utf-8");
       const parsedConfig = JSON.parse(fileContent);
 
-      if (!validateLongClickConfig(parsedConfig)) {
-        const errorText = validateLongClickConfig.errors?.map(e => e.message).join(', ') || 'unknown error';
-        throw new Error(`Invalid longClickConfig.json: ${errorText}`);
+      if (!validateFn(parsedConfig)) {
+        const errorText = validateFn.errors?.map(e => e.message).join(', ') || 'unknown validation error';
+        throw new Error(`Invalid system-config.json: ${errorText}`);
       }
-
-      const logMessage = this.service.updateLongClickConfig(parsedConfig as LongClickConfig);
+      const logMessage = this.service.updateSystemConfig(parsedConfig as SystemConfig);
       this.node.log(logMessage);
 
+      this.scheduleInitialVerification();
     } catch (error) {
-      this.service.clearLongClickConfig();
+      this.service.clearSystemConfig();
       throw error;
     } finally {
       this.updateExposedState();
@@ -188,37 +235,103 @@ export class LshLogicNode {
   }
 
   /**
-   * Sets up a file watcher to hot-reload the configuration.
-   * @param filePath The absolute path to the configuration file to watch.
-   * @param validateLongClickConfig The pre-compiled validation function for the main config.
+   * Schedules the two-stage active verification process and manages the warm-up state.
+   * This smart startup sequence prevents false "device offline" alerts on deployment.
+   * 1. A "warm-up" period is started, during which "device recovered" alerts are suppressed.
+   * 2. After an initial delay (`initialStateTimeout`), it pings any devices that have not yet reported their Homie 'ready' state.
+   * 3. After another delay (`pingTimeout`), it runs a final check on the pinged devices and raises alerts for any that are still unresponsive.
    */
-  private setupFileWatcher(filePath: string, validateLongClickConfig: ValidateFunction): void {
+  private scheduleInitialVerification(): void {
+    const initialStateTimeoutMs = this.config.initialStateTimeout * 1000;
+    const pingTimeoutMs = this.config.pingTimeout * 1000;
+    const totalWarmupTimeMs = initialStateTimeoutMs + pingTimeoutMs;
+
+    this.node.log(`Starting warm-up period for ${totalWarmupTimeMs / 1000}s.`);
+    this.isWarmingUp = true;
+
+    setTimeout(() => {
+      this.isWarmingUp = false;
+      this.node.log("Warm-up period finished. Node is now fully operational.");
+    }, totalWarmupTimeMs);
+
+    // This pattern avoids a 'no-misused-promises' error for async setTimeout callbacks.
+    const initialVerification = async () => {
+      this.node.log("Running initial device state verification: pinging silent devices...");
+      const result = this.service.verifyInitialDeviceStates();
+      await this.processServiceResult(result);
+
+      const pingedDevices = result.messages[Output.Lsh]
+        ? (result.messages[Output.Lsh] as NodeMessage[])
+          .filter((msg): msg is NodeMessage & { topic: string } => typeof msg.topic === 'string')
+          .map(msg => msg.topic.split('/')[1])
+        : [];
+
+      if (pingedDevices.length > 0) {
+        this.node.log(`Scheduling final check for ${pingedDevices.length} pinged devices in ${this.config.pingTimeout}s.`);
+
+        const finalVerification = async () => {
+          this.node.log("Running final check on pinged devices...");
+          const finalResult = this.service.runFinalVerification(pingedDevices);
+          await this.processServiceResult(finalResult);
+          this.finalVerificationTimer = null;
+        };
+
+        this.finalVerificationTimer = setTimeout(() => {
+          void finalVerification();
+        }, pingTimeoutMs);
+      }
+      this.initialVerificationTimer = null;
+    };
+    this.initialVerificationTimer = setTimeout(() => {
+      void initialVerification();
+    }, initialStateTimeoutMs);
+  }
+
+
+  /**
+   * Sets up a file watcher to enable hot-reloading of the configuration.
+   * @param filePath The absolute path to the configuration file to watch.
+   * @param validateFn The pre-compiled validation function.
+   */
+  private setupFileWatcher(filePath: string, validateFn: ValidateFunction): void {
     if (this.watcher) this.watcher.close();
     this.watcher = chokidar.watch(filePath);
     this.watcher.on("change", (path) => {
-      this.node.log(`Configuration file changed: ${path}. Reloading...`);
-      this.node.status({ fill: "yellow", shape: "dot", text: "Reloading config..." });
-      this.loadLongClickConfig(path, validateLongClickConfig)
-        .then(() => {
-          this.node.log(`Configuration successfully reloaded from ${path}.`);
-          this.node.status({ fill: "green", shape: "dot", text: "Ready" });
-        })
-        .catch((err) => {
-          this.node.error(`Error reloading ${path}: ${err.message}`);
-          this.node.status({ fill: "red", shape: "ring", text: `Config reload failed` });
-        });
+      // Use fire-and-forget on an async function to satisfy no-misused-promises.
+      void this.handleConfigFileChange(path, validateFn);
     });
   }
 
   /**
-   * Sends messages to one or more node outputs.
+   * Handles the logic for reloading the configuration file.
+   * This is a separate public method to be easily testable.
+   * @param path The path to the file that changed.
+   * @param validateFn The validation function to use.
+   */
+  public async handleConfigFileChange(path: string, validateFn: ValidateFunction): Promise<void> {
+    this.node.log(`Configuration file changed: ${path}. Reloading...`);
+    this.node.status({ fill: "yellow", shape: "dot", text: "Reloading config..." });
+    try {
+      await this.loadSystemConfig(path, validateFn);
+      this.node.log(`Configuration successfully reloaded from ${path}.`);
+      this.node.status({ fill: "green", shape: "dot", text: "Ready" });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.node.error(`Error reloading ${path}: ${message}`);
+      this.node.status({ fill: "red", shape: "ring", text: `Config reload failed` });
+    }
+  }
+
+  /**
+   * Sends messages to the appropriate node outputs.
    * @param messages An object mapping an Output enum member to the message(s) to be sent.
    */
   private send(messages: OutputMessages): void {
-    const numOutputs = Object.keys(Output).length / 2;
+    // The number of outputs is now correctly determined from the enum's size.
+    const numOutputs = Object.keys(Output).filter(k => !isNaN(Number(k))).length;
     const outputArray: (NodeMessage | NodeMessage[] | null)[] = new Array(numOutputs).fill(null);
 
-    // Directly map the messages to their output index
+    // Directly map the messages to their corresponding output index.
     for (const key in messages) {
       const outputIndex = Number(key);
       if (!isNaN(outputIndex) && outputIndex >= 0 && outputIndex < numOutputs) {
@@ -226,29 +339,32 @@ export class LshLogicNode {
       }
     }
 
-    // Send only if at least one message is not null
+    // Send only if at least one message is not null to avoid empty sends.
     if (outputArray.some(msg => msg !== null)) {
       this.node.send(outputArray);
     }
   }
 
   /**
-   * Cleans up resources when the node is closed or re-deployed.
+   * Cleans up all resources.
    */
-  private _cleanupResources(): void {
+  public async _cleanupResources(): Promise<void> {
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
-    if (this.watcher) (this.watcher as any)?.close();
+    if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
+    if (this.finalVerificationTimer) clearTimeout(this.finalVerificationTimer);
+    if (this.watcher) {
+      await this.watcher.close();
+    }
+    this.node.log("Cleaned up timers and file watcher.");
   }
 
-  public testCleanup(): void {
-    this._cleanupResources();
-  }
-
-  private async handleClose(done: () => void): Promise<void> {
+  /**
+     * The handler for the Node-RED 'close' event.
+     */
+  private async handleClose(): Promise<void> {
     this.node.log("Closing LSH Logic node.");
-    this._cleanupResources();
-    done();
+    await this._cleanupResources();
   }
 
   // --- Context Management Methods ---
@@ -270,9 +386,10 @@ export class LshLogicNode {
   private updateExposedConfig(): void {
     const { exposeConfigContext, exposeConfigKey } = this.config;
     if (exposeConfigContext === "none" || !exposeConfigKey) return;
+    const deviceNames = this.service.getConfiguredDeviceNames(); // Get the names
     const exposedData = {
       nodeConfig: this.config,
-      longClickConfig: this.service.getConfiguredDeviceNames() ? { devices: this.service.getConfiguredDeviceNames() } : null,
+      systemConfig: deviceNames ? { devices: deviceNames.map(name => ({ name })) } : null,
       lastUpdated: Date.now(),
     };
     this.getContext(exposeConfigContext).set(exposeConfigKey, exposedData);
@@ -280,33 +397,62 @@ export class LshLogicNode {
 
   private updateExportedTopics(): void {
     const { exportTopics, exportTopicsKey, lshBasePath, homieBasePath } = this.config;
-    if (exportTopics === "none" || !exportTopicsKey) return;
 
-    const deviceNames = this.service.getConfiguredDeviceNames();
-    if (!deviceNames) {
-      this.node.warn("Cannot generate topics: longClickConfig is not loaded.");
-      return;
-    }
-
+    const deviceNames = this.service.getConfiguredDeviceNames() || [];
     const lshTopics = deviceNames.map((name) => `${lshBasePath}${name}/+`);
     const homieTopics = deviceNames.map((name) => `${homieBasePath}${name}/$state`);
-    const topicsToExport = {
-      lsh: lshTopics,
-      homie: homieTopics,
-      all: [...lshTopics, ...homieTopics],
-      lastUpdated: Date.now(),
-    };
-    this.getContext(exportTopics).set(exportTopicsKey, topicsToExport);
-    this.node.log(`Exported ${topicsToExport.all.length} MQTT topics to context key '${exportTopicsKey}'.`);
+    const newTopics = [...lshTopics, ...homieTopics];
+
+    // Create the message to unsubscribe from ALL current topics.
+    // The `mqtt-in` node accepts `topic: true` for this action.
+    // We disable the lint rule because this structure is specific to the `mqtt-in` node
+    // and intentionally not a standard Node-RED message type.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const unsubscribeAllMessage: NodeMessage = {
+      action: "unsubscribe",
+      topic: true,
+      payload: {}
+    } as any;
+
+    const outputMessages: NodeMessage[] = [unsubscribeAllMessage];
+    this.node.log("Generated 'unsubscribe all' message.");
+
+    // If there are new topics to subscribe to, create the subscribe message.
+    if (newTopics.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      const subscribeMessage: NodeMessage = {
+        action: "subscribe",
+        topic: newTopics,
+        payload: {}
+      } as any;
+      outputMessages.push(subscribeMessage);
+      this.node.log(`Generated 'subscribe' message for ${newTopics.length} topic(s).`);
+    }
+
+    // Send the sequence of messages on the Configuration output.
+    this.send({ [Output.Configuration]: outputMessages });
+
+    // Update the context variable for passive inspection.
+    if (exportTopics !== "none" && exportTopicsKey) {
+      const topicsToExport = {
+        lsh: lshTopics,
+        homie: homieTopics,
+        all: newTopics,
+        lastUpdated: Date.now(),
+      };
+      this.getContext(exportTopics).set(exportTopicsKey, topicsToExport);
+      this.node.log(`Exported ${newTopics.length} MQTT topics to context key '${exportTopicsKey}'.`);
+    }
   }
 }
 
 /**
- * The main module definition for Node-RED.
+ * The main module definition for Node-RED, which registers the node.
  */
 const nodeRedModule = function (RED: NodeAPI) {
   function LshLogicNodeWrapper(this: Node, config: LshLogicNodeDef) {
     RED.nodes.createNode(this, config);
+    // Instantiate our class to manage the node's lifecycle.
     new LshLogicNode(this, config, RED);
   }
   RED.nodes.registerType("lsh-logic", LshLogicNodeWrapper);
