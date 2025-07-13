@@ -1,7 +1,8 @@
 /**
  * @file Contains all JSON schema definitions for AJV validation.
- * This ensures that incoming MQTT payloads and configuration files
- * have the expected structure before being processed by the node.
+ * This file centralizes schema definitions to ensure that incoming MQTT payloads
+ * and configuration files have the expected structure before being processed.
+ * This approach prevents runtime errors from malformed data.
  */
 
 import Ajv, { ValidateFunction } from "ajv";
@@ -10,7 +11,7 @@ import {
   ClickType,
   DeviceActuatorsStatePayload,
   DeviceDetailsPayload,
-  LongClickConfig
+  SystemConfig
 } from "./types";
 
 
@@ -27,7 +28,7 @@ const buttonActionSchema = {
     },
     actors: {
       type: "array",
-      description: "A list of primary actors controlled by this button.",
+      description: "A list of primary LSH actors controlled by this button.",
       items: {
         type: "object",
         properties: {
@@ -52,7 +53,7 @@ const buttonActionSchema = {
     otherActors: {
       type: "array",
       description:
-        "A list of secondary actor names (typically managed outside this system).",
+        "A list of secondary actor names (e.g., Tasmota, Zigbee devices).",
       items: { type: "string" },
     },
   },
@@ -60,13 +61,13 @@ const buttonActionSchema = {
 };
 
 /**
- * Schema for the main `longClickConfig.json` file.
+ * Schema for the main `system-config.json` file.
  * It defines the overall structure, containing a list of all devices
- * and their associated button configurations.
+ * and their associated button configurations (which are optional).
  */
-export const longClickConfigSchema = {
-  $id: "LongClickConfig",
-  description: "Schema for the main longClickConfig.json file.",
+export const systemConfigSchema = {
+  $id: "SystemConfig",
+  description: "Schema for the main system-config.json file.",
   type: "object",
   properties: {
     devices: {
@@ -89,12 +90,13 @@ export const longClickConfigSchema = {
             items: buttonActionSchema,
           },
         },
-        required: ["name", "longClickButtons", "superLongClickButtons"],
+        required: ["name"],
       },
     },
   },
   required: ["devices"],
 };
+
 
 /**
  * Schema for the payload of an LSH device's 'conf' topic (`d_dd`).
@@ -181,8 +183,9 @@ const pingPayloadSchema = {
 
 /**
  * A "super-schema" that validates any valid 'misc' topic payload.
- * It uses a discriminator to efficiently select the correct sub-schema based on the 'p' property.
- * This allows validating any incoming 'misc' message with a single `validate` call.
+ * It uses a discriminator to efficiently select the correct sub-schema based
+ * on the 'p' property. This allows validating any incoming 'misc' message
+ * with a single `validate` call.
  */
 export const anyMiscTopicPayloadSchema = {
   $id: "AnyMiscTopicPayload",
@@ -199,7 +202,7 @@ export const anyMiscTopicPayloadSchema = {
 
 /** An interface describing the collection of all validation functions for the app. */
 export interface AppValidators {
-  validateLongClickConfig: ValidateFunction<LongClickConfig>;
+  validateSystemConfig: ValidateFunction<SystemConfig>;
   validateDeviceDetails: ValidateFunction<DeviceDetailsPayload>;
   validateActuatorStates: ValidateFunction<DeviceActuatorsStatePayload>;
   validateAnyMiscTopic: ValidateFunction<AnyMiscTopicPayload>;
@@ -207,14 +210,15 @@ export interface AppValidators {
 
 /**
  * Factory function to create and configure an AJV instance and compile all schemas.
- * This centralizes AJV setup and ensures consistency.
+ * This centralizes AJV setup and ensures consistency. Pre-compiling the schemas
+ * into validation functions is a major performance optimization.
  * @returns An object containing all compiled validation functions for the application.
  */
 export function createAppValidators(): AppValidators {
   const ajv = new Ajv({ discriminator: true, allErrors: true });
 
   return {
-    validateLongClickConfig: ajv.compile<LongClickConfig>(longClickConfigSchema),
+    validateSystemConfig: ajv.compile<SystemConfig>(systemConfigSchema),
     validateDeviceDetails: ajv.compile<DeviceDetailsPayload>(deviceDetailsPayloadSchema),
     validateActuatorStates: ajv.compile<DeviceActuatorsStatePayload>(deviceActuatorsStatePayloadSchema),
     validateAnyMiscTopic: ajv.compile<AnyMiscTopicPayload>(anyMiscTopicPayloadSchema),
