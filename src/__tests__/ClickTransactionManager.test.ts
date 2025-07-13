@@ -1,5 +1,6 @@
 /**
  * @file Unit tests for the ClickTransactionManager class.
+ * These tests verify the core logic of the two-phase commit protocol for network clicks.
  */
 import { ClickTransactionManager } from "../ClickTransactionManager";
 import { Actor } from "../types";
@@ -12,12 +13,12 @@ describe("ClickTransactionManager", () => {
 
   beforeEach(() => {
     manager = new ClickTransactionManager(CLICK_TIMEOUT_SEC);
-    // Use fake timers to control time-based logic like timeouts
+    // Use fake timers to control time-based logic like timeouts without waiting.
     jest.useFakeTimers();
   });
 
   afterEach(() => {
-    // Restore real timers after each test
+    // Restore real timers after each test to avoid side effects.
     jest.useRealTimers();
   });
 
@@ -38,7 +39,8 @@ describe("ClickTransactionManager", () => {
     expect(consumed).not.toBeNull();
     expect(consumed?.actors).toEqual(actors);
     expect(consumed?.otherActors).toEqual(["other1"]);
-    expect(manager.getPendingCount()).toBe(0); // Should be removed after consumption
+    // The transaction should be removed from the pending list after consumption.
+    expect(manager.getPendingCount()).toBe(0);
   });
 
   it("should return null when consuming a non-existent transaction", () => {
@@ -49,7 +51,7 @@ describe("ClickTransactionManager", () => {
   it("should not clean up a recent transaction", () => {
     manager.startTransaction("key1", [], []);
 
-    // Advance time by less than the timeout
+    // Advance time by less than the timeout period.
     jest.advanceTimersByTime((CLICK_TIMEOUT_SEC - 1) * 1000);
 
     const cleanedCount = manager.cleanupExpired();
@@ -60,7 +62,7 @@ describe("ClickTransactionManager", () => {
   it("should clean up an expired transaction", () => {
     manager.startTransaction("key1", [], []);
 
-    // Advance time by more than the timeout
+    // Advance time by more than the timeout period.
     jest.advanceTimersByTime((CLICK_TIMEOUT_SEC + 1) * 1000);
 
     const cleanedCount = manager.cleanupExpired();
