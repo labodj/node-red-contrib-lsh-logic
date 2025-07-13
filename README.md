@@ -14,12 +14,12 @@ This node replaces a complex flow of function nodes with a single, robust, and s
 
 ## Key Features
 
-- **Dynamic Configuration**: Loads and validates a `longClickConfig.json` file from your Node-RED user directory and reloads it automatically on changes.
+- **Declarative System Configuration**: Define all your system's devices in a single, clear `system-config.json` file. The node automatically reloads it on changes.
 - **Centralized State Management**: Maintains an in-memory registry of all device states, health, and configurations, which can be exported to the context for easy debugging and dashboarding.
 - **Advanced Click Logic**: Implements "long-click" (smart toggle) and "super-long-click" (turn all off) actions across multiple devices.
 - **Reliable Network Protocol**: Uses a two-phase commit protocol for network-based button clicks to ensure commands are not lost, even on unreliable networks.
-- **Intelligent Watchdog**: Actively monitors device health with a multi-stage ping mechanism to prevent false positives and generates human-readable alerts for unresponsive devices.
-- **Dynamic Topic Generation**: Can export the required MQTT topic lists to a context variable, enabling auto-configuration of `MQTT-in` nodes.
+- **Intelligent Watchdog**: Actively monitors device health with a multi-stage ping mechanism. It uses a smart initial verification process to quickly and accurately detect offline devices at startup, preventing false alarms.
+- **Dynamic MQTT Topic Management**: Emits messages on a dedicated output to dynamically configure an `mqtt-in` node, automatically managing topic subscriptions and unsubscriptions as your configuration changes.
 
 ## Installation
 
@@ -37,7 +37,7 @@ This node is designed to be the central brain of your LSH-style home automation 
 
 ### Inputs
 
-The node subscribes to two main types of MQTT topics. The base paths for these topics are configured in the node's settings.
+The node automatically determines which topics to listen to based on your `system-config.json`. You simply connect its "Configuration" output to an `mqtt-in` node to complete the setup. It primarily processes:
 
 1. **LSH Protocol Topics**:
     - `<lshBasePath>/<device-name>/conf`: For receiving a device's static configuration (actuator IDs, button IDs).
@@ -49,94 +49,87 @@ The node subscribes to two main types of MQTT topics. The base paths for these t
 
 ### Outputs
 
-The node has four distinct outputs for clear and organized flows:
+The node has five distinct outputs for clear and organized flows:
 
-1. **LSH Commands**: Publishes messages to control your LSH devices. This includes actuator state commands (`c_aas`, `c_asas`), network click acknowledgements (`d_nca`), failover signals (`c_f`, `c_gf`), and watchdog pings.
-2. **Other Actor Commands**: Publishes generic commands for non-LSH devices (e.g., Tasmota, Zigbee2MQTT). The output message contains the desired state (`true`/`false`) and a list of actor names, allowing you to route them accordingly.
-3. **Alerts**: Outputs formatted, human-readable alert messages (e.g., for Telegram or other notification services) when a device becomes unresponsive.
-4. **Debug**: Forwards the original, unprocessed input message for logging and debugging purposes.
+1. **LSH Commands**: Publishes messages to control your LSH devices (`c_aas`, `d_nca`, `c_f`, pings, etc.).
+2. **Other Actor Commands**: Publishes generic commands for non-LSH devices (e.g., Tasmota, Zigbee2MQTT). The payload contains the target actor names and the desired state.
+3. **Alerts**: Outputs formatted, human-readable alert messages (e.g., for Telegram) when a device's health status changes (goes offline or comes back online).
+4. **Configuration**: Emits specially crafted messages to dynamically configure an `mqtt-in` node's subscriptions. This is the key to a fully automated setup.
+5. **Debug**: Forwards the original, unprocessed input message for logging and debugging purposes.
 
 ## Configuration
 
 ### Node Settings
 
-The node's behavior is customized through the editor panel, which includes:
+The node's behavior is customized through the editor panel:
 
 - **MQTT Path Settings**: Define the base paths for your Homie and LSH topics.
-- **Configuration File**: Path to your `longClickConfig.json` file, relative to the Node-RED user directory.
-- **Context Interaction**: Configure how the node's internal state, configuration, and MQTT topic lists are exposed to the flow/global context. This is extremely useful for creating dashboards or dynamically configuring other nodes.
-- **Timing Settings**: Fine-tune all system timeouts and intervals, such as the watchdog frequency and network click confirmation window, to adapt to your network conditions.
+- **System Config**: Path to your `system-config.json` file, relative to the Node-RED user directory.
+- **Context Interaction**: Configure how the node's internal state is exposed to the flow/global context.
+- **Timing Settings**: Fine-tune all system timeouts and intervals, including the `Initial Check Delay` for the smart startup detection.
 
-### `longClickConfig.json`
+### `system-config.json`
 
-This is the core configuration file that defines your devices and their button actions. It should be placed in your Node-RED user directory (e.g., in a `configs/` subfolder). The file is automatically reloaded and re-validated if you make any changes.
+This is the core configuration file that defines all devices in your system and, optionally, their button actions. It should be placed in your Node-RED user directory (e.g., in a `configs/` subfolder).
 
 ```json
 {
   "devices": [
     {
-      // The unique MQTT name of the device sending the clicks.
       "name": "living-room-switch",
       "longClickButtons": [
         {
-          // The button ID reported by the device (e.g., "B1", "B2").
           "id": "B1",
-          // A list of LSH devices to control.
           "actors": [
-            {
-              // The target device's name.
-              "name": "living-room-ceiling-light",
-              // If true, control all actuators on this target.
-              "allActuators": true,
-              "actuators": []
-            }
+            { "name": "living-room-light", "allActuators": true, "actuators": [] }
           ],
-          // A list of non-LSH devices (e.g., Tasmota, Zigbee) to control via Output 2.
-          "otherActors": [
-            "tasmota_living_room_lamp"
-          ]
-        }
-      ],
-      "superLongClickButtons": [
-        {
-          "id": "B1",
-          // A super-long-click on this button will turn off all these devices.
-          "actors": [
-            { "name": "living-room-ceiling-light", "allActuators": true, "actuators": [] },
-            { "name": "kitchen-light", "allActuators": true, "actuators": [] }
-          ],
-          "otherActors": [
-            "tasmota_living_room_lamp",
-            "zigbee_kitchen_strip"
-          ]
+          "otherActors": ["tasmota_shelf_lamp"]
         }
       ]
     },
     {
-      // This device is only an actor (it gets controlled), it doesn't send clicks.
-      // It must be listed here for the system to be aware of it for health checks.
-      "name": "living-room-ceiling-light",
-      "longClickButtons": [],
-      "superLongClickButtons": []
+      "name": "living-room-light"
     },
     {
-      "name": "kitchen-light",
-      "longClickButtons": [],
-      "superLongClickButtons": []
+      "name": "kitchen-light"
     }
   ]
 }
 ```
 
-- **`devices`**: An array of all devices in your system.
-- **`name`**: The unique MQTT name of the device.
-- **`longClickButtons` / `superLongClickButtons`**: Arrays defining actions for different click types.
-  - `id`: The button identifier (e.g., "B1", "B2") sent by the device.
-  - `actors`: An array of LSH devices to control.
-    - `name`: The target device's name.
-    - `allActuators`: If `true`, control all actuators on the device.
-    - `actuators`: If `allActuators` is `false`, provide a list of specific actuator IDs to control.
-    - `otherActors`: An array of strings representing non-LSH devices to control via Output 2.
+- **`devices`**: An array of all devices in your system. Every device you want the node to manage **must** be listed here.
+- **`name`**: The unique MQTT name of the device. This is the only required property for a device entry.
+- **`longClickButtons` / `superLongClickButtons` (Optional)**: Arrays defining actions for different click types. If a device is only an actor (like a light) and doesn't send clicks, these properties can be omitted entirely.
+- **`actors`**: A list of LSH devices to control.
+- **`otherActors`**: A list of non-LSH device names to control.
+
+## Best Practices
+
+### Dynamic MQTT Subscriptions
+
+The most powerful way to use this node is to let it manage your MQTT subscriptions automatically. This creates a "zero-maintenance" flow that adapts to your configuration.
+
+**Connect the 4th output ("Configuration") directly to an `mqtt-in` node.**
+
+![Dynamic MQTT Flow](images/dynamic_mqtt_listener.png) <!-- It's recommended to add a screenshot for this -->
+
+When you deploy or when `system-config.json` changes, the `lsh-logic` node will:
+
+1. Send a message to the `mqtt-in` node to **unsubscribe from all topics**.
+2. Send a second message to **subscribe to the new, correct list of topics**.
+
+This ensures your `mqtt-in` node is always listening to exactly the right topics without any manual changes.
+
+### Configuration and State
+
+- **File Location**: Keep your `system-config.json` in a sub-folder of your Node-RED user directory (e.g., `~/.node-red/configs/`) to ensure it's included in your backups.
+- **Context for Debugging**: Use the "Context Interaction" settings to expose the internal state to a flow or global variable. This is invaluable for creating dashboards or debugging issues without needing to add `debug` nodes everywhere.
+
+## Troubleshooting
+
+- **Node Status: "Config Error"**: This status appears if the `system-config.json` file cannot be read or is invalid. Check the path in the node's settings and use a JSON linter to validate the file's syntax.
+- **Device Unresponsive Alerts**: If you receive an alert, check the device's power and network connection. Ensure the `name` in `system-config.json` exactly matches the device name used in its MQTT topics.
+- **Clicks Not Working**: If a long-click fails, a warning will appear in the Node-RED debug sidebar with the reason (e.g., "Target actor(s) are offline"). Check the actor's status in the exposed context.
 
 ## Contributing
 
@@ -148,8 +141,8 @@ To set up the development environment:
 
 1. Clone the repository.
 2. Run `npm install` to install all dependencies.
-3. Run `npm run dev:build` to build the project.
-4. Run `npm run test:watch` to run tests in watch mode as you make changes.
+3. Run `npm run build` to build the project.
+4. Run `npm test` to run the test suite.
 
 ## License
 
