@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "1.0.5",
+  "version": "1.0.25",
   "description": "A single, powerful node to manage advanced automation logic for an LSH (Labo Smart Home) style system.",
   "main": "dist/lsh-logic.js",
   "scripts": {
@@ -10,7 +10,8 @@
     "build": "npm run clean && tsc -p tsconfig.prod.json && npm run copy-assets",
     "watch": "tsc -w",
     "prepublishOnly": "npm run build",
-    "test": "jest",
+    "test": "jest --no-cache --detectOpenHandles",
+    "test:cov": "jest --coverage --no-cache --detectOpenHandles",
     "test:watch": "jest --watch"
   },
   "files": [
@@ -61,7 +62,6 @@
     "copyfiles": "^2.4.1",
     "jest": "^30.0.4",
     "rimraf": "^6.0.1",
-    "ts-jest": "^29.4.0",
-    "typescript": "^5.8.3"
+    "ts-jest": "^29.4.0"
   }
 }
