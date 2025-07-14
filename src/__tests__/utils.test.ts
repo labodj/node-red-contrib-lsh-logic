@@ -49,32 +49,41 @@ describe("formatAlertMessage", () => {
     expect(result).toContain('"p": "c_nc"');
   });
 
-  describe("areSameArray", () => {
-    it("should return true for two identical arrays of primitives", () => {
-      expect(areSameArray([1, 2, 3], [1, 2, 3])).toBe(true);
-      expect(areSameArray(["a", "b"], ["a", "b"])).toBe(true);
-      expect(areSameArray([true, false], [true, false])).toBe(true);
-    });
-
-    it("should return false for arrays with different lengths", () => {
-      expect(areSameArray([1, 2, 3], [1, 2])).toBe(false);
-    });
-
-    it("should return false for arrays with different values", () => {
-      expect(areSameArray([1, 2, 3], [1, 5, 3])).toBe(false);
-    });
-
-    it("should return false for arrays with same values in different order", () => {
-      expect(areSameArray([1, 2, 3], [3, 2, 1])).toBe(false);
-    });
-
-    it("should return true for two empty arrays", () => {
-      expect(areSameArray([], [])).toBe(true);
-    });
-
-    it("should return false for arrays of different types", () => {
-      // @ts-expect-error - Intentionally testing different types to ensure strict equality.
-      expect(areSameArray([1, 2, 3], ["1", "2", "3"])).toBe(false);
-    });
+  it("should include non-object details as a string", () => {
+    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
+    const details = "A simple string detail";
+    const result = formatAlertMessage(unhealthyDevices, "unhealthy", details);
+    expect(result).toContain("*Details:*");
+    expect(result).toContain(details);
   });
 });
+
+describe("areSameArray", () => {
+  it("should return true for two identical arrays of primitives", () => {
+    expect(areSameArray([1, 2, 3], [1, 2, 3])).toBe(true);
+    expect(areSameArray(["a", "b"], ["a", "b"])).toBe(true);
+    expect(areSameArray([true, false], [true, false])).toBe(true);
+  });
+
+  it("should return false for arrays with different lengths", () => {
+    expect(areSameArray([1, 2, 3], [1, 2])).toBe(false);
+  });
+
+  it("should return false for arrays with different values", () => {
+    expect(areSameArray([1, 2, 3], [1, 5, 3])).toBe(false);
+  });
+
+  it("should return false for arrays with same values in different order", () => {
+    expect(areSameArray([1, 2, 3], [3, 2, 1])).toBe(false);
+  });
+
+  it("should return true for two empty arrays", () => {
+    expect(areSameArray([], [])).toBe(true);
+  });
+
+  it("should return false for arrays of different types", () => {
+    // @ts-expect-error - Intentionally testing different types to ensure strict equality.
+    expect(areSameArray([1, 2, 3], ["1", "2", "3"])).toBe(false);
+  });
+});
+
