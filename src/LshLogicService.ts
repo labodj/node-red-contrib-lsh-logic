@@ -254,9 +254,8 @@ export class LshLogicService {
     }
     let logMessage = "System configuration successfully loaded and validated.";
     if (prunedDevices.length > 0) {
-      logMessage += ` Pruned stale devices from registry: ${prunedDevices.join(
-        ", "
-      )}.`;
+      const sortedPrunedDevices = prunedDevices.toSorted();
+      logMessage += ` Pruned stale devices from registry: ${sortedPrunedDevices.join(", ")}.`;
     }
     return logMessage;
   }
@@ -463,10 +462,7 @@ export class LshLogicService {
           const result = this.createEmptyResult();
           const homieState = String(payload);
           
-          // Get the connection state *before* the update.
-          const wasConnected = this.deviceManager.getDevice(deviceName)?.connected;
-
-          const { stateChanged } =
+          const { stateChanged, wasConnected, isConnected } =
             this.deviceManager.updateConnectionState(deviceName, homieState);
 
           if (!stateChanged) {
@@ -478,8 +474,6 @@ export class LshLogicService {
             `Device '${deviceName}' connection state changed to '${homieState}'.`
           );
 
-          // The service now determines the meaning of the state change.
-          const isConnected = this.deviceManager.getDevice(deviceName)!.connected;
           const wentOffline = wasConnected && !isConnected;
           const cameOnline = !wasConnected && isConnected;
 
@@ -508,9 +502,6 @@ export class LshLogicService {
               result.messages,
               this._prepareAlerts(alertInfo, 'healthy').messages
             );
-          }
-
-          if (cameOnline) {
             result.logs.push(
               `Device '${deviceName}' is online. Requesting full state (details and actuators).`
             );
