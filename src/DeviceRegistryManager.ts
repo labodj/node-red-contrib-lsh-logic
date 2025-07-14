@@ -181,24 +181,25 @@ export class DeviceRegistryManager {
    * This method is now only responsible for updating the internal state.
    * @param deviceName - The name of the device.
    * @param homieState - The state string from the Homie topic (e.g., "ready", "lost").
-   * @returns An object indicating if the internal state was changed.
+   * @returns An object indicating if the internal state was changed, and the old/new connection states.
    */
   public updateConnectionState(
     deviceName: string,
     homieState: string
-  ): { stateChanged: boolean } {
+  ): { stateChanged: boolean; wasConnected: boolean; isConnected: boolean } {
     const device = this._ensureDeviceExists(deviceName);
     const wasConnected = device.connected;
-    const isReady = homieState === 'ready';
+    const isConnected = homieState === 'ready';
 
-    if (wasConnected === isReady) {
-      return { stateChanged: false };
+    if (wasConnected === isConnected) {
+      // If the state is the same, return that nothing changed.
+      return { stateChanged: false, wasConnected, isConnected };
     }
 
-    device.connected = isReady;
+    device.connected = isConnected;
     device.lastSeenTime = Date.now();
 
-    if (isReady) {
+    if (isConnected) {
       device.isHealthy = true;
       device.isStale = false;
       device.alertSent = false;
@@ -206,8 +207,7 @@ export class DeviceRegistryManager {
       device.isHealthy = false;
       device.isStale = false;
     }
-
-    return { stateChanged: true };
+    return { stateChanged: true, wasConnected, isConnected };
   }
 
   /**

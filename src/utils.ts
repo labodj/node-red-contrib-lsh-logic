@@ -16,36 +16,40 @@ export const sleep = (ms: number): Promise<void> =>
  * Formats a list of devices into a human-readable alert message.
  * @param devices - An array of objects, each with a device name and a reason.
  * @param status - The type of alert to generate, which determines the message header.
- * @param details - Optional object with additional details to include in the message.
+ * @param details - Additional details to include in the message.
  * @returns A formatted string suitable for notifications (e.g., Telegram with Markdown).
  */
 export const formatAlertMessage = (
   devices: { name: string; reason: string }[],
-  status: "unhealthy" | "healthy",
-  // Changed to 'object' to be more permissive for different payload types, fixing a build error.
-  details?: object
+  status: 'unhealthy' | 'healthy',
+  details?: unknown
 ): string => {
-  let message = "";
-  if (status === "unhealthy") {
-    message = "‼️ *System Health Alert* ‼️\n\n";
-    message += "The following event occurred:\n";
+  let message = '';
+  if (status === 'unhealthy') {
+    message = '‼️ *System Health Alert* ‼️\n\n';
+    message += 'The following event occurred:\n';
   } else {
-    message = "✅ *System Health Recovery* ✅\n\n";
-    message += "The following devices are now back online:\n";
+    message = '✅ *System Health Recovery* ✅\n\n';
+    message += 'The following devices are now back online:\n';
   }
 
   devices.forEach((device) => {
     message += `  - *${device.name}*: ${device.reason}\n`;
   });
 
-  if (details) {
-    message += "\n*Details:*\n";
-    message += JSON.stringify(details, null, 2);
-    message += "\n";
+  // Check if details exist and are of a type we can stringify meaningfully.
+  if (details !== undefined && details !== null) {
+    message += '\n*Details:*\n';
+    if (typeof details === 'object') {
+      message += JSON.stringify(details, null, 2);
+    } else {
+      message += String(details);
+    }
+    message += '\n';
   }
 
-  if (status === "unhealthy") {
-    message += "\nPlease check power and network connections where applicable.";
+  if (status === 'unhealthy') {
+    message += '\nPlease check power and network connections where applicable.';
   }
   return message;
 };
