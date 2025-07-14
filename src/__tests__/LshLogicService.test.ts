@@ -77,7 +77,7 @@ describe("LshLogicService", () => {
     service = new LshLogicService(
       mockServiceConfig,
       mockContextReader,
-      mockValidators
+      mockValidators,
     );
   });
 
@@ -86,7 +86,7 @@ describe("LshLogicService", () => {
     it("should ignore messages if config is not loaded", () => {
       const result = service.processMessage("any/topic", {});
       expect(result.warnings).toContain(
-        "Configuration not loaded, ignoring message."
+        "Configuration not loaded, ignoring message.",
       );
     });
 
@@ -94,7 +94,7 @@ describe("LshLogicService", () => {
       service.updateSystemConfig(mockSystemConfig);
       const result = service.processMessage("unhandled/topic/1", {});
       expect(result.logs).toContain(
-        "Message on unhandled topic: unhandled/topic/1"
+        "Message on unhandled topic: unhandled/topic/1",
       );
     });
 
@@ -127,7 +127,7 @@ describe("LshLogicService", () => {
 
       expect(result.warnings).toHaveLength(1);
       expect(result.warnings[0]).toContain(
-        "Invalid 'conf' payload from device-1: invalid format"
+        "Invalid 'conf' payload from device-1: invalid format",
       );
     });
 
@@ -148,14 +148,14 @@ describe("LshLogicService", () => {
       service.updateSystemConfig(mockSystemConfig);
       const result = service.getStartupCommands();
       expect(result.logs).toContain(
-        "Node started. Passively waiting for device Homie state announcements."
+        "Node started. Passively waiting for device Homie state announcements.",
       );
     });
 
     it("should return warning if getting startup commands without config", () => {
       const result = service.getStartupCommands();
       expect(result.warnings).toContain(
-        "Cannot generate startup commands: config not loaded."
+        "Cannot generate startup commands: config not loaded.",
       );
     });
     it("should not report a change if actuator state is identical", () => {
@@ -171,7 +171,7 @@ describe("LshLogicService", () => {
 
       expect(result.stateChanged).toBe(false);
       expect(result.logs.some((log) => log.includes("Updated state"))).toBe(
-        false
+        false,
       );
     });
     it("should return a warning when verifying initial states without a loaded config", () => {
@@ -183,7 +183,7 @@ describe("LshLogicService", () => {
       // Expect a specific warning message
       expect(result.warnings).toHaveLength(1);
       expect(result.warnings[0]).toBe(
-        "Cannot run initial state verification: config not loaded."
+        "Cannot run initial state verification: config not loaded.",
       );
 
       // Expect no messages to be generated
@@ -196,19 +196,31 @@ describe("LshLogicService", () => {
     it("should not log or mark state as changed if device details are identical", () => {
       service.updateSystemConfig(mockSystemConfig);
       const deviceName = "actor1";
-      const detailsPayload = { p: "d_dd" as const, dn: deviceName, ai: ["A1"], bi: ["B1"] };
+      const detailsPayload = {
+        p: "d_dd" as const,
+        dn: deviceName,
+        ai: ["A1"],
+        bi: ["B1"],
+      };
 
       // First call: The state changes, a log is expected.
-      let result = service.processMessage(`LSH/${deviceName}/conf`, detailsPayload);
+      let result = service.processMessage(
+        `LSH/${deviceName}/conf`,
+        detailsPayload,
+      );
       expect(result.stateChanged).toBe(true);
-      expect(result.logs).toContain(`Stored/Updated details for device '${deviceName}'.`);
+      expect(result.logs).toContain(
+        `Stored/Updated details for device '${deviceName}'.`,
+      );
 
       // Second call with identical payload: No change should be reported.
       result = service.processMessage(`LSH/${deviceName}/conf`, detailsPayload);
 
       // Assert: This time, no change should be detected, and the `if` block is skipped.
       expect(result.stateChanged).toBe(false);
-      expect(result.logs).not.toContain(`Stored/Updated details for device '${deviceName}'.`);
+      expect(result.logs).not.toContain(
+        `Stored/Updated details for device '${deviceName}'.`,
+      );
     });
   });
 
@@ -227,14 +239,14 @@ describe("LshLogicService", () => {
       expect(result.stateChanged).toBe(true);
       expect(result.messages[Output.Lsh]).toBeInstanceOf(Array);
       const payloads = (result.messages[Output.Lsh] as any[]).map(
-        (m) => m.payload.p
+        (m) => m.payload.p,
       );
       expect(payloads).toContain(LshProtocol.SEND_DEVICE_DETAILS);
       expect(payloads).toContain(LshProtocol.SEND_ACTUATORS_STATE);
 
       expect(result.messages[Output.Alerts]).toBeDefined();
       expect((result.messages[Output.Alerts] as any).payload).toContain(
-        "back online"
+        "back online",
       );
     });
 
@@ -243,7 +255,7 @@ describe("LshLogicService", () => {
       const result = service.processMessage("homie/actor1/$state", "lost");
       expect(result.messages[Output.Alerts]).toBeDefined();
       expect((result.messages[Output.Alerts] as any).payload).toContain(
-        "Alert"
+        "Alert",
       );
     });
 
@@ -262,14 +274,16 @@ describe("LshLogicService", () => {
       const payload: PingPayload = { p: LshProtocol.PING };
       const result = service.processMessage("LSH/actor1/misc", payload);
 
+      // The log message now comes from the service layer directly
       expect(
         result.logs.some((log) =>
-          log.includes("is healthy again after ping response")
-        )
+          log.includes("is healthy again after ping response"),
+        ),
       ).toBe(true);
       expect(result.stateChanged).toBe(true);
       expect(result.messages[Output.Alerts]).toBeDefined();
     });
+
     it("should prepare a 'healthy' alert without details", () => {
       // Set the device to an unhealthy state
       const device = (service as any).deviceManager.getDevice("actor1");
@@ -317,7 +331,9 @@ describe("LshLogicService", () => {
       expect(result.stateChanged).toBe(false);
       expect(Object.keys(result.messages)).toHaveLength(0);
       // Verify there are no logs, as nothing relevant happened.
-      const hasConnectionLog = result.logs.some(log => log.includes("connection state changed"));
+      const hasConnectionLog = result.logs.some((log) =>
+        log.includes("connection state changed"),
+      );
       expect(hasConnectionLog).toBe(false);
     });
 
@@ -327,12 +343,17 @@ describe("LshLogicService", () => {
       // We do NOT call setDeviceOnline, as that would also send the details
 
       // Act: Send a state message from an unknown device
-      const result = service.processMessage("LSH/actor1/state", { p: "d_as", as: [true] });
+      const result = service.processMessage("LSH/actor1/state", {
+        p: "d_as",
+        as: [true],
+      });
 
       // Assert
       // 1. A warning must be generated
       expect(result.warnings).toHaveLength(1);
-      expect(result.warnings[0]).toContain("sent state but its configuration is unknown");
+      expect(result.warnings[0]).toContain(
+        "sent state but its configuration is unknown",
+      );
 
       // 2. A message to request device details must be sent
       expect(result.messages[Output.Lsh]).toBeDefined();
@@ -359,7 +380,7 @@ describe("LshLogicService", () => {
       // Assert: The specific log message for a new device should be present.
       // This proves that `isNew` was true and the target line was executed.
       expect(result.logs).toContain(
-        `Received state for a new device: ${newDeviceName}. Creating partial entry.`
+        `Received state for a new device: ${newDeviceName}. Creating partial entry.`,
       );
 
       // Post-assertion: The device should now exist in the registry.
@@ -372,7 +393,10 @@ describe("LshLogicService", () => {
       const bootPayload: DeviceBootPayload = { p: LshProtocol.DEVICE_BOOT };
 
       // First boot message: The device becomes healthy, state changes.
-      let result = service.processMessage(`LSH/${deviceName}/misc`, bootPayload);
+      let result = service.processMessage(
+        `LSH/${deviceName}/misc`,
+        bootPayload,
+      );
       expect(result.stateChanged).toBe(true);
 
       // Second, redundant boot message immediately after.
@@ -392,35 +416,56 @@ describe("LshLogicService", () => {
     it("should warn on invalid 'conf' payload", () => {
       // Setup: Mock the validator to fail
       mockValidators.validateDeviceDetails.mockReturnValue(false);
-      mockValidators.validateDeviceDetails.errors = [{ message: "is the wrong type" }] as any;
+      mockValidators.validateDeviceDetails.errors = [
+        { message: "is the wrong type" },
+      ] as any;
 
-      const result = service.processMessage("LSH/device-1/conf", { p: "d_dd", dn: 123 }); // Invalid payload
+      const result = service.processMessage("LSH/device-1/conf", {
+        p: "d_dd",
+        dn: 123,
+      }); // Invalid payload
 
       expect(result.warnings).toHaveLength(1);
-      expect(result.warnings[0]).toContain("Invalid 'conf' payload from device-1: is the wrong type");
+      expect(result.warnings[0]).toContain(
+        "Invalid 'conf' payload from device-1: is the wrong type",
+      );
       expect(Object.keys(result.messages)).toHaveLength(0); // No message should be sent
     });
 
     it("should warn on invalid 'state' payload", () => {
       // Setup: Mock the validator to fail
       mockValidators.validateActuatorStates.mockReturnValue(false);
-      mockValidators.validateActuatorStates.errors = [{ message: "array is too short" }] as any;
+      mockValidators.validateActuatorStates.errors = [
+        { message: "array is too short" },
+      ] as any;
 
-      const result = service.processMessage("LSH/device-1/state", { p: "d_as", as: "not-an-array" });
+      const result = service.processMessage("LSH/device-1/state", {
+        p: "d_as",
+        as: "not-an-array",
+      });
 
       expect(result.warnings).toHaveLength(1);
-      expect(result.warnings[0]).toContain("Invalid 'state' payload from device-1: array is too short");
+      expect(result.warnings[0]).toContain(
+        "Invalid 'state' payload from device-1: array is too short",
+      );
     });
 
     it("should warn on invalid 'misc' payload", () => {
       // Setup: Mock the validator to fail
       mockValidators.validateAnyMiscTopic.mockReturnValue(false);
-      mockValidators.validateAnyMiscTopic.errors = [{ message: "unknown protocol" }] as any;
+      mockValidators.validateAnyMiscTopic.errors = [
+        { message: "unknown protocol" },
+      ] as any;
 
-      const result = service.processMessage("LSH/device-1/misc", { p: "d_xx", data: "some-data" });
+      const result = service.processMessage("LSH/device-1/misc", {
+        p: "d_xx",
+        data: "some-data",
+      });
 
       expect(result.warnings).toHaveLength(1);
-      expect(result.warnings[0]).toContain("Invalid 'misc' payload from device-1: unknown protocol");
+      expect(result.warnings[0]).toContain(
+        "Invalid 'misc' payload from device-1: unknown protocol",
+      );
     });
 
     it("should provide a default error message if validator.errors is null", () => {
@@ -438,10 +483,15 @@ describe("LshLogicService", () => {
       mockValidators.validateActuatorStates.mockReturnValue(false);
       mockValidators.validateActuatorStates.errors = null; // Simulate the edge case
 
-      const result = service.processMessage("LSH/device-1/state", { p: "d_as", as: "invalid" });
+      const result = service.processMessage("LSH/device-1/state", {
+        p: "d_as",
+        as: "invalid",
+      });
 
       // Assert that the fallback error message is used.
-      expect(result.warnings[0]).toContain("Invalid 'state' payload from device-1: unknown validation error");
+      expect(result.warnings[0]).toContain(
+        "Invalid 'state' payload from device-1: unknown validation error",
+      );
     });
 
     it("should handle non-Error exceptions from registerActuatorStates gracefully", () => {
@@ -470,7 +520,9 @@ describe("LshLogicService", () => {
       expect(result.stateChanged).toBe(false);
 
       // Restore the original method to not affect other tests.
-      ((service as any).deviceManager.registerActuatorStates as jest.Mock).mockRestore();
+      (
+        (service as any).deviceManager.registerActuatorStates as jest.Mock
+      ).mockRestore();
     });
     it("should provide a default error for 'misc' payload if validator.errors is null", () => {
       // Setup: Mock the validator to fail but without providing an error array
@@ -478,10 +530,14 @@ describe("LshLogicService", () => {
       mockValidators.validateAnyMiscTopic.errors = null; // Simulate the edge case
 
       // Act: Process a message with an invalid 'misc' payload.
-      const result = service.processMessage("LSH/device-1/misc", { p: "invalid_protocol" });
+      const result = service.processMessage("LSH/device-1/misc", {
+        p: "invalid_protocol",
+      });
 
       // Assert that the fallback error message is used.
-      expect(result.warnings[0]).toContain("Invalid 'misc' payload from device-1: unknown validation error");
+      expect(result.warnings[0]).toContain(
+        "Invalid 'misc' payload from device-1: unknown validation error",
+      );
     });
   });
 
@@ -511,7 +567,7 @@ describe("LshLogicService", () => {
       // The current implementation does not produce an error log here, but rather a generic warning at the start of `processMessage`.
       // Let's check for that warning instead.
       expect(result.warnings).toContain(
-        "Configuration not loaded, ignoring message."
+        "Configuration not loaded, ignoring message.",
       );
     });
 
@@ -525,11 +581,11 @@ describe("LshLogicService", () => {
       });
 
       expect((result.messages[Output.Lsh] as any).payload.p).toBe(
-        LshProtocol.FAILOVER
+        LshProtocol.FAILOVER,
       );
       expect(result.messages[Output.Alerts]).toBeDefined();
       expect((result.messages[Output.Alerts] as any).payload).toContain(
-        "Target actor(s) are offline"
+        "Target actor(s) are offline",
       );
     });
 
@@ -541,7 +597,7 @@ describe("LshLogicService", () => {
         c: false,
       });
       expect((result.messages[Output.Lsh] as any).payload.p).toBe(
-        LshProtocol.FAILOVER
+        LshProtocol.FAILOVER,
       );
       expect(result.messages[Output.Alerts]).toBeDefined();
     });
@@ -555,7 +611,7 @@ describe("LshLogicService", () => {
         c: false,
       });
       expect((reqResult.messages[Output.Lsh] as any).payload.p).toBe(
-        LshProtocol.NETWORK_CLICK_ACK
+        LshProtocol.NETWORK_CLICK_ACK,
       );
 
       // Phase 2: Confirmation
@@ -566,7 +622,7 @@ describe("LshLogicService", () => {
         c: true,
       });
       expect(
-        confirmResult.logs.some((log) => log.includes("Click confirmed"))
+        confirmResult.logs.some((log) => log.includes("Click confirmed")),
       ).toBe(true);
       const command = (confirmResult.messages[Output.Lsh] as any[])[0];
       expect(command.payload.p).toBe(LshProtocol.APPLY_ALL_ACTUATORS_STATE);
@@ -582,7 +638,7 @@ describe("LshLogicService", () => {
         c: true,
       });
       expect(result.warnings).toContain(
-        "Received confirmation for an expired or unknown click: device-sender.B1.lc."
+        "Received confirmation for an expired or unknown click: device-sender.B1.lc.",
       );
     });
 
@@ -611,7 +667,7 @@ describe("LshLogicService", () => {
 
       expect(result.messages[Output.Lsh]).toBeUndefined();
       expect(result.warnings).toContain(
-        "Configuration not loaded, ignoring message."
+        "Configuration not loaded, ignoring message.",
       );
     });
     it("should generate a specific c_asas command for a single targeted actuator", () => {
@@ -661,7 +717,7 @@ describe("LshLogicService", () => {
         c: false,
       });
       expect((reqResult.messages[Output.Lsh] as any).payload.p).toBe(
-        LshProtocol.NETWORK_CLICK_ACK
+        LshProtocol.NETWORK_CLICK_ACK,
       );
 
       // Phase 2: Confirmation
@@ -676,7 +732,7 @@ describe("LshLogicService", () => {
       expect(confirmResult.messages[Output.Lsh]).toBeDefined();
       const lshCommand = (confirmResult.messages[Output.Lsh] as any[])[0];
       expect(lshCommand.payload.p).toBe(
-        LshProtocol.APPLY_SINGLE_ACTUATOR_STATE
+        LshProtocol.APPLY_SINGLE_ACTUATOR_STATE,
       ); // <<< CORRECT ASSERTION
       expect(lshCommand.payload.ai).toBe("A2"); // Verify the actuator ID is correct
       expect(lshCommand.payload.as).toBe(true); // Verify the state is correct
@@ -703,12 +759,12 @@ describe("LshLogicService", () => {
 
       // It must respond with a click-specific failover
       expect((result.messages[Output.Lsh] as any).payload.p).toBe(
-        LshProtocol.FAILOVER
+        LshProtocol.FAILOVER,
       );
       // And it must generate an alert
       expect(result.messages[Output.Alerts]).toBeDefined();
       expect((result.messages[Output.Alerts] as any).payload).toContain(
-        "No action configured for this button"
+        "No action configured for this button",
       );
     });
 
@@ -737,7 +793,7 @@ describe("LshLogicService", () => {
       // It must log the unexpected error
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]).toContain(
-        "Unexpected error during click processing"
+        "Unexpected error during click processing",
       );
       expect(result.errors[0]).toContain(unexpectedError.message);
     });
@@ -754,7 +810,7 @@ describe("LshLogicService", () => {
         .mockImplementation(() => {
           throw new ClickValidationError(
             "Config suddenly unloaded.",
-            "general" // <-- The key part
+            "general", // <-- The key part
           );
         });
 
@@ -775,7 +831,9 @@ describe("LshLogicService", () => {
 
       // Assert: Verify that the correct error was logged.
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]).toContain("System failure on click. Sending General Failover (c_gf).");
+      expect(result.errors[0]).toContain(
+        "System failure on click. Sending General Failover (c_gf).",
+      );
 
       // Cleanup: Restore the original method to avoid affecting other tests.
       validationSpy.mockRestore();
@@ -809,7 +867,9 @@ describe("LshLogicService", () => {
 
       // The unexpected error should be logged
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]).toContain("Unexpected error during click processing");
+      expect(result.errors[0]).toContain(
+        "Unexpected error during click processing",
+      );
       expect(result.errors[0]).toContain(unexpectedError.toString()); // Verify the original error is part of the log
     });
 
@@ -837,13 +897,25 @@ describe("LshLogicService", () => {
 
       // Execute the full transaction
       // Phase 1: Request
-      service.processMessage("LSH/device-sender/misc", { p: "c_nc", bi: "B1", ct: ClickType.Long, c: false });
+      service.processMessage("LSH/device-sender/misc", {
+        p: "c_nc",
+        bi: "B1",
+        ct: ClickType.Long,
+        c: false,
+      });
       // Phase 2: Confirmation
-      const result = service.processMessage("LSH/device-sender/misc", { p: "c_nc", bi: "B1", ct: ClickType.Long, c: true });
+      const result = service.processMessage("LSH/device-sender/misc", {
+        p: "c_nc",
+        bi: "B1",
+        ct: ClickType.Long,
+        c: true,
+      });
 
       // Assert #1: The warning generated by getSmartToggleState must be present
       expect(result.warnings).toHaveLength(1);
-      expect(result.warnings[0]).toContain("State for otherActor 'non-existent-actor' not found");
+      expect(result.warnings[0]).toContain(
+        "State for otherActor 'non-existent-actor' not found",
+      );
 
       // Assert #2: The message for OtherActors must be correct
       expect(result.messages[Output.OtherActors]).toBeDefined();
@@ -852,7 +924,9 @@ describe("LshLogicService", () => {
       // The toggle logic, finding no actuators, will decide to turn off (false)
       expect(otherActorMsg.stateToSet).toBe(false);
       // Verify the specific payload
-      expect(otherActorMsg.payload).toBe("Set state=false for external actors.");
+      expect(otherActorMsg.payload).toBe(
+        "Set state=false for external actors.",
+      );
     });
 
     it("should generate a specific c_asas command for a single targeted actuator", () => {
@@ -868,7 +942,7 @@ describe("LshLogicService", () => {
                   {
                     name: "actor1",
                     allActuators: false, // <- Important: not all actuators
-                    actuators: ["A2"],   // <- Important: only a specific one
+                    actuators: ["A2"], // <- Important: only a specific one
                   },
                 ],
                 otherActors: [],
@@ -881,14 +955,32 @@ describe("LshLogicService", () => {
       service.updateSystemConfig(advancedConfig);
 
       // Setup: 'actor1' has 2 actuators, A1 and A2, both OFF.
-      service.processMessage(`LSH/actor1/conf`, { p: "d_dd", dn: "actor1", ai: ["A1", "A2"], bi: [] });
+      service.processMessage(`LSH/actor1/conf`, {
+        p: "d_dd",
+        dn: "actor1",
+        ai: ["A1", "A2"],
+        bi: [],
+      });
       (service as any).deviceManager.updateConnectionState("actor1", "ready");
-      (service as any).deviceManager.registerActuatorStates("actor1", [false, false]);
+      (service as any).deviceManager.registerActuatorStates("actor1", [
+        false,
+        false,
+      ]);
 
       // Phase 1: Request
-      service.processMessage("LSH/device-sender/misc", { p: "c_nc", bi: "B1", ct: ClickType.Long, c: false });
+      service.processMessage("LSH/device-sender/misc", {
+        p: "c_nc",
+        bi: "B1",
+        ct: ClickType.Long,
+        c: false,
+      });
       // Phase 2: Confirmation
-      const result = service.processMessage("LSH/device-sender/misc", { p: "c_nc", bi: "B1", ct: ClickType.Long, c: true });
+      const result = service.processMessage("LSH/device-sender/misc", {
+        p: "c_nc",
+        bi: "B1",
+        ct: ClickType.Long,
+        c: true,
+      });
 
       // Assert: The LSH command must be the optimized 'c_asas' command.
       expect(result.messages[Output.Lsh]).toBeDefined();
@@ -915,12 +1007,21 @@ describe("LshLogicService", () => {
       setDeviceOnline(service, "device-sender");
 
       // Act
-      const result = service.processMessage("LSH/device-sender/misc", { p: "c_nc", bi: "B1", ct: ClickType.Long, c: false });
+      const result = service.processMessage("LSH/device-sender/misc", {
+        p: "c_nc",
+        bi: "B1",
+        ct: ClickType.Long,
+        c: false,
+      });
 
       // Assert
-      expect((result.messages[Output.Lsh] as any).payload.p).toBe(LshProtocol.FAILOVER);
+      expect((result.messages[Output.Lsh] as any).payload.p).toBe(
+        LshProtocol.FAILOVER,
+      );
       expect(result.messages[Output.Alerts]).toBeDefined();
-      expect((result.messages[Output.Alerts] as any).payload).toContain("Action configured with no targets.");
+      expect((result.messages[Output.Alerts] as any).payload).toContain(
+        "Action configured with no targets.",
+      );
     });
 
     it("should build correct state command for multiple specific actuators", () => {
@@ -949,18 +1050,38 @@ describe("LshLogicService", () => {
       service.updateSystemConfig(multiActorConfig);
 
       // Setup: 'actor1' has 3 actuators, all OFF.
-      service.processMessage(`LSH/actor1/conf`, { p: "d_dd", dn: "actor1", ai: ["A1", "A2", "A3"], bi: [] });
+      service.processMessage(`LSH/actor1/conf`, {
+        p: "d_dd",
+        dn: "actor1",
+        ai: ["A1", "A2", "A3"],
+        bi: [],
+      });
       (service as any).deviceManager.updateConnectionState("actor1", "ready");
-      (service as any).deviceManager.registerActuatorStates("actor1", [false, false, false]);
+      (service as any).deviceManager.registerActuatorStates("actor1", [
+        false,
+        false,
+        false,
+      ]);
       setDeviceOnline(service, "device-sender");
 
-
       // Phase 1: Request (ACK)
-      const reqResult = service.processMessage("LSH/device-sender/misc", { p: "c_nc", bi: "B1", ct: ClickType.Long, c: false });
-      expect((reqResult.messages[Output.Lsh] as any).payload.p).toBe(LshProtocol.NETWORK_CLICK_ACK);
+      const reqResult = service.processMessage("LSH/device-sender/misc", {
+        p: "c_nc",
+        bi: "B1",
+        ct: ClickType.Long,
+        c: false,
+      });
+      expect((reqResult.messages[Output.Lsh] as any).payload.p).toBe(
+        LshProtocol.NETWORK_CLICK_ACK,
+      );
 
       // Phase 2: Confirmation and logic execution
-      const confirmResult = service.processMessage("LSH/device-sender/misc", { p: "c_nc", bi: "B1", ct: ClickType.Long, c: true });
+      const confirmResult = service.processMessage("LSH/device-sender/misc", {
+        p: "c_nc",
+        bi: "B1",
+        ct: ClickType.Long,
+        c: true,
+      });
 
       // Assert: The command should set all actuators' state (c_aas)
       // but only change the state for the targeted ones.
@@ -981,7 +1102,8 @@ describe("LshLogicService", () => {
         devices: [
           {
             name: "device-sender",
-            superLongClickButtons: [ // <-- Using superLongClickButtons
+            superLongClickButtons: [
+              // <-- Using superLongClickButtons
               {
                 id: "B1-slc",
                 actors: [{ name: "actor1", allActuators: true, actuators: [] }],
@@ -1007,7 +1129,7 @@ describe("LshLogicService", () => {
         c: false,
       });
       expect((reqResult.messages[Output.Lsh] as any).payload.p).toBe(
-        LshProtocol.NETWORK_CLICK_ACK
+        LshProtocol.NETWORK_CLICK_ACK,
       );
 
       // --- Phase 2: Confirm the super-long-click ---
@@ -1021,7 +1143,7 @@ describe("LshLogicService", () => {
       // Assert #1: Check for the specific log message.
       // This proves the target lines were executed.
       expect(confirmResult.logs).toContain(
-        "Executing SLC logic: setting state to OFF."
+        "Executing SLC logic: setting state to OFF.",
       );
 
       // Assert #2: Check that the generated command sets the state to OFF.
@@ -1063,10 +1185,10 @@ describe("LshLogicService", () => {
       // will then catch the error and throw. We verify that this subsequent
       // failure occurs correctly.
       expect((result.messages[Output.Lsh] as any).payload.p).toBe(
-        LshProtocol.FAILOVER
+        LshProtocol.FAILOVER,
       );
       expect((result.messages[Output.Alerts] as any).payload).toContain(
-        "Action configured with no targets."
+        "Action configured with no targets.",
       );
     });
 
@@ -1097,14 +1219,32 @@ describe("LshLogicService", () => {
       service.updateSystemConfig(mixedActuatorsConfig);
 
       // Setup: 'actor1' only has actuators 'A1' and 'A2'. Both are OFF.
-      service.processMessage(`LSH/actor1/conf`, { p: "d_dd", dn: "actor1", ai: ["A1", "A2"], bi: [] });
+      service.processMessage(`LSH/actor1/conf`, {
+        p: "d_dd",
+        dn: "actor1",
+        ai: ["A1", "A2"],
+        bi: [],
+      });
       (service as any).deviceManager.updateConnectionState("actor1", "ready");
-      (service as any).deviceManager.registerActuatorStates("actor1", [false, false]);
+      (service as any).deviceManager.registerActuatorStates("actor1", [
+        false,
+        false,
+      ]);
       setDeviceOnline(service, "device-sender");
 
       // Act: Perform a full click transaction.
-      service.processMessage("LSH/device-sender/misc", { p: "c_nc", bi: "B1", ct: ClickType.Long, c: false });
-      const confirmResult = service.processMessage("LSH/device-sender/misc", { p: "c_nc", bi: "B1", ct: ClickType.Long, c: true });
+      service.processMessage("LSH/device-sender/misc", {
+        p: "c_nc",
+        bi: "B1",
+        ct: ClickType.Long,
+        c: false,
+      });
+      const confirmResult = service.processMessage("LSH/device-sender/misc", {
+        p: "c_nc",
+        bi: "B1",
+        ct: ClickType.Long,
+        c: true,
+      });
 
       // Assert:
       // The loop in `buildStateCommands` will run for 'A1' and 'A99'.
@@ -1153,7 +1293,7 @@ describe("LshLogicService", () => {
       expect(command.topic).toBe(mockServiceConfig.serviceTopic);
       expect(command.payload.p).toBe(LshProtocol.PING);
       expect(
-        result.logs.some((log) => log.includes("a single broadcast ping"))
+        result.logs.some((log) => log.includes("a single broadcast ping")),
       ).toBe(true);
 
       // Restore the original Date.now() function
@@ -1165,7 +1305,7 @@ describe("LshLogicService", () => {
       const freshService = new LshLogicService(
         mockServiceConfig,
         mockContextReader,
-        mockValidators
+        mockValidators,
       );
       freshService.updateSystemConfig(mockSystemConfig);
       setDeviceOnline(freshService, "device-sender");
@@ -1173,7 +1313,7 @@ describe("LshLogicService", () => {
 
       const result = freshService.verifyInitialDeviceStates();
       expect(result.logs.some((l) => l.includes("Pinging them directly"))).toBe(
-        true
+        true,
       );
       const pingCommands = result.messages[Output.Lsh] as any[];
       // device-sender and actor1 are online, so only device-silent should be pinged.
@@ -1186,14 +1326,14 @@ describe("LshLogicService", () => {
       // updateConnectionState with 'lost' ensures creation and sets connected=false, isHealthy=false.
       (service as any).deviceManager.updateConnectionState(
         "device-silent",
-        "lost"
+        "lost",
       );
 
       const pingedDevices = ["device-silent"];
       const result = service.runFinalVerification(pingedDevices);
 
       expect(result.warnings).toContain(
-        "Final verification failed for: device-silent"
+        "Final verification failed for: device-silent",
       );
       expect(result.messages[Output.Alerts]).toBeDefined();
 
@@ -1208,7 +1348,7 @@ describe("LshLogicService", () => {
       setDeviceOnline(service, "device-silent");
       const result = service.runFinalVerification(["device-silent"]);
       expect(
-        result.logs.some((l) => l.includes("Final verification successful"))
+        result.logs.some((l) => l.includes("Final verification successful")),
       ).toBe(true);
       expect(result.messages[Output.Alerts]).toBeUndefined();
     });
@@ -1217,7 +1357,7 @@ describe("LshLogicService", () => {
       const freshService = new LshLogicService(
         mockServiceConfig,
         mockContextReader,
-        mockValidators
+        mockValidators,
       );
       freshService.updateSystemConfig(mockSystemConfig);
 
@@ -1230,30 +1370,28 @@ describe("LshLogicService", () => {
       const initialResult = freshService.verifyInitialDeviceStates();
       expect(initialResult.messages[Output.Lsh]).toBeUndefined(); // No pings sent
       expect(initialResult.logs).toContain(
-        "Initial state verification: all configured devices are connected."
+        "Initial state verification: all configured devices are connected.",
       );
 
       // 2. Test runFinalVerification (success case)
       const finalResult = freshService.runFinalVerification(["actor1"]); // Pass a device that is already online
       expect(finalResult.messages[Output.Alerts]).toBeUndefined(); // No alerts generated
       expect(finalResult.logs).toContain(
-        "Final verification successful: all pinged devices responded."
+        "Final verification successful: all pinged devices responded.",
       );
     });
 
     it("should declare a never-seen device as unhealthy and set its alertSent flag", () => {
       // Configuration with a "ghost" device that will never send messages.
       const configWithGhost = {
-        devices: [
-          { name: "ghost-device" },
-          { name: "active-device" }
-        ],
+        devices: [{ name: "ghost-device" }, { name: "active-device" }],
       };
       service.updateSystemConfig(configWithGhost);
       setDeviceOnline(service, "active-device"); // Only one of the two is online.
 
       // Advance time to trigger the watchdog.
-      const futureTime = Date.now() + (mockServiceConfig.interrogateThreshold + 1) * 1000;
+      const futureTime =
+        Date.now() + (mockServiceConfig.interrogateThreshold + 1) * 1000;
       jest.spyOn(Date, "now").mockReturnValue(futureTime);
 
       // Act
@@ -1267,7 +1405,9 @@ describe("LshLogicService", () => {
 
       // KEY Assert: Verify that the 'alertSent' flag has been set on the device.
       // The device is created implicitly by the watchdog when it's declared "unhealthy".
-      const ghostDeviceState = (service as any).deviceManager.getDevice("ghost-device");
+      const ghostDeviceState = (service as any).deviceManager.getDevice(
+        "ghost-device",
+      );
       expect(ghostDeviceState).toBeDefined();
       expect(ghostDeviceState.alertSent).toBe(true);
 
@@ -1276,8 +1416,12 @@ describe("LshLogicService", () => {
 
     it("should skip watchdog checks for a device already marked as unhealthy and alerted", () => {
       // Setup: Ensure all devices exist
-      const silentDevice = (service as any).deviceManager.getDevice("device-silent");
-      const senderDevice = (service as any).deviceManager.getDevice("device-sender");
+      const silentDevice = (service as any).deviceManager.getDevice(
+        "device-silent",
+      );
+      const senderDevice = (service as any).deviceManager.getDevice(
+        "device-sender",
+      );
       const actorDevice = (service as any).deviceManager.getDevice("actor1");
 
       // Set 'device-silent' as unhealthy and already alerted
@@ -1285,7 +1429,8 @@ describe("LshLogicService", () => {
       silentDevice.alertSent = true;
 
       // Move time forward
-      const futureTime = Date.now() + (mockServiceConfig.interrogateThreshold + 1) * 1000;
+      const futureTime =
+        Date.now() + (mockServiceConfig.interrogateThreshold + 1) * 1000;
       jest.spyOn(Date, "now").mockReturnValue(futureTime);
 
       // Now, in the 'future', update 'actor1' to make it look recently seen
@@ -1311,13 +1456,18 @@ describe("LshLogicService", () => {
 
     it("should mark a device as stale and prepare a new ping if the first ping times out", () => {
       // Setup
-      const staleDevice = (service as any).deviceManager.getDevice("device-silent");
-      const otherDevice1 = (service as any).deviceManager.getDevice("device-sender");
+      const staleDevice = (service as any).deviceManager.getDevice(
+        "device-silent",
+      );
+      const otherDevice1 = (service as any).deviceManager.getDevice(
+        "device-sender",
+      );
       const otherDevice2 = (service as any).deviceManager.getDevice("actor1");
 
       // === Phase 1: 'staleDevice' becomes silent and gets pinged ===
       let currentTime = Date.now();
-      staleDevice.lastSeenTime = currentTime - (mockServiceConfig.interrogateThreshold + 1) * 1000;
+      staleDevice.lastSeenTime =
+        currentTime - (mockServiceConfig.interrogateThreshold + 1) * 1000;
       // The other devices are "recent"
       otherDevice1.lastSeenTime = currentTime;
       otherDevice2.lastSeenTime = currentTime;
@@ -1383,7 +1533,9 @@ describe("LshLogicService", () => {
       expect(result.stateChanged).toBe(true);
 
       // Check the final state
-      const finalDeviceState = (service as any).deviceManager.getDevice(deviceName);
+      const finalDeviceState = (service as any).deviceManager.getDevice(
+        deviceName,
+      );
       expect(finalDeviceState.isHealthy).toBe(false);
       expect(finalDeviceState.isStale).toBe(false);
     });
@@ -1437,7 +1589,7 @@ describe("LshLogicService", () => {
       const freshService = new LshLogicService(
         mockServiceConfig,
         mockContextReader,
-        mockValidators
+        mockValidators,
       );
       freshService.updateSystemConfig(mockSystemConfig);
       const deviceName = "device-silent";
@@ -1448,10 +1600,12 @@ describe("LshLogicService", () => {
       expect(device.alertSent).toBe(false);
 
       // We need the watchdog to return 'unhealthy'. We can force this by mocking it.
-      jest.spyOn((freshService as any).watchdog, 'checkDeviceHealth').mockReturnValue({
-        status: 'unhealthy',
-        reason: 'Forced for test'
-      });
+      jest
+        .spyOn((freshService as any).watchdog, "checkDeviceHealth")
+        .mockReturnValue({
+          status: "unhealthy",
+          reason: "Forced for test",
+        });
 
       // Act: Run the watchdog check.
       const result = freshService.runWatchdogCheck();
@@ -1463,12 +1617,15 @@ describe("LshLogicService", () => {
       expect(result.stateChanged).toBe(true);
 
       // Verify the side-effect on the device state
-      const finalDeviceState = (freshService as any).deviceManager.getDevice(deviceName);
+      const finalDeviceState = (freshService as any).deviceManager.getDevice(
+        deviceName,
+      );
       expect(finalDeviceState.alertSent).toBe(true);
 
       // Cleanup the spy
-      ((freshService as any).watchdog.checkDeviceHealth as jest.Mock).mockRestore();
+      (
+        (freshService as any).watchdog.checkDeviceHealth as jest.Mock
+      ).mockRestore();
     });
-
   });
 });

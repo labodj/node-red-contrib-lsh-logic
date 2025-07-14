@@ -71,14 +71,16 @@ export class DeviceRegistryManager {
     return this.registry[deviceName];
   }
 
-  /**
+/**
    * Returns a deep copy of the entire device registry.
    * This prevents external code from accidentally modifying the internal state.
+   * Uses the modern, robust `structuredClone` function.
    * @returns A deep copy of the current device registry object.
    */
   public getRegistry(): DeviceRegistry {
-    return JSON.parse(JSON.stringify(this.registry)) as DeviceRegistry;
+    return structuredClone(this.registry);
   }
+
   /**
    * Retrieves a single device's state by its name.
    * @param deviceName - The name of the device to retrieve.
@@ -175,54 +177,37 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Updates a device's status based on Homie `$state` messages. This is the
-   * primary driver for the `connected` property.
+   * Updates a device's status based on Homie `$state` messages.
+   * This method is now only responsible for updating the internal state.
    * @param deviceName - The name of the device.
    * @param homieState - The state string from the Homie topic (e.g., "ready", "lost").
-   * @returns An object describing the state transition.
+   * @returns An object indicating if the internal state was changed.
    */
   public updateConnectionState(
     deviceName: string,
     homieState: string
-  ): {
-    changed: boolean;
-    connected: boolean;
-    wentOffline: boolean;
-    cameOnline: boolean;
-  } {
-    const existedBefore = !!this.registry[deviceName];
+  ): { stateChanged: boolean } {
     const device = this._ensureDeviceExists(deviceName);
-
     const wasConnected = device.connected;
-    const isReady = homieState === "ready";
-
-    const wentOffline = wasConnected && !isReady;
-    const cameOnline = existedBefore && !wasConnected && isReady;
+    const isReady = homieState === 'ready';
 
     if (wasConnected === isReady) {
-      return {
-        changed: false,
-        connected: isReady,
-        wentOffline: false,
-        cameOnline: false,
-      };
+      return { stateChanged: false };
     }
 
     device.connected = isReady;
     device.lastSeenTime = Date.now();
 
     if (isReady) {
-      // When a device connects, it's considered healthy and not stale.
       device.isHealthy = true;
       device.isStale = false;
       device.alertSent = false;
     } else {
-      // A disconnected device can be neither healthy nor stale.
       device.isHealthy = false;
       device.isStale = false;
     }
 
-    return { changed: true, connected: isReady, wentOffline, cameOnline };
+    return { stateChanged: true };
   }
 
   /**
@@ -245,31 +230,28 @@ export class DeviceRegistryManager {
     return { stateChanged: willChange };
   }
 
-  /**
-   * Records a ping response from a device, marking it as healthy. A ping
-   * response is a strong indicator of LSH-level health.
+ /**
+   * Records a ping response from a device, marking it as healthy.
+   * A ping response is a strong indicator of LSH-level health.
    * @param deviceName - The name of the device that responded.
-   * @returns An object describing the state transition.
+   * @returns An object indicating if the internal state was changed.
    */
-  public recordPingResponse(deviceName: string): {
-    stateChanged: boolean;
-    cameOnline: boolean;
-  } {
-    const existedBefore = !!this.registry[deviceName];
+  public recordPingResponse(deviceName: string): { stateChanged: boolean } {
     const device = this._ensureDeviceExists(deviceName);
 
     const wasHealthy = device.isHealthy;
     const wasStale = device.isStale;
 
-    // A response to a ping means the device's LSH logic is healthy.
-    const cameOnline = existedBefore && (!wasHealthy || wasStale);
-    device.isHealthy = true;
-    device.isStale = false;
-    device.alertSent = false;
-    device.lastSeenTime = Date.now();
-
     const stateChanged = !wasHealthy || wasStale;
-    return { stateChanged, cameOnline };
+
+    if (stateChanged) {
+        device.isHealthy = true;
+        device.isStale = false;
+        device.alertSent = false;
+        device.lastSeenTime = Date.now();
+    }
+    
+    return { stateChanged };
   }
 
   /**

@@ -76,40 +76,30 @@ describe("DeviceRegistryManager", () => {
   });
 
   describe("updateConnectionState (Homie)", () => {
-    it("should mark a device as connected and report cameOnline on 'ready'", () => {
-      // First, ensure the device exists but is offline
+    it("should mark a device as connected on 'ready' and report a change", () => {
       manager.updateConnectionState("device-1", "init");
-      const { changed, connected, wentOffline, cameOnline } =
-        manager.updateConnectionState("device-1", "ready");
+      const { stateChanged } = manager.updateConnectionState("device-1", "ready");
       const device = manager.getDevice("device-1");
-      expect(changed).toBe(true);
-      expect(connected).toBe(true);
+
+      expect(stateChanged).toBe(true);
       expect(device?.connected).toBe(true);
       expect(device?.isHealthy).toBe(true);
-      expect(wentOffline).toBe(false);
-      expect(cameOnline).toBe(true);
     });
 
-    it("should mark a device as disconnected and report wentOffline on 'lost'", () => {
+    it("should mark a device as disconnected on 'lost' and report a change", () => {
       manager.updateConnectionState("device-1", "ready"); // Start as ready
-      const { changed, connected, wentOffline, cameOnline } =
-        manager.updateConnectionState("device-1", "lost");
+      const { stateChanged } = manager.updateConnectionState("device-1", "lost");
       const device = manager.getDevice("device-1");
-      expect(changed).toBe(true);
-      expect(connected).toBe(false);
+
+      expect(stateChanged).toBe(true);
       expect(device?.connected).toBe(false);
       expect(device?.isHealthy).toBe(false);
-      expect(wentOffline).toBe(true);
-      expect(cameOnline).toBe(false);
     });
 
     it("should not report a change if the state is the same", () => {
       manager.updateConnectionState("device-1", "ready");
-      const { changed, wentOffline, cameOnline } =
-        manager.updateConnectionState("device-1", "ready");
-      expect(changed).toBe(false);
-      expect(wentOffline).toBe(false);
-      expect(cameOnline).toBe(false);
+      const { stateChanged } = manager.updateConnectionState("device-1", "ready");
+      expect(stateChanged).toBe(false);
     });
   });
 
@@ -287,25 +277,23 @@ describe("DeviceRegistryManager", () => {
   });
 
   describe("recordPingResponse", () => {
-    it("should mark a previously unhealthy device as healthy", () => {
+    it("should report a state change for a previously unhealthy device", () => {
       manager.updateConnectionState("offline-device", "lost"); // unhealthy
-      const { stateChanged, cameOnline } = manager.recordPingResponse("offline-device");
+      const { stateChanged } = manager.recordPingResponse("offline-device");
       const device = manager.getDevice("offline-device")!;
       expect(stateChanged).toBe(true);
-      expect(cameOnline).toBe(true);
       expect(device.isHealthy).toBe(true);
     });
 
-    it("should mark a previously stale device as healthy", () => {
+    it("should report a state change for a previously stale device", () => {
       manager.updateConnectionState("stale-device", "ready");
       const device = manager.getDevice("stale-device")!;
       device.isStale = true; // Make it stale
       device.isHealthy = true;
 
-      const { stateChanged, cameOnline } = manager.recordPingResponse("stale-device");
+      const { stateChanged } = manager.recordPingResponse("stale-device");
 
       expect(stateChanged).toBe(true);
-      expect(cameOnline).toBe(true);
       expect(device.isHealthy).toBe(true);
       expect(device.isStale).toBe(false); // Should be cleared
     });
