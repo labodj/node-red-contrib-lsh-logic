@@ -32,7 +32,7 @@ export class LshLogicNode {
   private watchdogInterval: NodeJS.Timeout | null = null;
   private initialVerificationTimer: NodeJS.Timeout | null = null;
   private finalVerificationTimer: NodeJS.Timeout | null = null;
-  public isWarmingUp: boolean = false;
+  private isWarmingUp: boolean = false;
 
   /**
    * Creates an instance of the LshLogicNode.
@@ -167,14 +167,11 @@ export class LshLogicNode {
     }
 
     if (this.isWarmingUp && result.messages[Output.Alerts]) {
-      try {
-        // Added a type check to make this code safer and fix a linting error.
-        const alertPayload = (result.messages[Output.Alerts] as NodeMessage).payload;
-        if (typeof alertPayload === 'string' && alertPayload.startsWith("✅")) {
-          this.node.log("Suppressing 'device recovered' alert during warm-up period.");
-          delete result.messages[Output.Alerts];
-        }
-      } catch (_) {
+      const alertMsg = result.messages[Output.Alerts] as NodeMessage;
+
+      if (typeof alertMsg.payload === 'string' && alertMsg.payload.startsWith('✅')) {
+        this.node.log("Suppressing 'device recovered' alert during warm-up period.");
+        delete result.messages[Output.Alerts];
       }
     }
 
@@ -407,11 +404,12 @@ export class LshLogicNode {
     // The `mqtt-in` node accepts `topic: true` for this action.
     // We disable the lint rule because this structure is specific to the `mqtt-in` node
     // and intentionally not a standard Node-RED message type.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    
     const unsubscribeAllMessage: NodeMessage = {
       action: "unsubscribe",
       topic: true,
       payload: {}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
     const outputMessages: NodeMessage[] = [unsubscribeAllMessage];
@@ -419,11 +417,11 @@ export class LshLogicNode {
 
     // If there are new topics to subscribe to, create the subscribe message.
     if (newTopics.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       const subscribeMessage: NodeMessage = {
         action: "subscribe",
         topic: newTopics,
         payload: {}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any;
       outputMessages.push(subscribeMessage);
       this.node.log(`Generated 'subscribe' message for ${newTopics.length} topic(s).`);

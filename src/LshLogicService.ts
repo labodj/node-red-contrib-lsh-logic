@@ -462,15 +462,26 @@ export class LshLogicService {
         handler: (deviceName, payload) => {
           const result = this.createEmptyResult();
           const homieState = String(payload);
-          const { changed, connected, wentOffline, cameOnline } =
+          
+          // Get the connection state *before* the update.
+          const wasConnected = this.deviceManager.getDevice(deviceName)?.connected;
+
+          const { stateChanged } =
             this.deviceManager.updateConnectionState(deviceName, homieState);
 
-          if (changed) {
-            result.stateChanged = true;
-            result.logs.push(
-              `Device '${deviceName}' connection state changed to '${homieState}'.`
-            );
+          if (!stateChanged) {
+            return result; // No change, nothing more to do.
           }
+          
+          result.stateChanged = true;
+          result.logs.push(
+            `Device '${deviceName}' connection state changed to '${homieState}'.`
+          );
+
+          // The service now determines the meaning of the state change.
+          const isConnected = this.deviceManager.getDevice(deviceName)!.connected;
+          const wentOffline = wasConnected && !isConnected;
+          const cameOnline = !wasConnected && isConnected;
 
           if (wentOffline) {
             const alertInfo = [
@@ -481,7 +492,7 @@ export class LshLogicService {
             ];
             Object.assign(
               result.messages,
-              this._prepareAlerts(alertInfo, "unhealthy").messages
+              this._prepareAlerts(alertInfo, 'unhealthy').messages
             );
           } else if (cameOnline) {
             result.logs.push(
@@ -490,17 +501,16 @@ export class LshLogicService {
             const alertInfo = [
               {
                 name: deviceName,
-                reason: "Device is now connected and healthy.",
+                reason: 'Device is now connected and healthy.',
               },
             ];
             Object.assign(
               result.messages,
-              this._prepareAlerts(alertInfo, "healthy").messages
+              this._prepareAlerts(alertInfo, 'healthy').messages
             );
           }
 
-          // If the device just came online, proactively request its full configuration and state.
-          if (changed && connected) {
+          if (cameOnline) {
             result.logs.push(
               `Device '${deviceName}' is online. Requesting full state (details and actuators).`
             );
@@ -643,29 +653,40 @@ export class LshLogicService {
               break;
 
             case LshProtocol.PING:
-              const { stateChanged, cameOnline } =
+              // Get a deep *copy* of the state *before* the update.
+              // This creates a snapshot, preventing mutation issues with object references.
+              const oldDeviceState = this.deviceManager.getDevice(deviceName)
+                ? structuredClone(this.deviceManager.getDevice(deviceName)!)
+                : undefined;
+
+              const { stateChanged } =
                 this.deviceManager.recordPingResponse(deviceName);
+
               if (stateChanged) {
                 result.logs.push(`Device '${deviceName}' is now responsive.`);
                 result.stateChanged = true;
+                
+                // The service now decides if this state change means it came online.
+                const cameOnline = !oldDeviceState?.isHealthy || oldDeviceState?.isStale;
+                if (cameOnline) {
+                  result.logs.push(
+                    `Device '${deviceName}' is healthy again after ping response.`
+                  );
+                  const alertInfo = [
+                    {
+                      name: deviceName,
+                      reason: 'Device responded to ping and is now healthy.',
+                    },
+                  ];
+                  Object.assign(
+                    result.messages,
+                    this._prepareAlerts(alertInfo, 'healthy').messages
+                  );
+                }
+
               } else {
                 result.logs.push(
                   `Received ping response from '${deviceName}'.`
-                );
-              }
-              if (cameOnline) {
-                result.logs.push(
-                  `Device '${deviceName}' is healthy again after ping response.`
-                );
-                const alertInfo = [
-                  {
-                    name: deviceName,
-                    reason: "Device responded to ping and is now healthy.",
-                  },
-                ];
-                Object.assign(
-                  result.messages,
-                  this._prepareAlerts(alertInfo, "healthy").messages
                 );
               }
               break;
