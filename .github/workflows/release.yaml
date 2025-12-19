@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write # Required for npm Trusted Publishing
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,4 +41,6 @@ jobs:
           generate_release_notes: true
 
       - name: Publish to NPM
-        run: npm publish --access public --provenance
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
