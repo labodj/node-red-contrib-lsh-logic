@@ -4,9 +4,9 @@
 [![Build Status](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml/badge.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-A single, powerful Node-RED node to manage advanced automation logic for an LSH (Labo Smart Home) style system. Built with TypeScript for maximum reliability.
+A powerful, high-performance Node-RED node designed to manage advanced automation logic for embedded smart home devices (ESP32/ESP8266 based). Built with TypeScript for maximum reliability and type safety.
 
-This node replaces a complex flow of function nodes with a single, robust, and stateful component that manages device state, implements advanced click logic, and monitors device health.
+This node replaces complex Node-RED flows with a single, robust, and stateful component that manages device state, implements distributed click logic (two-phase commit), and actively monitors device health.
 
 ![Node Appearance](images/node-appearance.png)
 
@@ -14,18 +14,16 @@ This node replaces a complex flow of function nodes with a single, robust, and s
 
 ## Key Features
 
-- **Declarative System Configuration**: Define all your system's devices in a single, clear `system-config.json` file. The node automatically reloads it on changes.
-- **Centralized State Management**: Maintains an in-memory registry of all device states, health, and configurations, which can be exported to the context for easy debugging and dashboarding.
-- **Advanced Click Logic**: Implements "long-click" (smart toggle) and "super-long-click" (turn all off) actions across multiple devices.
-- **Reliable Network Protocol**: Uses a two-phase commit protocol for network-based button clicks to ensure commands are not lost, even on unreliable networks.
-- **Intelligent Watchdog**: Actively monitors device health with a multi-stage ping mechanism. It uses a smart initial verification process to quickly and accurately detect offline devices at startup, preventing false alarms.
-- **Dynamic MQTT Topic Management**: Emits messages on a dedicated output to dynamically configure an `mqtt-in` node, automatically managing topic subscriptions and unsubscriptions as your configuration changes.
+- **Protocol v2.0 Support**: Implements the efficient LSH Protocol v2.0, utilizing numeric IDs and optimized payloads (JSON or MsgPack) to minimize network overhead.
+- **Robust Health Monitoring**: Features a multi-stage intelligent Watchdog that detects stale or offline devices without generating false positives during startup or temporary network glitches.
+- **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when all target devices are ready and online.
+- **Homie & HA Discovery**: Fully compliant with the [Homie Convention](https://homieiot.github.io/) for state tracking and automatically generates Home Assistant Auto-Discovery payloads for seamless integration.
+- **High Performance**: Optimized message routing using direct string parsing and efficient internal state management.
+- **Declarative Configuration**: Define your entire system in a single `system-config.json` file. The node automatically hot-reloads configuration changes.
 
 ## Installation
 
-You can install the node directly from the Node-RED **Palette Manager**.
-
-Alternatively, run the following command in your Node-RED user directory (typically `~/.node-red`):
+Install directly from the Node-RED **Palette Manager** or via npm in your user directory (e.g., `~/.node-red`):
 
 ```bash
 npm install node-red-contrib-lsh-logic
@@ -33,44 +31,43 @@ npm install node-red-contrib-lsh-logic
 
 ## How It Works
 
-This node is designed to be the central brain of your LSH-style home automation system. It listens for all relevant MQTT messages from your devices, processes them according to your configuration, and sends back commands.
+This node acts as the central orchestrator for your custom smart home devices. It subscribes to MQTT topics, processes incoming telemetry and events, updates its internal state registry, and dispatches commands.
 
 ### Inputs
 
-The node automatically determines which topics to listen to based on your `system-config.json`. You simply connect its "Configuration" output to an `mqtt-in` node to complete the setup. It primarily processes:
+The node's "Configuration" output connects to an `mqtt-in` node to dynamically manage subscriptions. It processes:
 
-1. **LSH Protocol Topics**:
-    - `<lshBasePath>/<device-name>/conf`: For receiving a device's static configuration (actuator IDs, button IDs).
-    - `<lshBasePath>/<device-name>/state`: For receiving the current state of a device's actuators.
-    - `<lshBasePath>/<device-name>/misc`: For miscellaneous events like network clicks, boot notifications, and ping responses.
-
-2. **Homie Convention Topics**:
-    - `<homieBasePath>/<device-name>/$state`: For monitoring the online/offline status of devices.
+1.  **LSH Protocol Topics**:
+    *   `<lshBase>/<device>/conf`: Static configuration (actuators `a`, buttons `b`).
+    *   `<lshBase>/<device>/state`: Live actuator states (`s`).
+    *   `<lshBase>/<device>/misc`: Events like Clicks, Boot notifications, Pings.
+2.  **Homie Topics**:
+    *   `<homieBase>/<device>/$state`: Connectivity status (`ready`, `lost`).
+    *   Homie attributes (`$mac`, `$fw/version`, etc.) for HA Discovery.
 
 ### Outputs
 
 The node has five distinct outputs for clear and organized flows:
 
-1. **LSH Commands**: Publishes messages to control your LSH devices (`c_aas`, `d_nca`, `c_f`, pings, etc.).
-2. **Other Actor Commands**: Publishes generic commands for non-LSH devices (e.g., Tasmota, Zigbee2MQTT). The payload contains the target actor names and the desired state.
-3. **Alerts**: Outputs formatted, human-readable alert messages (e.g., for Telegram) when a device's health status changes (goes offline or comes back online).
-4. **Configuration**: Emits specially crafted messages to dynamically configure an `mqtt-in` node's subscriptions. This is the key to a fully automated setup.
-5. **Debug**: Forwards the original, unprocessed input message for logging and debugging purposes.
+1.  **LSH Commands**: Commands targeting your ESP devices (e.g., `SET_STATE`, `PING`, `CLICK_ACK`).
+2.  **Other Actor Commands**: Abstracted commands for controlling 3rd party devices (Tasmota, Zigbee) via other Node-RED flows. The payload contains the listing of target actors and the state to set.
+3.  **Alerts**: Human-readable health alerts (Markdown formatted) suitable for notifications (Telegram/Slack).
+4.  **Configuration**: Dynamic control messages for the `mqtt-in` node.
+5.  **Debug**: Passthrough of original messages for debugging.
 
 ## Configuration
 
 ### Node Settings
 
-The node's behavior is customized through the editor panel:
-
-- **MQTT Path Settings**: Define the base paths for your Homie and LSH topics.
-- **System Config**: Path to your `system-config.json` file, relative to the Node-RED user directory.
-- **Context Interaction**: Configure how the node's internal state is exposed to the flow/global context.
-- **Timing Settings**: Fine-tune all system timeouts and intervals, including the `Initial Check Delay` for the smart startup detection.
+*   **MQTT Paths**: Base topics for Homie and LSH protocols.
+*   **System Config Path**: Location of your `system-config.json` (absolute or relative to Node-RED user dir).
+*   **Protocol**: Choose between `JSON` (human readable) and `MsgPack` (binary, efficient).
+*   **Timings**: Customize Watchdog intervals, Ping timeouts, and Click expiration times.
+*   **Home Assistant**: Enable/Disable auto-discovery generation.
 
 ### `system-config.json`
 
-This is the core configuration file that defines all devices in your system and, optionally, their button actions. It should be placed in your Node-RED user directory (e.g., in a `configs/` subfolder).
+This file defines the topology of your smart home. It should be placed in your Node-RED user directory.
 
 ```json
 {
@@ -79,29 +76,24 @@ This is the core configuration file that defines all devices in your system and,
       "name": "living-room-switch",
       "longClickButtons": [
         {
-          "id": "B1",
+          "id": 1, 
           "actors": [
-            { "name": "living-room-light", "allActuators": true, "actuators": [] }
+            { "name": "living-room-light", "allActuators": true }
           ],
           "otherActors": ["tasmota_shelf_lamp"]
         }
       ]
     },
-    {
-      "name": "living-room-light"
-    },
-    {
-      "name": "kitchen-light"
-    }
+    { "name": "living-room-light" },
+    { "name": "kitchen-light" }
   ]
 }
 ```
 
-- **`devices`**: An array of all devices in your system. Every device you want the node to manage **must** be listed here.
-- **`name`**: The unique MQTT name of the device. This is the only required property for a device entry.
-- **`longClickButtons` / `superLongClickButtons` (Optional)**: Arrays defining actions for different click types. If a device is only an actor (like a light) and doesn't send clicks, these properties can be omitted entirely.
-- **`actors`**: A list of LSH devices to control.
-- **`otherActors`**: A list of non-LSH device names to control.
+*   **`name`**: Must match the device ID used in MQTT topics.
+*   **`id`**: Button ID (numeric, e.g., `1` for Button 1).
+*   **`actors`**: Target LSH devices.
+*   **`otherActors`**: Target external devices (strings).
 
 ## Best Practices
 
@@ -111,7 +103,7 @@ The most powerful way to use this node is to let it manage your MQTT subscriptio
 
 **Connect the 4th output ("Configuration") directly to an `mqtt-in` node.**
 
-![Dynamic MQTT Flow](images/dynamic_mqtt_listener.png) <!-- It's recommended to add a screenshot for this -->
+![Dynamic MQTT Flow](images/dynamic_mqtt_listener.png)
 
 When you deploy or when `system-config.json` changes, the `lsh-logic` node will:
 
@@ -120,44 +112,26 @@ When you deploy or when `system-config.json` changes, the `lsh-logic` node will:
 
 This ensures your `mqtt-in` node is always listening to exactly the right topics without any manual changes.
 
-### Configuration and State
+## Advanced: MsgPack Support
 
-- **File Location**: Keep your `system-config.json` in a sub-folder of your Node-RED user directory (e.g., `~/.node-red/configs/`) to ensure it's included in your backups.
-- **Context for Debugging**: Use the "Context Interaction" settings to expose the internal state to a flow or global variable. This is invaluable for creating dashboards or debugging issues without needing to add `debug` nodes everywhere.
+To use MsgPack:
+1.  Set **LSH Protocol** to `MsgPack` in the node settings.
+2.  Configure your **Input MQTT Node** to return **"a Buffer"** instead of a parsed string.
+3.  Ensure your ESP firmware supports decoding MsgPack payloads.
 
-## Advanced Usage: Using MsgPack
-
-This node supports both JSON (default) and MsgPack for payload encoding and decoding, which can significantly reduce network traffic and improve performance on constrained devices.
-
-### Sending Commands (Output)
-
-In the node's configuration panel, you can set the **LSH Protocol** option to "MsgPack". When this is selected, all commands sent from the **LSH Commands** output (e.g., state changes, pings, click acks) will have their payloads automatically encoded as MsgPack. Your LSH devices must be programmed to decode MsgPack payloads on their `.../IN` topic.
-
-### Receiving Messages (Input)
-
-The node automatically detects and decodes incoming MsgPack payloads. For this to work, you must correctly configure the `mqtt-in` node that feeds messages into this node.
-
-In the `mqtt-in` node's settings, change the **Output** option from "a parsed JSON Object" to **"a Buffer"**.
-
-## Troubleshooting
-
-- **Node Status: "Config Error"**: This status appears if the `system-config.json` file cannot be read or is invalid. Check the path in the node's settings and use a JSON linter to validate the file's syntax.
-- **Device Unresponsive Alerts**: If you receive an alert, check the device's power and network connection. Ensure the `name` in `system-config.json` exactly matches the device name used in its MQTT topics.
-- **Clicks Not Working**: If a long-click fails, a warning will appear in the Node-RED debug sidebar with the reason (e.g., "Target actor(s) are offline"). Check the actor's status in the exposed context.
+The node handles decoding (Input) and encoding (Output) transparently.
 
 ## Contributing
 
-Contributions are welcome! If you'd like to contribute, please feel free to open an issue to discuss a new feature or bug, or submit a pull request.
+Contributions are welcome!
 
 ### Development Setup
 
-To set up the development environment:
-
-1. Clone the repository.
-2. Run `npm install` to install all dependencies.
-3. Run `npm run build` to build the project.
-4. Run `npm test` to run the test suite.
+1.  Clone the repo: `git clone https://github.com/labodj/node-red-contrib-lsh-logic.git`
+2.  Install dependencies: `npm install`
+3.  Build: `npm run build`
+4.  Test: `npm test`
 
 ## License
 
-This project is licensed under the [Apache 2.0 License](./LICENSE).
+Apache 2.0 - See [LICENSE](./LICENSE) for details.
