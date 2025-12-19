@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "1.0.27",
+  "version": "1.0.39",
   "description": "A single, powerful node to manage advanced automation logic for an LSH (Labo Smart Home) style system.",
   "main": "dist/lsh-logic.js",
   "scripts": {
@@ -52,6 +52,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@msgpack/msgpack": "^3.1.2",
     "ajv": "^8.17.1",
     "chokidar": "^4.0.3"
   },
