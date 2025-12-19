@@ -42,4 +42,4 @@ jobs:
           generate_release_notes: true
 
       - name: Publish to NPM
-        run: npm publish --provenance
+        run: npm publish --access public --provenance
