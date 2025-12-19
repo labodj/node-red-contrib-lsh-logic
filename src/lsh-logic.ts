@@ -11,8 +11,9 @@ import * as path from "path";
 import { ValidateFunction } from "ajv";
 
 import { LshLogicService } from "./LshLogicService";
+import { LshCodec } from "./LshCodec";
 import { createAppValidators } from "./schemas";
-import { LshLogicNodeDef, SystemConfig, Output, OutputMessages, ServiceResult } from "./types";
+import { LshLogicNodeDef, SystemConfig, Output, OutputMessages, ServiceResult, MqttSubscribeMsg, MqttUnsubscribeMsg } from "./types";
 import { sleep } from "./utils";
 
 /**
@@ -24,7 +25,9 @@ export class LshLogicNode {
   private readonly node: Node;
   private readonly config: LshLogicNodeDef;
   private readonly RED: NodeAPI;
+
   private readonly service: LshLogicService;
+  private readonly codec: LshCodec;
 
   // --- Mutable Node-RED specific state ---
   private watcher: chokidar.FSWatcher | null = null;
@@ -43,7 +46,10 @@ export class LshLogicNode {
   constructor(node: Node, config: LshLogicNodeDef, RED: NodeAPI) {
     this.node = node;
     this.config = config;
+
+
     this.RED = RED;
+    this.codec = new LshCodec();
 
     const validators = createAppValidators();
 
@@ -53,10 +59,14 @@ export class LshLogicNode {
         lshBasePath: this.config.lshBasePath,
         homieBasePath: this.config.homieBasePath,
         serviceTopic: this.config.serviceTopic,
+        protocol: this.config.protocol,
         otherDevicesPrefix: this.config.otherDevicesPrefix,
         clickTimeout: this.config.clickTimeout,
         interrogateThreshold: this.config.interrogateThreshold,
         pingTimeout: this.config.pingTimeout,
+
+        haDiscovery: this.config.haDiscovery,
+        haDiscoveryPrefix: this.config.haDiscoveryPrefix,
       },
       this.getContext(this.config.otherActorsContext),
       validators
@@ -130,15 +140,34 @@ export class LshLogicNode {
     });
   }
 
+  // In src/lsh-logic.ts, replace the existing handleInput method with this one.
+
   /**
    * The main handler for all incoming messages from Node-RED.
-   * It delegates processing to the service and handles the result.
+   * It detects if the payload is a Buffer (indicating MsgPack) and decodes it
+   * before delegating processing to the service.
    * @param msg The incoming Node-RED message.
    * @param done The callback to signal completion to the Node-RED runtime.
    */
   private async handleInput(msg: NodeMessage, done: (err?: Error) => void): Promise<void> {
+    let processedPayload: unknown = msg.payload;
+
     try {
-      const result = this.service.processMessage(msg.topic || "", msg.payload);
+      // Use the centralized Codec to decode the payload (handles Buffer/MsgPack, JSON, etc.)
+      processedPayload = this.codec.decode(msg.payload);
+      if (Buffer.isBuffer(msg.payload)) {
+        this.node.log(`Decoded MsgPack payload from topic: ${msg.topic || 'unknown'}`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.node.error(`Failed to decode payload on topic ${msg.topic || 'unknown'}: ${errorMessage}`);
+      done(error instanceof Error ? error : new Error(errorMessage));
+      return;
+    }
+
+    try {
+      // The service always receives a standard JavaScript object, regardless of original format.
+      const result = this.service.processMessage(msg.topic || "", processedPayload);
       await this.processServiceResult(result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -179,8 +208,8 @@ export class LshLogicNode {
       const lshMessages = result.messages[Output.Lsh];
       // A message array indicates a request for staggered sending.
       // The service layer requests this for bulk actions like pings to avoid overwhelming the network.
-      if (Array.isArray(lshMessages) && lshMessages.length > 1) {
-        this.node.log(`Sending ${lshMessages.length} messages in a staggered sequence.`);
+      if (result.staggerLshMessages && Array.isArray(lshMessages) && lshMessages.length > 1) {
+        this.node.log(`Sending ${lshMessages.length} messages in a staggered sequence to prevent a thundering herd.`);
         for (const msg of lshMessages) {
           this.send({ [Output.Lsh]: msg });
           // Sleep for a short, random interval to avoid a "thundering herd."
@@ -383,10 +412,14 @@ export class LshLogicNode {
   private updateExposedConfig(): void {
     const { exposeConfigContext, exposeConfigKey } = this.config;
     if (exposeConfigContext === "none" || !exposeConfigKey) return;
-    const deviceNames = this.service.getConfiguredDeviceNames(); // Get the names
+
+    // Get the full system config from the service layer
+    const fullSystemConfig = this.service.getSystemConfig();
+
     const exposedData = {
       nodeConfig: this.config,
-      systemConfig: deviceNames ? { devices: deviceNames.map(name => ({ name })) } : null,
+      // Use the complete systemConfig object obtained from the service
+      systemConfig: fullSystemConfig,
       lastUpdated: Date.now(),
     };
     this.getContext(exposeConfigContext).set(exposeConfigKey, exposedData);
@@ -396,35 +429,64 @@ export class LshLogicNode {
     const { exportTopics, exportTopicsKey, lshBasePath, homieBasePath } = this.config;
 
     const deviceNames = this.service.getConfiguredDeviceNames() || [];
-    const lshTopics = deviceNames.map((name) => `${lshBasePath}${name}/+`);
-    const homieTopics = deviceNames.map((name) => `${homieBasePath}${name}/$state`);
-    const newTopics = [...lshTopics, ...homieTopics];
+
+    // Explicitly define the sub-topics to subscribe to for each LSH device, excluding '/IN'.
+    const lshSubTopics = ['conf', 'state', 'misc'];
+    const lshTopics = deviceNames.flatMap(name =>
+      lshSubTopics.map(subTopic => `${lshBasePath}${name}/${subTopic}`)
+    ); // These require QoS 2.
+
+    const homieTopics = deviceNames.map((name) => `${homieBasePath}${name}/$state`); // These require QoS 1
 
     // Create the message to unsubscribe from ALL current topics.
     // The `mqtt-in` node accepts `topic: true` for this action.
     // We disable the lint rule because this structure is specific to the `mqtt-in` node
     // and intentionally not a standard Node-RED message type.
-    
-    const unsubscribeAllMessage: NodeMessage = {
-      action: "unsubscribe",
-      topic: true,
-      payload: {}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
 
-    const outputMessages: NodeMessage[] = [unsubscribeAllMessage];
+    const unsubscribeAllMessage: MqttUnsubscribeMsg = {
+      action: "unsubscribe",
+      topic: true
+    };
+
+    const outputMessages: NodeMessage[] = [unsubscribeAllMessage as any];
     this.node.log("Generated 'unsubscribe all' message.");
 
-    // If there are new topics to subscribe to, create the subscribe message.
-    if (newTopics.length > 0) {
-      const subscribeMessage: NodeMessage = {
+    // If there are Homie topics, create a specific subscribe message with QoS 1.
+    if (homieTopics.length > 0) {
+      const subscribeQos1Message: MqttSubscribeMsg = {
         action: "subscribe",
-        topic: newTopics,
-        payload: {}
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any;
-      outputMessages.push(subscribeMessage);
-      this.node.log(`Generated 'subscribe' message for ${newTopics.length} topic(s).`);
+        topic: homieTopics,
+        qos: 1, // Set QoS to 1 for Homie topics
+      };
+      outputMessages.push(subscribeQos1Message as any);
+      this.node.log(`Generated 'subscribe' message for ${homieTopics.length} topic(s) with QoS 1.`);
+    }
+
+    // If there are LSH topics, create a specific subscribe message with QoS 2.
+    if (lshTopics.length > 0) {
+      const subscribeQos2Message: MqttSubscribeMsg = {
+        action: "subscribe",
+        topic: lshTopics,
+        qos: 2, // Set QoS to 2 for LSH topics
+      };
+      outputMessages.push(subscribeQos2Message as any);
+      this.node.log(`Generated 'subscribe' message for ${lshTopics.length} topic(s) with QoS 2.`);
+
+    }
+
+    if (this.config.haDiscovery) {
+      const discoveryTopics = [
+        `${homieBasePath}+/$nodes`,
+        `${homieBasePath}+/$mac`,
+        `${homieBasePath}+/$fw/version`
+      ];
+      const subscribeDiscoveryMessage: MqttSubscribeMsg = {
+        action: "subscribe",
+        topic: discoveryTopics,
+        qos: 1
+      };
+      outputMessages.push(subscribeDiscoveryMessage as any);
+      this.node.log(`Generated 'subscribe' message for HA Discovery topics.`);
     }
 
     // Send the sequence of messages on the Configuration output.
@@ -432,14 +494,15 @@ export class LshLogicNode {
 
     // Update the context variable for passive inspection.
     if (exportTopics !== "none" && exportTopicsKey) {
+      const allTopics = [...homieTopics, ...lshTopics];
       const topicsToExport = {
         lsh: lshTopics,
         homie: homieTopics,
-        all: newTopics,
+        all: allTopics,
         lastUpdated: Date.now(),
       };
       this.getContext(exportTopics).set(exportTopicsKey, topicsToExport);
-      this.node.log(`Exported ${newTopics.length} MQTT topics to context key '${exportTopicsKey}'.`);
+      this.node.log(`Exported ${allTopics.length} MQTT topics to context key '${exportTopicsKey}'.`);
     }
   }
 }

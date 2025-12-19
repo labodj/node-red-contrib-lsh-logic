@@ -41,6 +41,7 @@ const mockConfig: LshLogicNodeDef = {
   exposeStateContext: "none", exposeStateKey: "lsh_state",
   exportTopics: "none", exportTopicsKey: "lsh_topics",
   exposeConfigContext: "none", exposeConfigKey: "lsh_config",
+  protocol: "json", haDiscovery: false, haDiscoveryPrefix: "homeassistant",
 };
 
 // Helper to wait for the async initialization to complete
@@ -98,7 +99,7 @@ describe("LshLogicNode Adapter", () => {
     const serviceInNode = (nodeInstance as any).service;
     jest.spyOn(serviceInNode, 'processMessage').mockImplementation(() => { throw testError; });
 
-    const inputCallback = mockNodeInstance.on.mock.calls.find(call => call[0] === "input")?.[1];
+    const inputCallback = mockNodeInstance.on.mock.calls.find((call: any[]) => call[0] === "input")?.[1];
     const mockDone = jest.fn();
 
     if (inputCallback) {
@@ -139,7 +140,8 @@ describe("LshLogicNode Adapter", () => {
 
     const serviceResult: ServiceResult = {
       messages: { [Output.Lsh]: [lshMsg1, lshMsg2], [Output.OtherActors]: otherMsg },
-      logs: [], warnings: [], errors: [], stateChanged: false
+      logs: [], warnings: [], errors: [], stateChanged: false,
+      staggerLshMessages: true
     };
 
     await nodeInstance.processServiceResult(serviceResult);
@@ -154,7 +156,7 @@ describe("LshLogicNode Adapter", () => {
     const config: LshLogicNodeDef = { ...mockConfig, exposeStateContext: "flow", exposeStateKey: "my_state" };
     nodeInstance = new LshLogicNode(mockNodeInstance, config, mockRED as NodeAPI);
     await awaitInitialization();
-    mockNodeInstance.context().flow.set.mockClear();
+    (mockNodeInstance.context().flow.set as jest.Mock).mockClear();
 
     const serviceInNode = (nodeInstance as any).service;
     const MOCK_REGISTRY = { "device-1": { name: "device-1" } };
@@ -209,7 +211,7 @@ describe("LshLogicNode Adapter", () => {
     const serviceInNode = (nodeInstance as any).service;
     jest.spyOn(serviceInNode, 'processMessage').mockImplementation(() => { throw nonError; });
 
-    const inputCallback = mockNodeInstance.on.mock.calls.find(call => call[0] === "input")?.[1];
+    const inputCallback = mockNodeInstance.on.mock.calls.find((call: any[]) => call[0] === "input")?.[1];
     const mockDone = jest.fn();
 
     if (inputCallback) {
@@ -231,7 +233,7 @@ describe("LshLogicNode Adapter", () => {
       messages: {}, logs: [], warnings: [], errors: [], stateChanged: false
     });
 
-    const inputCallback = mockNodeInstance.on.mock.calls.find(call => call[0] === "input")?.[1];
+    const inputCallback = mockNodeInstance.on.mock.calls.find((call: any[]) => call[0] === "input")?.[1];
     const mockDone = jest.fn();
 
     // Message without 'topic'

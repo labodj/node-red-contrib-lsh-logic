@@ -8,6 +8,8 @@
 
 import { DeviceRegistryManager } from "./DeviceRegistryManager";
 import { ClickTransactionManager } from "./ClickTransactionManager";
+import { HomieDiscoveryManager } from "./HomieDiscoveryManager";
+import { LshCodec } from "./LshCodec";
 import { Watchdog } from "./Watchdog";
 import {
   ClickType,
@@ -22,19 +24,21 @@ import {
   ServiceResult,
   Output,
   OutputMessages,
+  SetSingleActuatorPayload,
+  SetStatePayload,
+  PingPayload,
+  RequestDetailsPayload,
+  RequestStatePayload,
+  NetworkClickAckPayload,
+  FailoverPayload,
+  FailoverClickPayload,
+  OtherActorsCommandPayload,
+  AlertPayload,
 } from "./types";
 import { formatAlertMessage } from "./utils";
 import { NodeMessage } from "node-red";
 import { ValidateFunction } from "ajv";
 
-/**
- * Defines the structure for a single route in the topic routing table.
- * @internal
- */
-type TopicRoute = {
-  regex: RegExp;
-  handler: (deviceName: string, payload: unknown, parts: string[]) => ServiceResult;
-};
 
 /**
  * Collects actions to be performed at the end of a watchdog cycle.
@@ -72,11 +76,16 @@ export class ClickValidationError extends Error {
 export class LshLogicService {
   private readonly deviceManager: DeviceRegistryManager;
   private readonly clickManager: ClickTransactionManager;
+  private readonly discoveryManager: HomieDiscoveryManager;
   private readonly watchdog: Watchdog;
 
   private readonly lshBasePath: string;
   private readonly homieBasePath: string;
+  private readonly haDiscovery: boolean;
+
+  private readonly protocol: "json" | "msgpack";
   private readonly serviceTopic: string;
+  private readonly codec: LshCodec;
   private readonly validators: {
     validateDeviceDetails: ValidateFunction;
     validateActuatorStates: ValidateFunction;
@@ -85,7 +94,6 @@ export class LshLogicService {
 
   private systemConfig: SystemConfig | null = null;
   private deviceConfigMap: Map<string, DeviceEntry> = new Map();
-  private readonly routes: TopicRoute[];
 
   /**
    * Constructs a new LshLogicService. Dependencies are injected to promote
@@ -99,10 +107,13 @@ export class LshLogicService {
       lshBasePath: string;
       homieBasePath: string;
       serviceTopic: string;
+      protocol: "json" | "msgpack";
       otherDevicesPrefix: string;
       clickTimeout: number;
       interrogateThreshold: number;
       pingTimeout: number;
+      haDiscovery: boolean;
+      haDiscoveryPrefix: string;
     },
     otherActorsContext: { get(key: string): unknown },
     validators: {
@@ -114,6 +125,9 @@ export class LshLogicService {
     this.lshBasePath = config.lshBasePath;
     this.homieBasePath = config.homieBasePath;
     this.serviceTopic = config.serviceTopic;
+    this.protocol = config.protocol;
+    this.haDiscovery = config.haDiscovery;
+
     this.validators = validators;
 
     this.deviceManager = new DeviceRegistryManager(
@@ -121,11 +135,21 @@ export class LshLogicService {
       otherActorsContext
     );
     this.clickManager = new ClickTransactionManager(config.clickTimeout);
+    this.discoveryManager = new HomieDiscoveryManager(config.homieBasePath, config.haDiscoveryPrefix);
     this.watchdog = new Watchdog(
       config.interrogateThreshold,
       config.pingTimeout
     );
-    this.routes = this._createTopicRoutes();
+    this.codec = new LshCodec();
+    this.codec = new LshCodec();
+  }
+
+  /**
+   * Returns a copy of the currently loaded system configuration object.
+   * @returns The loaded SystemConfig or null if none is loaded.
+   */
+  public getSystemConfig(): SystemConfig | null {
+    return this.systemConfig ? structuredClone(this.systemConfig) : null;
   }
 
   /**
@@ -161,11 +185,13 @@ export class LshLogicService {
       );
 
       // Generate targeted ping commands for only the silent devices.
-      const pingCommands: NodeMessage[] = silentDevices.map((deviceName) => ({
-        topic: `${this.lshBasePath}${deviceName}/IN`,
-        payload: { p: LshProtocol.PING },
-        qos: 1,
-      }));
+      const pingCommands: NodeMessage[] = silentDevices.map((deviceName) =>
+        this._createLshCommand(
+          `${this.lshBasePath}${deviceName}/IN`,
+          { p: LshProtocol.PING } as PingPayload,
+          1
+        )
+      );
 
       result.messages[Output.Lsh] = pingCommands;
     } else {
@@ -200,10 +226,10 @@ export class LshLogicService {
 
         // Forcibly update its state in the registry for consistency
         if (deviceState) {
-          this.deviceManager.updateHealthFromResult(
-            deviceName,
-            { status: "unhealthy", reason: "Initial ping failed" }
-          );
+          this.deviceManager.updateHealthFromResult(deviceName, {
+            status: "unhealthy",
+            reason: "Initial ping failed",
+          });
         }
         // Finding an unresponsive device is a state change for the system.
         result.stateChanged = true;
@@ -254,7 +280,9 @@ export class LshLogicService {
     }
     let logMessage = "System configuration successfully loaded and validated.";
     if (prunedDevices.length > 0) {
-      logMessage += ` Pruned stale devices from registry: ${prunedDevices.join(", ")}.`;
+      logMessage += ` Pruned stale devices from registry: ${prunedDevices.join(
+        ", "
+      )}.`;
     }
     return logMessage;
   }
@@ -297,6 +325,24 @@ export class LshLogicService {
   }
 
   /**
+   * @internal
+   * Creates an LSH command message, transparently encoding the payload to MsgPack
+   * if the protocol is configured to do so. Otherwise, sends a standard JSON object.
+   * @param topic - The target MQTT topic for the command.
+   * @param payload - The command payload as a JavaScript object.
+   * @param qos - The desired Quality of Service level for the message.
+   * @returns A NodeMessage object ready to be sent.
+   */
+  private _createLshCommand(
+    topic: string,
+    payload: object,
+    qos: 0 | 1 | 2
+  ): NodeMessage {
+    const encodedPayload = this.codec.encode(payload, this.protocol);
+    return { topic, payload: encodedPayload, qos };
+  }
+
+  /**
    * Creates an empty ServiceResult object to be populated.
    * @internal
    */
@@ -311,7 +357,9 @@ export class LshLogicService {
   }
 
   /**
-   * Processes an incoming message by matching its topic against the routing table.
+  /**
+   * Processes an incoming message by matching its topic against known patterns.
+   * This implementation avoids Regex for performance, using efficient string parsing instead.
    * @param topic - The MQTT topic of the message.
    * @param payload - The payload of the message.
    * @returns A ServiceResult describing the actions to be taken.
@@ -323,17 +371,59 @@ export class LshLogicService {
       return result;
     }
 
-    for (const route of this.routes) {
-      const match = topic.match(route.regex);
-      if (match) {
-        const deviceName = match[1];
-        const otherParts = match.slice(2);
-        this.watchdog.onDeviceActivity(deviceName);
-        const handlerPayload = topic.includes("$state") ? payload : payload;
-        return route.handler(deviceName, handlerPayload, otherParts);
+    // --- HOMIE TOPICS ---
+    if (topic.startsWith(this.homieBasePath)) {
+      const baseLen = this.homieBasePath.length;
+      const slashIndex = topic.indexOf('/', baseLen);
+
+      if (slashIndex === -1) return this._handleUnhandledTopic(topic);
+
+      const deviceName = topic.substring(baseLen, slashIndex);
+
+      // Homie topics imply activity
+      this.watchdog.onDeviceActivity(deviceName);
+
+      if (topic.endsWith('/$state')) {
+        return this._handleHomieState(deviceName, payload);
+      }
+
+      if (this.haDiscovery) {
+        const suffix = topic.substring(slashIndex);
+        if (suffix === '/$mac' || suffix === '/$fw/version' || suffix === '/$nodes') {
+          return this.discoveryManager.processDiscoveryMessage(deviceName, suffix, String(payload));
+        }
       }
     }
+
+    // --- LSH TOPICS ---
+    else if (topic.startsWith(this.lshBasePath)) {
+      const baseLen = this.lshBasePath.length;
+      const slashIndex = topic.indexOf('/', baseLen);
+
+      if (slashIndex === -1) return this._handleUnhandledTopic(topic);
+
+      const deviceName = topic.substring(baseLen, slashIndex);
+
+      this.watchdog.onDeviceActivity(deviceName);
+
+      if (topic.endsWith('/state')) {
+        return this._handleLshState(deviceName, payload);
+      } else if (topic.endsWith('/misc')) {
+        return this._handleLshMisc(deviceName, payload);
+      } else if (topic.endsWith('/conf')) {
+        return this._handleLshConf(deviceName, payload);
+      }
+    }
+
+    return this._handleUnhandledTopic(topic);
+  }
+
+  private _handleUnhandledTopic(topic: string): ServiceResult {
     const result = this.createEmptyResult();
+    // Only log if it's not a completely irrelevant topic? 
+    // For now, keep behavior consistent with old regex fallback logic which logged everything unhandled.
+    // However, in a real env, we might receive many messages. 
+    // Old logic: "Message on unhandled topic: ..."
     result.logs.push(`Message on unhandled topic: ${topic}`);
     return result;
   }
@@ -368,9 +458,12 @@ export class LshLogicService {
 
     result.stateChanged = actions.stateChanged;
     if (actions.devicesToPing.size > 0) {
-      const { messages, logs } = this._preparePings(actions);
+      const { messages, logs, stagger } = this._preparePings(actions);
       Object.assign(result.messages, messages);
       result.logs.push(...logs);
+      if (stagger) {
+        result.staggerLshMessages = true;
+      }
     }
 
     if (actions.unhealthyDevicesForAlert.length > 0) {
@@ -441,250 +534,212 @@ export class LshLogicService {
       : null;
   }
 
-  /**
-   * Creates and returns the topic routing table.
-   * This method defines a regex for each topic structure the service listens to
-   * and maps it to a specific handler function. This approach provides a clean,
-   * scalable, and maintainable way to process incoming MQTT messages.
-   * @internal
-   * @returns {TopicRoute[]} An array of topic route definitions.
-   */
-  private _createTopicRoutes(): TopicRoute[] {
-    return [
-      /**
-       * Handles Homie device state messages (e.g., 'homie/my-device/$state').
-       * This is the primary mechanism for detecting if a device is online or offline.
-       */
-      {
-        regex: new RegExp(`^${this.homieBasePath}([^/]+)/\\$state$`),
-        handler: (deviceName, payload) => {
-          const result = this.createEmptyResult();
-          const homieState = String(payload);
+  /* -------------------------------------------------------------------------- */
+  /*                             TOPIC HANDLERS                                 */
+  /* -------------------------------------------------------------------------- */
 
-          const { stateChanged, wasConnected, isConnected } =
-            this.deviceManager.updateConnectionState(deviceName, homieState);
+  private _handleHomieState(deviceName: string, payload: unknown): ServiceResult {
+    const result = this.createEmptyResult();
+    const homieState = String(payload);
 
-          if (!stateChanged) {
-            return result; // No change, nothing more to do.
-          }
+    const { stateChanged, wasConnected, isConnected } =
+      this.deviceManager.updateConnectionState(deviceName, homieState);
 
+    if (!stateChanged) {
+      return result; // No change, nothing more to do.
+    }
+
+    result.stateChanged = true;
+    result.logs.push(
+      `Device '${deviceName}' connection state changed to '${homieState}'.`
+    );
+
+    const wentOffline = wasConnected && !isConnected;
+    const cameOnline = !wasConnected && isConnected;
+
+    if (wentOffline) {
+      const alertInfo = [
+        {
+          name: deviceName,
+          reason: `Device reported as '${homieState}' by Homie.`,
+        },
+      ];
+      Object.assign(
+        result.messages,
+        this._prepareAlerts(alertInfo, "unhealthy").messages
+      );
+    } else if (cameOnline) {
+      result.logs.push(
+        `Device '${deviceName}' came back online (Homie state: ready).`
+      );
+      const alertInfo = [
+        {
+          name: deviceName,
+          reason: "Device is now connected and healthy.",
+        },
+      ];
+      Object.assign(
+        result.messages,
+        this._prepareAlerts(alertInfo, "healthy").messages
+      );
+      result.logs.push(
+        `Device '${deviceName}' is online. Requesting full state (details and actuators).`
+      );
+      const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
+      result.messages[Output.Lsh] = [
+        this._createLshCommand(
+          commandTopic,
+          { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
+          1
+        ),
+        this._createLshCommand(
+          commandTopic,
+          { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
+          1
+        ),
+      ];
+    }
+    return result;
+  }
+
+  private _handleLshConf(deviceName: string, payload: unknown): ServiceResult {
+    const result = this.createEmptyResult();
+    if (!this.validators.validateDeviceDetails(payload)) {
+      const errorText =
+        this.validators.validateDeviceDetails.errors
+          ?.map((e) => e.message)
+          .join(", ") || "unknown validation error";
+      result.warnings.push(
+        `Invalid 'conf' payload from ${deviceName}: ${errorText}`
+      );
+      return result;
+    }
+    const { changed } = this.deviceManager.registerDeviceDetails(
+      deviceName,
+      payload as DeviceDetailsPayload
+    );
+    if (changed) {
+      result.logs.push(
+        `Stored/Updated details for device '${deviceName}'.`
+      );
+      result.stateChanged = true;
+    }
+    return result;
+  }
+
+  private _handleLshState(deviceName: string, payload: unknown): ServiceResult {
+    const result = this.createEmptyResult();
+    if (!this.validators.validateActuatorStates(payload)) {
+      const errorText =
+        this.validators.validateActuatorStates.errors
+          ?.map((e) => e.message)
+          .join(", ") || "unknown validation error";
+      result.warnings.push(
+        `Invalid 'state' payload from ${deviceName}: ${errorText}`
+      );
+      return result;
+    }
+    try {
+      const states = (payload as DeviceActuatorsStatePayload).s.map(
+        (s) => s === 1
+      );
+      const { isNew, changed, configIsMissing } =
+        this.deviceManager.registerActuatorStates(deviceName, states);
+      if (isNew)
+        result.logs.push(
+          `Received state for a new device: ${deviceName}. Creating partial entry.`
+        );
+      if (changed) {
+        result.logs.push(
+          `Updated state for '${deviceName}': [${states.join(", ")}]`
+        );
+        result.stateChanged = true;
+      }
+      // If we receive a state but don't have the device details (IDs), proactively request them.
+      if (configIsMissing) {
+        result.warnings.push(
+          `Device '${deviceName}' sent state but its configuration is unknown. Requesting details.`
+        );
+        result.messages[Output.Lsh] = this._createLshCommand(
+          `${this.lshBasePath}${deviceName}/IN`,
+          { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
+          1,
+        );
+      }
+    } catch (error) {
+      result.errors.push(
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+    return result;
+  }
+
+  private _handleLshMisc(deviceName: string, payload: unknown): ServiceResult {
+    if (!this.validators.validateAnyMiscTopic(payload)) {
+      const result = this.createEmptyResult();
+      const errorText =
+        this.validators.validateAnyMiscTopic.errors
+          ?.map((e) => e.message)
+          .join(", ") || "unknown validation error";
+      result.warnings.push(
+        `Invalid 'misc' payload from ${deviceName}: ${errorText}`
+      );
+      return result;
+    }
+    const miscPayload = payload as AnyMiscTopicPayload;
+    const result = this.createEmptyResult();
+
+    switch (miscPayload.p) {
+      case LshProtocol.NETWORK_CLICK:
+        return this.handleNetworkClick(deviceName, miscPayload);
+
+      case LshProtocol.BOOT_NOTIFICATION:
+        result.logs.push(`Device '${deviceName}' reported a boot event.`);
+        if (this.deviceManager.recordBoot(deviceName).stateChanged) {
           result.stateChanged = true;
+        }
+        break;
+
+      case LshProtocol.PING:
+        // Get a deep *copy* of the state *before* the update.
+        // This creates a snapshot, preventing mutation issues with object references.
+        const oldDeviceState = this.deviceManager.getDevice(deviceName)
+          ? structuredClone(this.deviceManager.getDevice(deviceName)!)
+          : undefined;
+
+        const { stateChanged } =
+          this.deviceManager.recordPingResponse(deviceName);
+
+        if (stateChanged) {
+          result.logs.push(`Device '${deviceName}' is now responsive.`);
+          result.stateChanged = true;
+
+          // The service now decides if this state change means it came online.
+          const cameOnline =
+            !oldDeviceState?.isHealthy || oldDeviceState?.isStale;
+          if (cameOnline) {
+            result.logs.push(
+              `Device '${deviceName}' is healthy again after ping response.`
+            );
+            const alertInfo = [
+              {
+                name: deviceName,
+                reason: "Device responded to ping and is now healthy.",
+              },
+            ];
+            Object.assign(
+              result.messages,
+              this._prepareAlerts(alertInfo, "healthy").messages
+            );
+          }
+        } else {
           result.logs.push(
-            `Device '${deviceName}' connection state changed to '${homieState}'.`
+            `Received ping response from '${deviceName}'.`
           );
-
-          const wentOffline = wasConnected && !isConnected;
-          const cameOnline = !wasConnected && isConnected;
-
-          if (wentOffline) {
-            const alertInfo = [
-              {
-                name: deviceName,
-                reason: `Device reported as '${homieState}' by Homie.`,
-              },
-            ];
-            Object.assign(
-              result.messages,
-              this._prepareAlerts(alertInfo, 'unhealthy').messages
-            );
-          } else if (cameOnline) {
-            result.logs.push(
-              `Device '${deviceName}' came back online (Homie state: ready).`
-            );
-            const alertInfo = [
-              {
-                name: deviceName,
-                reason: 'Device is now connected and healthy.',
-              },
-            ];
-            Object.assign(
-              result.messages,
-              this._prepareAlerts(alertInfo, 'healthy').messages
-            );
-            result.logs.push(
-              `Device '${deviceName}' is online. Requesting full state (details and actuators).`
-            );
-            result.messages[Output.Lsh] = [
-              {
-                topic: `${this.lshBasePath}${deviceName}/IN`,
-                payload: { p: LshProtocol.SEND_DEVICE_DETAILS },
-                qos: 1,
-              },
-              {
-                topic: `${this.lshBasePath}${deviceName}/IN`,
-                payload: { p: LshProtocol.SEND_ACTUATORS_STATE },
-                qos: 1,
-              },
-            ];
-          }
-          return result;
-        },
-      },
-
-      /**
-       * Handles LSH device configuration messages (e.g., 'LSH/my-device/conf').
-       * This message contains the device's static details, like its actuator and button IDs.
-       * It is crucial for the node's ability to control the device.
-       */
-      {
-        regex: new RegExp(`^${this.lshBasePath}([^/]+)/conf$`),
-        handler: (deviceName, payload) => {
-          const result = this.createEmptyResult();
-          if (!this.validators.validateDeviceDetails(payload)) {
-            const errorText =
-              this.validators.validateDeviceDetails.errors
-                ?.map((e) => e.message)
-                .join(", ") || "unknown validation error";
-            result.warnings.push(
-              `Invalid 'conf' payload from ${deviceName}: ${errorText}`
-            );
-            return result;
-          }
-          const { changed } = this.deviceManager.registerDeviceDetails(
-            deviceName,
-            payload as DeviceDetailsPayload
-          );
-          if (changed) {
-            result.logs.push(
-              `Stored/Updated details for device '${deviceName}'.`
-            );
-            result.stateChanged = true;
-          }
-          return result;
-        },
-      },
-
-      /**
-       * Handles LSH device actuator state messages (e.g., 'LSH/my-device/state').
-       * This message reports the current ON/OFF status of all device actuators.
-       */
-      {
-        regex: new RegExp(`^${this.lshBasePath}([^/]+)/state$`),
-        handler: (deviceName, payload) => {
-          const result = this.createEmptyResult();
-          if (!this.validators.validateActuatorStates(payload)) {
-            const errorText =
-              this.validators.validateActuatorStates.errors
-                ?.map((e) => e.message)
-                .join(", ") || "unknown validation error";
-            result.warnings.push(
-              `Invalid 'state' payload from ${deviceName}: ${errorText}`
-            );
-            return result;
-          }
-          try {
-            const { isNew, changed, configIsMissing } =
-              this.deviceManager.registerActuatorStates(
-                deviceName,
-                (payload as DeviceActuatorsStatePayload).as
-              );
-            if (isNew)
-              result.logs.push(
-                `Received state for a new device: ${deviceName}. Creating partial entry.`
-              );
-            if (changed) {
-              result.logs.push(
-                `Updated state for '${deviceName}': [${(
-                  payload as DeviceActuatorsStatePayload
-                ).as.join(", ")}]`
-              );
-              result.stateChanged = true;
-            }
-            // If we receive a state but don't have the device details (IDs), proactively request them.
-            if (configIsMissing) {
-              result.warnings.push(
-                `Device '${deviceName}' sent state but its configuration is unknown. Requesting details.`
-              );
-              result.messages[Output.Lsh] = {
-                topic: `${this.lshBasePath}${deviceName}/IN`,
-                payload: { p: LshProtocol.SEND_DEVICE_DETAILS },
-                qos: 1,
-              };
-            }
-          } catch (error) {
-            result.errors.push(
-              error instanceof Error ? error.message : String(error)
-            );
-          }
-          return result;
-        },
-      },
-
-      /**
-       * Handles miscellaneous LSH device messages (e.g., 'LSH/my-device/misc').
-       * This topic is used for events like network clicks, pings, and boot notifications.
-       */
-      {
-        regex: new RegExp(`^${this.lshBasePath}([^/]+)/misc$`),
-        handler: (deviceName, payload) => {
-          if (!this.validators.validateAnyMiscTopic(payload)) {
-            const result = this.createEmptyResult();
-            const errorText =
-              this.validators.validateAnyMiscTopic.errors
-                ?.map((e) => e.message)
-                .join(", ") || "unknown validation error";
-            result.warnings.push(
-              `Invalid 'misc' payload from ${deviceName}: ${errorText}`
-            );
-            return result;
-          }
-          const miscPayload = payload as AnyMiscTopicPayload;
-          const result = this.createEmptyResult();
-
-          switch (miscPayload.p) {
-            case LshProtocol.NETWORK_CLICK:
-              return this.handleNetworkClick(deviceName, miscPayload);
-
-            case LshProtocol.DEVICE_BOOT:
-              result.logs.push(`Device '${deviceName}' reported a boot event.`);
-              if (this.deviceManager.recordBoot(deviceName).stateChanged) {
-                result.stateChanged = true;
-              }
-              break;
-
-            case LshProtocol.PING:
-              // Get a deep *copy* of the state *before* the update.
-              // This creates a snapshot, preventing mutation issues with object references.
-              const oldDeviceState = this.deviceManager.getDevice(deviceName)
-                ? structuredClone(this.deviceManager.getDevice(deviceName)!)
-                : undefined;
-
-              const { stateChanged } =
-                this.deviceManager.recordPingResponse(deviceName);
-
-              if (stateChanged) {
-                result.logs.push(`Device '${deviceName}' is now responsive.`);
-                result.stateChanged = true;
-
-                // The service now decides if this state change means it came online.
-                const cameOnline = !oldDeviceState?.isHealthy || oldDeviceState?.isStale;
-                if (cameOnline) {
-                  result.logs.push(
-                    `Device '${deviceName}' is healthy again after ping response.`
-                  );
-                  const alertInfo = [
-                    {
-                      name: deviceName,
-                      reason: 'Device responded to ping and is now healthy.',
-                    },
-                  ];
-                  Object.assign(
-                    result.messages,
-                    this._prepareAlerts(alertInfo, 'healthy').messages
-                  );
-                }
-
-              } else {
-                result.logs.push(
-                  `Received ping response from '${deviceName}'.`
-                );
-              }
-              break;
-          }
-          return result;
-        },
-      },
-    ];
+        }
+        break;
+    }
+    return result;
   }
 
   /**
@@ -713,7 +768,7 @@ export class LshLogicService {
     payload: NetworkClickPayload
   ): ServiceResult {
     const result = this.createEmptyResult();
-    const { bi: buttonId, ct: clickType } = payload;
+    const { i: buttonId, t: clickType } = payload;
     const transactionKey = `${deviceName}.${buttonId}.${clickType}`;
     const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
 
@@ -725,15 +780,15 @@ export class LshLogicService {
       );
       this.clickManager.startTransaction(transactionKey, actors, otherActors);
 
-      result.messages[Output.Lsh] = {
-        topic: commandTopic,
-        payload: {
+      result.messages[Output.Lsh] = this._createLshCommand(
+        commandTopic,
+        {
           p: LshProtocol.NETWORK_CLICK_ACK,
-          ct: clickType,
-          bi: buttonId,
-        },
-        qos: 2,
-      };
+          t: clickType,
+          i: buttonId,
+        } as NetworkClickAckPayload,
+        2
+      );
       result.logs.push(`Validation OK for ${transactionKey}. Sending ACK.`);
     } catch (error) {
       if (error instanceof ClickValidationError) {
@@ -751,21 +806,27 @@ export class LshLogicService {
           result.errors.push(
             `System failure on click. Sending General Failover (c_gf).`
           );
-          result.messages[Output.Lsh] = {
-            topic: commandTopic,
-            payload: { p: LshProtocol.GENERAL_FAILOVER },
-            qos: 2,
-          };
+          result.messages[Output.Lsh] = this._createLshCommand(
+            commandTopic,
+            { p: LshProtocol.GENERAL_FAILOVER } as FailoverPayload,
+            2,
+          );
         } else {
-          result.messages[Output.Lsh] = {
-            topic: commandTopic,
-            payload: { p: LshProtocol.FAILOVER, ct: clickType, bi: buttonId },
-            qos: 2,
-          };
+          result.messages[Output.Lsh] = this._createLshCommand(
+            commandTopic,
+            {
+              p: LshProtocol.FAILOVER,
+              t: clickType,
+              i: buttonId,
+            } as FailoverClickPayload,
+            2,
+          );
         }
       } else {
         result.errors.push(
-          `Unexpected error during click processing for ${transactionKey}: ${String(error)}`
+          `Unexpected error during click processing for ${transactionKey}: ${String(
+            error
+          )}`
         );
       }
     }
@@ -781,7 +842,7 @@ export class LshLogicService {
     payload: NetworkClickPayload
   ): ServiceResult {
     const result = this.createEmptyResult();
-    const { bi: buttonId, ct: clickType } = payload;
+    const { i: buttonId, t: clickType } = payload;
     const transactionKey = `${deviceName}.${buttonId}.${clickType}`;
 
     const transaction = this.clickManager.consumeTransaction(transactionKey);
@@ -815,7 +876,7 @@ export class LshLogicService {
    */
   private _validateClickRequest(
     deviceName: string,
-    buttonId: string,
+    buttonId: number,
     clickType: ClickType
   ): { actors: Actor[]; otherActors: string[] } {
     const deviceConfig = this.deviceConfigMap.get(deviceName);
@@ -896,11 +957,12 @@ export class LshLogicService {
     }
 
     if (otherActors.length > 0) {
-      result.messages[Output.OtherActors] = {
+      const payload: OtherActorsCommandPayload = {
         otherActors,
         stateToSet,
-        payload: `Set state=${stateToSet} for external actors.`,
       };
+
+      result.messages[Output.OtherActors] = { payload };
     }
     return result;
   }
@@ -914,6 +976,7 @@ export class LshLogicService {
     stateToSet: boolean
   ): NodeMessage[] {
     const commands: NodeMessage[] = [];
+    const stateValue = stateToSet ? 1 : 0;
     for (const actor of actors) {
       // The device's existence is guaranteed by _validateClickRequest.
       // We can assert non-null here to satisfy TypeScript.
@@ -925,33 +988,37 @@ export class LshLogicService {
         !actor.allActuators && actor.actuators.length === 1;
 
       if (isSingleSpecificActuator) {
-        commands.push({
-          topic: commandTopic,
-          payload: {
-            p: LshProtocol.APPLY_SINGLE_ACTUATOR_STATE,
-            ai: actor.actuators[0],
-            as: stateToSet,
-          },
-          qos: 2,
-        });
+        commands.push(
+          this._createLshCommand(
+            commandTopic,
+            {
+              p: LshProtocol.SET_SINGLE_ACTUATOR,
+              i: actor.actuators[0],
+              s: stateValue,
+            } as SetSingleActuatorPayload,
+            2
+          )
+        );
       } else {
-        const newState = [...device.actuatorStates];
+        const newState = device.actuatorStates.map((s) => (s ? 1 : 0));
         if (actor.allActuators) {
-          newState.fill(stateToSet);
+          newState.fill(stateValue);
         } else {
           for (const actuatorId of actor.actuators) {
             const index = device.actuatorIndexes[actuatorId];
-            if (index !== undefined) newState[index] = stateToSet;
+            if (index !== undefined) newState[index] = stateValue;
           }
         }
-        commands.push({
-          topic: commandTopic,
-          payload: {
-            p: LshProtocol.APPLY_ALL_ACTUATORS_STATE,
-            as: newState,
-          },
-          qos: 2,
-        });
+        commands.push(
+          this._createLshCommand(
+            commandTopic,
+            {
+              p: LshProtocol.SET_STATE,
+              s: newState,
+            } as SetStatePayload,
+            2
+          )
+        );
       }
     }
     return commands;
@@ -965,33 +1032,40 @@ export class LshLogicService {
   private _preparePings(actions: WatchdogActions): {
     messages: OutputMessages;
     logs: string[];
+    stagger: boolean;
   } {
     const messages: OutputMessages = {};
     const logs: string[] = [];
     const devicesToPing = Array.from(actions.devicesToPing);
     const totalConfiguredDevices = this.systemConfig!.devices.length;
+    let stagger = false;
 
     if (devicesToPing.length === totalConfiguredDevices) {
       logs.push(
         `All ${totalConfiguredDevices} devices are silent. Preparing a single broadcast ping.`
       );
-      messages[Output.Lsh] = {
-        topic: this.serviceTopic,
-        payload: { p: LshProtocol.PING },
-        qos: 1,
-      };
+      messages[Output.Lsh] = this._createLshCommand(
+        this.serviceTopic,
+        { p: LshProtocol.PING } as PingPayload,
+        1
+      );
     } else {
       logs.push(
         `Preparing staggered pings for ${devicesToPing.length} device(s)...`
       );
-      const pingCommands: NodeMessage[] = devicesToPing.map((deviceName) => ({
-        topic: `${this.lshBasePath}${deviceName}/IN`,
-        payload: { p: LshProtocol.PING },
-        qos: 1,
-      }));
+      if (devicesToPing.length > 1) {
+        stagger = true;
+      }
+      const pingCommands: NodeMessage[] = devicesToPing.map((deviceName) =>
+        this._createLshCommand(
+          `${this.lshBasePath}${deviceName}/IN`,
+          { p: LshProtocol.PING } as PingPayload,
+          1
+        )
+      );
       messages[Output.Lsh] = pingCommands;
     }
-    return { messages, logs };
+    return { messages, logs, stagger };
   }
 
   /**
@@ -1007,10 +1081,16 @@ export class LshLogicService {
     status: "healthy" | "unhealthy",
     details?: object
   ): { messages: OutputMessages } {
+    const payload: AlertPayload = {
+      message: formatAlertMessage(devices, status, details),
+      status,
+      devices,
+      details,
+    };
     return {
       messages: {
         [Output.Alerts]: {
-          payload: formatAlertMessage(devices, status, details),
+          payload,
         },
       },
     };
