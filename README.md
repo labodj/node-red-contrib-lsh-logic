@@ -125,6 +125,20 @@ This ensures your `mqtt-in` node is always listening to exactly the right topics
 - **File Location**: Keep your `system-config.json` in a sub-folder of your Node-RED user directory (e.g., `~/.node-red/configs/`) to ensure it's included in your backups.
 - **Context for Debugging**: Use the "Context Interaction" settings to expose the internal state to a flow or global variable. This is invaluable for creating dashboards or debugging issues without needing to add `debug` nodes everywhere.
 
+## Advanced Usage: Using MsgPack
+
+This node supports both JSON (default) and MsgPack for payload encoding and decoding, which can significantly reduce network traffic and improve performance on constrained devices.
+
+### Sending Commands (Output)
+
+In the node's configuration panel, you can set the **LSH Protocol** option to "MsgPack". When this is selected, all commands sent from the **LSH Commands** output (e.g., state changes, pings, click acks) will have their payloads automatically encoded as MsgPack. Your LSH devices must be programmed to decode MsgPack payloads on their `.../IN` topic.
+
+### Receiving Messages (Input)
+
+The node automatically detects and decodes incoming MsgPack payloads. For this to work, you must correctly configure the `mqtt-in` node that feeds messages into this node.
+
+In the `mqtt-in` node's settings, change the **Output** option from "a parsed JSON Object" to **"a Buffer"**.
+
 ## Troubleshooting
 
 - **Node Status: "Config Error"**: This status appears if the `system-config.json` file cannot be read or is invalid. Check the path in the node's settings and use a JSON linter to validate the file's syntax.
