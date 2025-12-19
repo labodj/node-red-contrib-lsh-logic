@@ -23,6 +23,8 @@ export interface LshLogicNodeDef extends NodeDef {
   lshBasePath: string;
   /** Broadcast topic for global commands like a system-wide ping. */
   serviceTopic: string;
+  /** The protocol to use for LSH command payloads. */
+  protocol: "json" | "msgpack";
   /** Prefix for context keys when reading external device states. */
   otherDevicesPrefix: string;
   /** Path to the main JSON config, relative to the Node-RED user directory. */
@@ -53,6 +55,10 @@ export interface LshLogicNodeDef extends NodeDef {
   pingTimeout: number;
   /** Seconds to wait for initial Homie states before running active verification. */
   initialStateTimeout: number;
+  /** Enable Home Assistant Auto-Discovery for Homie devices. */
+  haDiscovery: boolean;
+  /** Prefix for Home Assistant discovery topics (default: 'homeassistant'). */
+  haDiscoveryPrefix: string;
 }
 
 /**
@@ -98,6 +104,8 @@ export interface ServiceResult {
   errors: string[];
   /** Flag indicating if the public-facing state has changed and should be exposed. */
   stateChanged: boolean;
+  /** If true, indicates that an array of LSH messages should be sent with a delay between them. */
+  staggerLshMessages?: boolean;
 }
 
 // --------------------------------------------------------------------------
@@ -108,8 +116,8 @@ export interface ServiceResult {
  * Defines the types of network clicks for improved type safety and readability.
  */
 export enum ClickType {
-  Long = "lc",
-  SuperLong = "slc",
+  Long = 1,
+  SuperLong = 2,
 }
 
 /**
@@ -118,39 +126,41 @@ export enum ClickType {
  * compared to using raw strings like "d_dd" throughout the application.
  */
 export enum LshProtocol {
-  // Client -> Node (ESP -> Controllino)
-  /** (d_dd) Client -> Node: Reports device details like name, actuators, and buttons. */
-  DEVICE_DETAILS = "d_dd",
-  /** (d_as) Client -> Node: Reports the current state of all actuators. */
-  DEVICE_ACTUATORS_STATE = "d_as",
-  /** (c_nc) Client -> Node: Network Click request or confirmation. */
-  NETWORK_CLICK = "c_nc",
-  /** (d_b) Client -> Node: Notification that the device has booted up. */
-  DEVICE_BOOT = "d_b",
+  // Controllino -> ESP
+  /** Client -> Node: Reports device details like name, actuators, and buttons. */
+  DEVICE_DETAILS = 1,
+  /** Client -> Node: Reports the current state of all actuators. */
+  ACTUATORS_STATE = 2,
+  /** Client -> Node: Network Click request or confirmation. */
+  NETWORK_CLICK = 3,
 
-  // Node -> Client (Controllino -> ESP)
-  /** (c_sdd) Node -> Client: Request for the device to send its details. */
-  SEND_DEVICE_DETAILS = "c_sdd",
-  /** (c_sas) Node -> Client: Request for the device to send its actuator states. */
-  SEND_ACTUATORS_STATE = "c_sas",
-  /** (c_aas) Node -> Client: Command to set the state of all actuators on a device. */
-  APPLY_ALL_ACTUATORS_STATE = "c_aas",
-  /** (c_asas) Node -> Client: Command to set the state of a single, specific actuator. */
-  APPLY_SINGLE_ACTUATOR_STATE = "c_asas",
-  /** (d_nca) Node -> Client: Acknowledgment of a valid Network Click request. */
-  NETWORK_CLICK_ACK = "d_nca",
-  /** (c_f) Node -> Client: Failover signal for a specific click action that cannot be performed. */
-  FAILOVER = "c_f",
-  /** (c_gf) Node -> Client: Failover signal for a system-level issue (e.g., config not loaded). */
-  GENERAL_FAILOVER = "c_gf",
-  /** (rbt) Node -> Client: Command to reboot the ESP device. */
-  REBOOT = "rbt",
-  /** (rst) Node -> Client: Command to reset the ESP device. */
-  RESET = "rst",
+  // Omnidirectional
+  /** Notification that the device has booted up. */
+  BOOT_NOTIFICATION = 4,
+  /** Ping message for health checks. */
+  PING = 5,
 
-  // Bidirectional
-  /** (d_p) Node <-> Client: Ping/pong message for health checks. */
-  PING = "d_p",
+  // ESP -> Controllino (Node-RED -> ESP)
+  /** Node -> Client: Request for the device to send its details. */
+  REQUEST_DETAILS = 10,
+  /** Node -> Client: Request for the device to send its actuator states. */
+  REQUEST_STATE = 11,
+  /** Node -> Client: Command to set the state of all actuators on a device. */
+  SET_STATE = 12,
+  /** Node -> Client: Command to set the state of a single, specific actuator. */
+  SET_SINGLE_ACTUATOR = 13,
+  /** Node -> Client: Acknowledgment of a valid Network Click request. */
+  NETWORK_CLICK_ACK = 14,
+  /** Node -> Client: Failover signal for a specific click action that cannot be performed. */
+  FAILOVER = 15,
+  /** Node -> Client: Failover signal for a system-level issue (e.g., config not loaded). */
+  GENERAL_FAILOVER = 16,
+
+  // System Commands (MQTT -> ESP)
+  /** Node -> Client: Command to reboot the ESP device. */
+  REBOOT = 254,
+  /** Node -> Client: Command to reset the ESP device. */
+  RESET = 255,
 }
 
 // --------------------------------------------------------------------------
@@ -158,43 +168,53 @@ export enum LshProtocol {
 // These interfaces define the expected structure of messages received from devices.
 // --------------------------------------------------------------------------
 
-/** Payload: Data_Device Details (`d_dd`). Sent by a device to report its static configuration via the 'conf' topic. */
+/** Payload: Device Details. Sent by a device to report its static configuration via the 'conf' topic. */
 export interface DeviceDetailsPayload {
   p: LshProtocol.DEVICE_DETAILS;
   /** The display name of the device (e.g., 'c1'). */
-  dn: string;
-  /** An array of actuator IDs (e.g., ['A1', 'A2']). */
-  ai: string[];
-  /** An array of button IDs (e.g., ['B1']). */
-  bi: string[];
+  n: string;
+  /** An array of actuator IDs (e.g., ['1', '5']). */
+  a: number[];
+  /** An array of button IDs (e.g., ['1']). */
+  b: number[];
 }
 
-/** Payload: Data_Actuators State (`d_as`). Sent by a device to report the live state of its actuators via the 'state' topic. */
+/** Payload: Actuators State. Sent by a device to report the live state of its actuators via the 'state' topic. */
 export interface DeviceActuatorsStatePayload {
-  p: LshProtocol.DEVICE_ACTUATORS_STATE;
+  p: LshProtocol.ACTUATORS_STATE;
   /** An array representing the ON/OFF state of each actuator. */
-  as: boolean[];
+  s: (0 | 1)[];
 }
 
-/** Payload: Command_Network Click (`c_nc`). Sent by a device when a button is long-pressed, via the 'misc' topic. */
+/** Payload: Network Click. Sent by a device when a button is long-pressed, via the 'misc' topic. */
 export interface NetworkClickPayload {
   p: LshProtocol.NETWORK_CLICK;
   /** The type of click, e.g., long-click or super-long-click. */
-  ct: ClickType;
+  t: ClickType;
   /** The ID of the button that was pressed (e.g., 'B1'). */
-  bi: string;
-  /** The phase of the transaction: `false` for the initial request, `true` for the final confirmation. */
-  c: boolean;
+  i: number;
+  /** The phase of the transaction: `0` for the initial request, `1` for the final confirmation. */
+  c: 0 | 1;
 }
 
-/** Payload: Data_Boot (`d_b`). Sent by a device upon startup, via the 'misc' topic. */
+/** Payload: Boot. Sent by a device upon startup, via the 'misc' topic. */
 export interface DeviceBootPayload {
-  p: LshProtocol.DEVICE_BOOT;
+  p: LshProtocol.BOOT_NOTIFICATION;
 }
 
-/** Payload: Data_Ping (`d_p`). A ping or pong message for health checks, sent via the 'misc' topic. */
+/** Payload: Ping. A ping message for health checks, sent via the 'misc' topic. */
 export interface PingPayload {
   p: LshProtocol.PING;
+}
+
+/**
+ * Defines the structure of the message payload sent to the 'OtherActors' output.
+ */
+export interface OtherActorsCommandPayload {
+  /** The list of target actor names (e.g., Tasmota, Zigbee devices). */
+  otherActors: string[];
+  /** The desired boolean state to set. */
+  stateToSet: boolean;
 }
 
 /**
@@ -212,60 +232,60 @@ export type AnyMiscTopicPayload =
 // These interfaces define the structure of command messages sent to devices.
 // --------------------------------------------------------------------------
 
-/** Payload: Command_Send Device Details (`c_sdd`). Sent to request a device's configuration. */
-export interface SendDeviceDetailsPayload {
-  p: LshProtocol.SEND_DEVICE_DETAILS;
+/** Payload: Request Device Details. Sent to request a device's configuration. */
+export interface RequestDetailsPayload {
+  p: LshProtocol.REQUEST_DETAILS;
 }
 
-/** Payload: Command_Send Actuators State (`c_sas`). Sent to request a device's current actuator states. */
-export interface SendActuatorsStatePayload {
-  p: LshProtocol.SEND_ACTUATORS_STATE;
+/** Payload: Request Actuators State. Sent to request a device's current actuator states. */
+export interface RequestStatePayload {
+  p: LshProtocol.REQUEST_STATE;
 }
 
-/** Payload: Command_Apply All Actuators State (`c_aas`). Sent to set all actuator states on a device. */
-export interface ApplyAllActuatorsStatePayload {
-  p: LshProtocol.APPLY_ALL_ACTUATORS_STATE;
+/** Payload: Apply All Actuators State. Sent to set all actuator states on a device. */
+export interface SetStatePayload {
+  p: LshProtocol.SET_STATE;
   /** An array representing the desired ON/OFF state for each actuator. */
-  as: boolean[];
+  s: (0 | 1)[];
 }
 
-/** Payload: Command_Apply Single Actuator State (`c_asas`). Sent to set a single actuator's state. */
-export interface ApplySingleActuatorStatePayload {
-  p: LshProtocol.APPLY_SINGLE_ACTUATOR_STATE;
-  /** The ID of the target actuator (e.g., 'A1'). */
-  ai: string;
+/** Payload: Apply Single Actuator State. Sent to set a single actuator's state. */
+export interface SetSingleActuatorPayload {
+  p: LshProtocol.SET_SINGLE_ACTUATOR;
+  /** The ID of the target actuator (e.g., '7'). */
+  i: number;
   /** The desired state for the actuator. */
-  as: boolean;
+  s: 0 | 1;
 }
 
-/** Payload: Data_Network Click Ack (`d_nca`). Sent to acknowledge a valid network click request. */
+/** Payload: Network Click Ack. Sent to acknowledge a valid network click request. */
 export interface NetworkClickAckPayload {
   p: LshProtocol.NETWORK_CLICK_ACK;
   /** The type of click being acknowledged. */
-  ct: ClickType;
+  t: ClickType;
   /** The ID of the button whose click is being acknowledged. */
-  bi: string;
+  i: number;
 }
-/** Payload: Command_General Failover (`c_gf`). Sent to indicate a system-level failure (e.g., config not loaded). */
-export interface GeneralFailoverPayload {
+/** Payload: General Failover. Sent to indicate a system-level failure (e.g., config not loaded). */
+export interface FailoverPayload {
   p: LshProtocol.GENERAL_FAILOVER;
 }
 
-/** Payload: Command_Failover (`c_f`). Sent to indicate a click-specific action has failed (e.g., target offline). */
-export interface FailoverPayload {
+/** Payload: Failover. Sent to indicate a click-specific action has failed (e.g., target offline). */
+export interface FailoverClickPayload {
   p: LshProtocol.FAILOVER;
   /** The type of click that failed. */
-  ct: ClickType;
+  t: ClickType;
   /** The ID of the button whose action failed. */
-  bi: string;
+  i: number;
 }
 
-/** Payload: Reboot (`rbt`). Sent to command the device to reboot. */
+/** Payload: Reboot. Sent to command the device to reboot. */
 export interface RebootPayload {
   p: LshProtocol.REBOOT;
 }
 
-/** Payload: Reset (`rst`). Sent to command the device to perform a factory reset. */
+/** Payload: Reset. Sent to command the device to perform a factory reset. */
 export interface ResetPayload {
   p: LshProtocol.RESET;
 }
@@ -282,13 +302,13 @@ export interface Actor {
   /** If true, the action applies to all actuators on the target device. */
   allActuators: boolean;
   /** If `allActuators` is false, this specifies which actuator IDs to target. */
-  actuators: string[];
+  actuators: number[];
 }
 
 /** Defines an action triggered by a button press. */
 export interface ButtonAction {
-  /** The ID of the button that triggers this action (e.g., 'B1'). */
-  id: string;
+  /** The ID of the button that triggers this action (e.g., '7'). */
+  id: number;
   /** A list of primary LSH actors to control. */
   actors: Actor[];
   /** A list of secondary, external actors to control (e.g., Tasmota, Zigbee devices). */
@@ -314,7 +334,7 @@ export interface SystemConfig {
 
 /** A map for O(1) lookup of an actuator's index by its ID. */
 export interface ActuatorIndexMap {
-  [actuatorId: string]: number;
+  [actuatorId: number]: number;
 }
 
 /**
@@ -337,9 +357,9 @@ export interface DeviceState {
   /** Timestamp of the last 'conf' message from the device. */
   lastDetailsTime: number;
   /** An ordered array of actuator IDs (e.g., ['A1', 'A2']). */
-  actuatorsIDs: string[];
+  actuatorsIDs: number[];
   /** An array of button IDs, if any (e.g., ['B1', 'B2']). */
-  buttonsIDs: string[];
+  buttonsIDs: number[];
   /** An ordered array of the current boolean states for each actuator. */
   actuatorStates: boolean[];
   /** A map for O(1) lookup of an actuator's index by its ID. Pre-computed for performance. */
@@ -363,7 +383,28 @@ export interface PendingClickTransaction {
   timestamp: number;
 }
 
-/** A registry for all ongoing click transactions, keyed by a unique identifier. */
-export interface ClickTransactionRegistry {
-  [transactionKey: string]: PendingClickTransaction;
+
+export interface MqttSubscribeMsg {
+  topic: string | string[];
+  action: "subscribe";
+  qos: 0 | 1 | 2;
+}
+
+export interface MqttUnsubscribeMsg {
+  topic: boolean | string | string[];
+  action: "unsubscribe";
+}
+
+/**
+ * Defines the structure of the message payload sent to the 'Alerts' output.
+ */
+export interface AlertPayload {
+  /** The formatted, human-readable alert message. */
+  message: string;
+  /** The health status that triggered the alert. */
+  status: 'unhealthy' | 'healthy';
+  /** The list of devices involved in the alert. */
+  devices: { name: string; reason: string }[];
+  /** Optional raw details of the event that triggered the alert. */
+  details?: unknown;
 }

@@ -11,6 +11,7 @@ import {
   ClickType,
   DeviceActuatorsStatePayload,
   DeviceDetailsPayload,
+  LshProtocol,
   SystemConfig
 } from "./types";
 
@@ -23,8 +24,8 @@ const buttonActionSchema = {
   type: "object",
   properties: {
     id: {
-      type: "string",
-      description: "The unique identifier for the button (e.g., 'B1').",
+      type: "integer",
+      description: "The unique identifier for the button (e.g., '7').",
     },
     actors: {
       type: "array",
@@ -44,10 +45,25 @@ const buttonActionSchema = {
             type: "array",
             description:
               "A list of specific actuator IDs to control (if allActuators is false).",
-            items: { type: "string" },
+            items: { type: "integer" },
           },
         },
-        required: ["name", "allActuators", "actuators"],
+        required: ["name", "allActuators"],
+
+        if: {
+          properties: { allActuators: { const: false } },
+        },
+        then: {
+          required: ["actuators"],
+          properties: {
+            actuators: { type: "array", minItems: 1 }
+          }
+        },
+        else: {
+          properties: {
+            actuators: { type: "array", maxItems: 0 }
+          }
+        }
       },
     },
     otherActors: {
@@ -99,83 +115,79 @@ export const systemConfigSchema = {
 
 
 /**
- * Schema for the payload of an LSH device's 'conf' topic (`d_dd`).
+ * Schema for the payload of an LSH device's 'conf' topic.
  * This payload provides the device's static configuration details.
  */
 export const deviceDetailsPayloadSchema = {
   $id: "DeviceDetailsPayload",
-  description: "Schema for a device's static configuration details (d_dd).",
+  description: "Schema for a device's static configuration details.",
   type: "object",
   properties: {
-    p: { const: "d_dd" },
-    ai: {
+    p: { const: LshProtocol.DEVICE_DETAILS },
+    n: { type: "string", description: "Device Name." },
+    a: {
       type: "array",
-      items: { type: "string" },
+      items: { type: "integer" },
       description: "Array of Actuator IDs.",
     },
-    bi: {
+    b: {
       type: "array",
-      items: { type: "string" },
+      items: { type: "integer" },
       description: "Array of Button IDs.",
     },
-    dn: { type: "string", description: "Device Name." },
   },
-  required: ["p", "ai", "bi", "dn"],
+  required: ["p", "n", "a", "b"],
   additionalProperties: true,
 };
 
 /**
- * Schema for the payload of an LSH device's 'state' topic (`d_as`).
+ * Schema for the payload of an LSH device's 'state' topic.
  * This payload reports the current state of all actuators.
  */
 export const deviceActuatorsStatePayloadSchema = {
   $id: "DeviceActuatorsStatePayload",
-  description: "Schema for a device's actuator states (d_as).",
+  description: "Schema for a device's actuator states.",
   type: "object",
   properties: {
-    p: { const: "d_as" },
-    as: {
+    p: { const: LshProtocol.ACTUATORS_STATE },
+    s: {
       type: "array",
-      items: { type: "boolean" },
-      description: "Array of Actuator States (true=ON, false=OFF).",
+      items: { type: "integer", enum: [0, 1] },
+      description: "Array of Actuator States (1=ON, 0=OFF).",
     },
   },
-  required: ["p", "as"],
+  required: ["p", "s"],
   additionalProperties: true,
 };
 
-/** Schema for a Network Click payload ('c_nc'). */
+/** Schema for a Network Click payload. */
 const networkClickPayloadSchema = {
   type: "object",
   properties: {
-    p: { const: "c_nc", description: "Protocol: Network Click." },
-    bi: { type: "string", description: "Button ID that was pressed." },
-    ct: { enum: Object.values(ClickType), description: "Click Type: 'lc' or 'slc'." },
-    c: {
-      type: "boolean",
-      description:
-        "Confirmation flag: false for request, true for confirmation.",
-    },
+    p: { const: LshProtocol.NETWORK_CLICK },
+    i: { type: "integer", description: "Button ID that was pressed." },
+    t: { enum: Object.values(ClickType).filter(v => typeof v === 'number'), description: "Click Type ID." },
+    c: { type: "integer", enum: [0, 1], description: "Confirmation flag." },
   },
-  required: ["p", "bi", "ct", "c"],
+  required: ["p", "i", "t", "c"],
   additionalProperties: true,
 };
 
-/** Schema for a Device Boot payload ('d_b'). */
+/** Schema for a Device Boot payload. */
 const deviceBootPayloadSchema = {
   type: "object",
   properties: {
-    p: { const: "d_b", description: "Protocol: Device Boot." },
+    p: { const: LshProtocol.BOOT_NOTIFICATION },
   },
   required: ["p"],
   additionalProperties: true,
 };
 
-/** Schema for a Ping payload ('d_p'). */
+/** Schema for a Ping payload. */
 const pingPayloadSchema = {
   type: "object",
   properties: {
-    p: { const: "d_p", description: "Protocol: Ping." },
+    p: { const: LshProtocol.PING },
   },
   required: ["p"],
   additionalProperties: true,
@@ -183,15 +195,13 @@ const pingPayloadSchema = {
 
 /**
  * A "super-schema" that validates any valid 'misc' topic payload.
- * It uses a discriminator to efficiently select the correct sub-schema based
- * on the 'p' property. This allows validating any incoming 'misc' message
- * with a single `validate` call.
+ * It uses a `oneOf` keyword to ensure the payload matches exactly one of the
+ * valid misc schemas. This replaces the `discriminator` which required string values.
  */
 export const anyMiscTopicPayloadSchema = {
   $id: "AnyMiscTopicPayload",
-  description: "Discriminator schema for any valid 'misc' topic payload.",
+  description: "Schema for any valid 'misc' topic payload.",
   type: "object",
-  discriminator: { propertyName: "p" },
   oneOf: [
     networkClickPayloadSchema,
     deviceBootPayloadSchema,
@@ -215,7 +225,7 @@ export interface AppValidators {
  * @returns An object containing all compiled validation functions for the application.
  */
 export function createAppValidators(): AppValidators {
-  const ajv = new Ajv({ discriminator: true, allErrors: true });
+  const ajv = new Ajv({ discriminator: false, allErrors: true });
 
   return {
     validateSystemConfig: ajv.compile<SystemConfig>(systemConfigSchema),
