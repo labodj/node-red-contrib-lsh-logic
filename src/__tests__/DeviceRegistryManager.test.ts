@@ -36,26 +36,26 @@ describe("DeviceRegistryManager", () => {
   it("should store device details and initialize actuator states and indexes", () => {
     const details: DeviceDetailsPayload = {
       p: LshProtocol.DEVICE_DETAILS,
-      dn: "new-device",
-      ai: ["A1", "A2"],
-      bi: ["B1"],
+      n: "new-device",
+      a: [1, 2],
+      b: [1],
     };
     manager.registerDeviceDetails("new-device", details);
     const deviceState = manager.getDevice("new-device");
 
     expect(deviceState).toBeDefined();
-    expect(deviceState?.actuatorsIDs).toEqual(["A1", "A2"]);
+    expect(deviceState?.actuatorsIDs).toEqual([1, 2]);
     // Actuator states should be initialized to false for the correct length.
     expect(deviceState?.actuatorStates).toEqual([false, false]);
-    expect(deviceState?.actuatorIndexes).toEqual({ A1: 0, A2: 1 });
+    expect(deviceState?.actuatorIndexes).toEqual({ 1: 0, 2: 1 });
   });
 
   it("should throw an error if actuator state length mismatches config", () => {
     manager.registerDeviceDetails("device-1", {
       p: LshProtocol.DEVICE_DETAILS,
-      dn: "device-1",
-      ai: ["A1"],
-      bi: [],
+      n: "device-1",
+      a: [1],
+      b: [],
     });
     expect(() => {
       manager.registerActuatorStates("device-1", [true, false]);
@@ -65,9 +65,9 @@ describe("DeviceRegistryManager", () => {
   it("should prune a device from the registry", () => {
     manager.registerDeviceDetails("device-to-prune", {
       p: LshProtocol.DEVICE_DETAILS,
-      dn: "d",
-      ai: [],
-      bi: [],
+      n: "d",
+      a: [],
+      b: [],
     });
     expect(manager.getDevice("device-to-prune")).toBeDefined();
 
@@ -116,7 +116,7 @@ describe("DeviceRegistryManager", () => {
 
   describe("updateHealthFromResult (Watchdog)", () => {
     beforeEach(() => {
-      manager.registerDeviceDetails("health-test-dev", { p: LshProtocol.DEVICE_DETAILS, dn: "d", ai: [], bi: [] });
+      manager.registerDeviceDetails("health-test-dev", { p: LshProtocol.DEVICE_DETAILS, n: "d", a: [], b: [] });
     });
 
     it("should update health to OK and clear stale flag", () => {
@@ -192,7 +192,7 @@ describe("DeviceRegistryManager", () => {
 
   describe("getSmartToggleState", () => {
     beforeEach(() => {
-      manager.registerDeviceDetails("light-group", { p: LshProtocol.DEVICE_DETAILS, dn: "lg", ai: ["L1", "L2", "L3", "L4"], bi: [] });
+      manager.registerDeviceDetails("light-group", { p: LshProtocol.DEVICE_DETAILS, n: "lg", a: [1, 2, 3, 4], b: [] });
     });
 
     it("should return true when less than 50% of actuators are on", () => {
@@ -214,7 +214,7 @@ describe("DeviceRegistryManager", () => {
     it("should correctly calculate state for a specific subset of actuators", () => {
       manager.registerActuatorStates("light-group", [true, false, true, false]); // L1 and L3 are ON
       // Target only L1 and L2. One is on, one is off. 1/2 = 50%, so turn OFF.
-      const actors: Actor[] = [{ name: "light-group", allActuators: false, actuators: ["L1", "L2"] }];
+      const actors: Actor[] = [{ name: "light-group", allActuators: false, actuators: [1, 2] }];
       const result = manager.getSmartToggleState(actors, []);
       expect(result.stateToSet).toBe(false);
       expect(result.active).toBe(1);
@@ -258,7 +258,7 @@ describe("DeviceRegistryManager", () => {
 
     it("should ignore LSH actuators with undefined indexes", () => {
       manager.registerActuatorStates("light-group", [true, true, true, true]);
-      const actors: Actor[] = [{ name: "light-group", allActuators: false, actuators: ["L1", "non-existent"] }];
+      const actors: Actor[] = [{ name: "light-group", allActuators: false, actuators: [1, 999] }];
       const result = manager.getSmartToggleState(actors, []);
 
       // Should only count L1 which is on. Total is 1. Active is 1. 1/1 > 50% -> turn OFF.

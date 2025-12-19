@@ -61,5 +61,10 @@ export const formatAlertMessage = (
  * @param b - The second array.
  * @returns `true` if the arrays are identical, otherwise `false`.
  */
-export const areSameArray = <T>(a: T[], b: T[]): boolean =>
-  a.length === b.length && a.every((v, i) => v === b[i]);
+export const areSameArray = <T>(a: T[], b: T[]): boolean => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+};

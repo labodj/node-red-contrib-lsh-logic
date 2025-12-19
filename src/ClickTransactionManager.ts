@@ -1,13 +1,8 @@
-/**
- * @file Manages the state and lifecycle of two-phase commit network click transactions.
- * This class handles the creation, consumption, and expiration of pending clicks,
- * abstracting the timing logic away from the main service orchestrator.
- */
-import { ClickTransactionRegistry, Actor } from "./types";
+import { PendingClickTransaction, Actor } from "./types";
 
 export class ClickTransactionManager {
   /** A registry of all ongoing click transactions, keyed by a unique identifier. */
-  private pendingClicks: ClickTransactionRegistry = {};
+  private pendingClicks: Map<string, PendingClickTransaction> = new Map();
   /** The configured timeout for click transactions, in milliseconds. */
   private readonly clickTimeoutMs: number;
 
@@ -31,11 +26,11 @@ export class ClickTransactionManager {
     actors: Actor[],
     otherActors: string[]
   ): void {
-    this.pendingClicks[transactionKey] = {
+    this.pendingClicks.set(transactionKey, {
       actors,
       otherActors,
       timestamp: Date.now(),
-    };
+    });
   }
 
   /**
@@ -48,12 +43,12 @@ export class ClickTransactionManager {
   public consumeTransaction(
     transactionKey: string
   ): { actors: Actor[]; otherActors: string[] } | null {
-    const transaction = this.pendingClicks[transactionKey];
+    const transaction = this.pendingClicks.get(transactionKey);
     if (!transaction) {
       return null;
     }
     // The transaction is confirmed, so remove it from the pending list.
-    delete this.pendingClicks[transactionKey];
+    this.pendingClicks.delete(transactionKey);
     return {
       actors: transaction.actors,
       otherActors: transaction.otherActors,
@@ -69,9 +64,9 @@ export class ClickTransactionManager {
   public cleanupExpired(): number {
     const now = Date.now();
     let cleanedCount = 0;
-    for (const key in this.pendingClicks) {
-      if (now - this.pendingClicks[key].timestamp > this.clickTimeoutMs) {
-        delete this.pendingClicks[key];
+    for (const [key, transaction] of this.pendingClicks) {
+      if (now - transaction.timestamp > this.clickTimeoutMs) {
+        this.pendingClicks.delete(key);
         cleanedCount++;
       }
     }
@@ -83,6 +78,6 @@ export class ClickTransactionManager {
    * @returns The number of pending clicks.
    */
   public getPendingCount(): number {
-    return Object.keys(this.pendingClicks).length;
+    return this.pendingClicks.size;
   }
 }
