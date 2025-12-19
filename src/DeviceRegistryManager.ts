@@ -71,12 +71,12 @@ export class DeviceRegistryManager {
     return this.registry[deviceName];
   }
 
-/**
-   * Returns a deep copy of the entire device registry.
-   * This prevents external code from accidentally modifying the internal state.
-   * Uses the modern, robust `structuredClone` function.
-   * @returns A deep copy of the current device registry object.
-   */
+  /**
+     * Returns a deep copy of the entire device registry.
+     * This prevents external code from accidentally modifying the internal state.
+     * Uses the modern, robust `structuredClone` function.
+     * @returns A deep copy of the current device registry object.
+     */
   public getRegistry(): DeviceRegistry {
     return structuredClone(this.registry);
   }
@@ -100,11 +100,12 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Updates the registry with configuration details from a device's 'conf' message.
-   * @param deviceName - The name of the device.
-   * @param details - The validated payload from the 'conf' topic.
-   * @returns An object indicating if the device details have changed.
-   */
+     * Updates the registry with configuration details from a device's 'conf' message.
+     * Now uses the new protocol with keys 'n', 'a', 'b'.
+     * @param deviceName - The name of the device.
+     * @param details - The validated payload from the 'conf' topic.
+     * @returns An object indicating if the device details have changed.
+     */
   public registerDeviceDetails(
     deviceName: string,
     details: DeviceDetailsPayload
@@ -115,11 +116,12 @@ export class DeviceRegistryManager {
     const oldButtonIDs = [...device.buttonsIDs];
     let changed = false;
 
-    if (!areSameArray(oldActuatorIDs, details.ai) || !areSameArray(oldButtonIDs, details.bi)) {
+    // Use the new keys 'a' and 'b' from the details object
+    if (!areSameArray(oldActuatorIDs, details.a) || !areSameArray(oldButtonIDs, details.b)) {
       changed = true;
     }
 
-    const actuatorIndexes: ActuatorIndexMap = details.ai.reduce(
+    const actuatorIndexes: ActuatorIndexMap = details.a.reduce(
       (acc, id, index) => {
         acc[id] = index;
         return acc;
@@ -131,14 +133,14 @@ export class DeviceRegistryManager {
     Object.assign(device, {
       lastSeenTime: Date.now(),
       lastDetailsTime: Date.now(),
-      actuatorsIDs: details.ai,
-      buttonsIDs: details.bi,
+      actuatorsIDs: details.a,
+      buttonsIDs: details.b,
       actuatorIndexes,
     });
+
     // If the number of actuators has changed, the old state array is invalid.
-    // Reset it to the new correct length, initialized to all 'false'.
-    if (device.actuatorStates.length !== details.ai.length) {
-      device.actuatorStates = new Array<boolean>(details.ai.length).fill(false);
+    if (device.actuatorStates.length !== details.a.length) {
+      device.actuatorStates = new Array<boolean>(details.a.length).fill(false);
       changed = true;
     }
 
@@ -230,12 +232,12 @@ export class DeviceRegistryManager {
     return { stateChanged: willChange };
   }
 
- /**
-   * Records a ping response from a device, marking it as healthy.
-   * A ping response is a strong indicator of LSH-level health.
-   * @param deviceName - The name of the device that responded.
-   * @returns An object indicating if the internal state was changed.
-   */
+  /**
+    * Records a ping response from a device, marking it as healthy.
+    * A ping response is a strong indicator of LSH-level health.
+    * @param deviceName - The name of the device that responded.
+    * @returns An object indicating if the internal state was changed.
+    */
   public recordPingResponse(deviceName: string): { stateChanged: boolean } {
     const device = this._ensureDeviceExists(deviceName);
 
@@ -245,12 +247,12 @@ export class DeviceRegistryManager {
     const stateChanged = !wasHealthy || wasStale;
 
     if (stateChanged) {
-        device.isHealthy = true;
-        device.isStale = false;
-        device.alertSent = false;
-        device.lastSeenTime = Date.now();
+      device.isHealthy = true;
+      device.isStale = false;
+      device.alertSent = false;
+      device.lastSeenTime = Date.now();
     }
-    
+
     return { stateChanged };
   }
 
