@@ -9,6 +9,7 @@
       homieBasePath: { value: "homie/", required: true },
       lshBasePath: { value: "LSH/", required: true },
       serviceTopic: { value: "LSH/Node-RED/SRV", required: true },
+      protocol: { value: "json", required: true },
       // Context Key Prefixes
       otherDevicesPrefix: { value: "other_devices", required: true },
       // File Config
@@ -56,6 +57,8 @@
         required: true,
         validate: RED.validators.number(),
       },
+      haDiscovery: { value: false },
+      haDiscoveryPrefix: { value: "homeassistant" },
     },
     inputs: 1,
     outputs: 5,
@@ -106,7 +109,7 @@
 
   <div class="lsh-config-section">
     <div class="lsh-config-section-title">
-      <i class="fa fa-sitemap"></i> MQTT Path Settings
+      <i class="fa fa-sitemap"></i> MQTT & protocol settings
     </div>
     <div class="form-row">
       <label for="node-input-homieBasePath">Homie Base Path</label>
@@ -136,6 +139,17 @@
       <span class="form-tip"
         >Broadcast topic for global commands (e.g., ping).</span
       >
+    </div>
+
+    <div class="form-row">
+      <label for="node-input-protocol">LSH Protocol</label>
+      <select id="node-input-protocol">
+        <option value="json">JSON</option>
+        <option value="msgpack">MsgPack</option>
+      </select>
+      <span class="form-tip">
+        Payload format for commands sent to LSH devices.
+      </span>
     </div>
   </div>
 
@@ -220,6 +234,23 @@
         >Seconds to wait for a ping response before marking a device as
         'stale'.</span
       >
+    </div>
+  </div>
+
+  <div class="lsh-config-section">
+    <div class="lsh-config-section-title">
+      <i class="fa fa-home"></i> Home Assistant Integration
+    </div>
+    <div class="form-row">
+      <label for="node-input-haDiscovery" style="width: 70%;">Enable Auto-Discovery</label>
+      <input type="checkbox" id="node-input-haDiscovery" style="display: inline-block; width: auto; vertical-align: top;">
+      <div class="form-tip" style="margin-top: 5px;">
+        Automatically generate Home Assistant configuration for all Homie devices found under the configured base path.
+      </div>
+    </div>
+    <div class="form-row">
+      <label for="node-input-haDiscoveryPrefix">Discovery Prefix</label>
+      <input type="text" id="node-input-haDiscoveryPrefix" placeholder="homeassistant">
     </div>
   </div>
 
@@ -456,6 +487,32 @@
     <li>
       The "Debug" output of this node will pass through any message it receives,
       allowing you to see the raw data before it's processed.
+    </li>
+  </ul>
+
+  <h4>Advanced Usage: Using MsgPack</h4>
+  <p>
+    This node supports both JSON (default) and MsgPack for payload encoding and
+    decoding, which can significantly reduce network traffic.
+  </p>
+  <p><b>Sending Commands (Output):</b></p>
+  <p>
+    In the node's configuration panel, you can set the <b>LSH Protocol</b> to
+    "MsgPack". When this is selected, all commands sent from the
+    <b>LSH Commands</b> output will have their payloads automatically encoded as
+    MsgPack. Your LSH devices must be programmed to decode MsgPack payloads on
+    their `.../IN` topic.
+  </p>
+  <p><b>Receiving Messages (Input):</b></p>
+  <p>
+    The node automatically detects and decodes incoming MsgPack payloads. To
+    make this work, you must configure the <code>mqtt-in</code> node that feeds
+    messages into this node:
+  </p>
+  <ul>
+    <li>
+      In the <code>mqtt-in</code> node settings, set the "Output" option to
+      <b>"a Buffer"</b>.
     </li>
   </ul>
 </script>
