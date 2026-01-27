@@ -122,44 +122,51 @@ export enum ClickType {
 
 /**
  * Defines a type-safe enum for LSH protocol identifiers.
- * Using a string enum prevents typos and makes the code more understandable
- * compared to using raw strings like "d_dd" throughout the application.
  */
 export enum LshProtocol {
-  // Controllino -> ESP
-  /** Client -> Node: Reports device details like name, actuators, and buttons. */
+  // === Controllino → ESP ===
+  /** Client → Node: Reports device details like name, actuators, and buttons.
+   *  Format: {p:1, n:"name", a:[actuatorIds], b:[buttonIds]} */
   DEVICE_DETAILS = 1,
-  /** Client -> Node: Reports the current state of all actuators. */
+  /** Client → Node: Reports the current state of all actuators using bitpacked bytes.
+   *  Format: {p:2, s:[byte0, byte1, ...]} where each byte = 8 actuator states.
+   *  Example: s=[90,15] for 12 actuators (90 = 0b01011010, 15 = 0b00001111) */
   ACTUATORS_STATE = 2,
-  /** Client -> Node: Network Click request or confirmation. */
-  NETWORK_CLICK = 3,
+  /** Client → Node: Network click request.
+   *  Format: {p:3, i:buttonId, t:clickType} */
+  NETWORK_CLICK_REQUEST = 3,
+  /** Client → Node: Network click confirmation.
+   *  Format: {p:17, i:buttonId, t:clickType} */
+  NETWORK_CLICK_CONFIRM = 17,
 
-  // Omnidirectional
-  /** Notification that the device has booted up. */
+  // === Omnidirectional ===
+  /** Notification that the device has booted up. Format: {p:4} */
   BOOT_NOTIFICATION = 4,
-  /** Ping message for health checks. */
+  /** Ping message for health checks. Format: {p:5} */
   PING = 5,
 
-  // ESP -> Controllino (Node-RED -> ESP)
-  /** Node -> Client: Request for the device to send its details. */
+  // === ESP → Controllino (Node-RED → ESP) ===
+  /** Node → Client: Request for the device to send its details. Format: {p:10} */
   REQUEST_DETAILS = 10,
-  /** Node -> Client: Request for the device to send its actuator states. */
+  /** Node → Client: Request for the device to send its actuator states. Format: {p:11} */
   REQUEST_STATE = 11,
-  /** Node -> Client: Command to set the state of all actuators on a device. */
+  /** Node → Client: Command to set the state of all actuators using bitpacked bytes.
+   *  Format: {p:12, s:[byte0, byte1, ...]} */
   SET_STATE = 12,
-  /** Node -> Client: Command to set the state of a single, specific actuator. */
+  /** Node → Client: Command to set a single actuator. Format: {p:13, i:id, s:0|1} */
   SET_SINGLE_ACTUATOR = 13,
-  /** Node -> Client: Acknowledgment of a valid Network Click request. */
+  /** Node → Client: Acknowledgment of a network click request.
+   *  Format: {p:14, i:buttonId, t:clickType} */
   NETWORK_CLICK_ACK = 14,
-  /** Node -> Client: Failover signal for a specific click action that cannot be performed. */
+  /** Node → Client: General failover signal. Format: {p:15} */
   FAILOVER = 15,
-  /** Node -> Client: Failover signal for a system-level issue (e.g., config not loaded). */
+  /** Node → Client: Failover for specific click. Format: {p:16, i:buttonId, t:clickType} */
   GENERAL_FAILOVER = 16,
 
-  // System Commands (MQTT -> ESP)
-  /** Node -> Client: Command to reboot the ESP device. */
+  // === System Commands (MQTT → ESP) ===
+  /** Node → Client: Command to reboot the ESP device. */
   REBOOT = 254,
-  /** Node -> Client: Command to reset the ESP device. */
+  /** Node → Client: Command to reset the ESP device. */
   RESET = 255,
 }
 
@@ -179,22 +186,24 @@ export interface DeviceDetailsPayload {
   b: number[];
 }
 
-/** Payload: Actuators State. Sent by a device to report the live state of its actuators via the 'state' topic. */
+/** Payload: Actuators State. Sent by a device to report the live state of its actuators via the 'state' topic.
+ * @description The state is bitpacked into an array of bytes where each byte contains 8 actuator states.
+ *              Byte 0, bit 0 = actuator 0; Byte 0, bit 7 = actuator 7; Byte 1, bit 0 = actuator 8, etc.
+ *              Example: s=[90,3] for 10 actuators (90 = 0b01011010, 3 = 0b00000011).
+ */
 export interface DeviceActuatorsStatePayload {
   p: LshProtocol.ACTUATORS_STATE;
-  /** An array representing the ON/OFF state of each actuator. */
-  s: (0 | 1)[];
+  /** An array of bitpacked bytes representing the ON/OFF state of each actuator. */
+  s: number[];
 }
 
-/** Payload: Network Click. Sent by a device when a button is long-pressed, via the 'misc' topic. */
-export interface NetworkClickPayload {
-  p: LshProtocol.NETWORK_CLICK;
+/** Payload: Network Click Request. Initial request when a button is long-pressed. */
+export interface NetworkClickRequestPayload {
+  p: LshProtocol.NETWORK_CLICK_REQUEST;
   /** The type of click, e.g., long-click or super-long-click. */
   t: ClickType;
-  /** The ID of the button that was pressed (e.g., 'B1'). */
+  /** The ID of the button that was pressed (e.g., 7). */
   i: number;
-  /** The phase of the transaction: `0` for the initial request, `1` for the final confirmation. */
-  c: 0 | 1;
 }
 
 /** Payload: Boot. Sent by a device upon startup, via the 'misc' topic. */
@@ -223,7 +232,8 @@ export interface OtherActorsCommandPayload {
  * based on the value of the 'p' property.
  */
 export type AnyMiscTopicPayload =
-  | NetworkClickPayload
+  | NetworkClickRequestPayload
+  | NetworkClickConfirmPayload
   | DeviceBootPayload
   | PingPayload;
 
@@ -245,8 +255,8 @@ export interface RequestStatePayload {
 /** Payload: Apply All Actuators State. Sent to set all actuator states on a device. */
 export interface SetStatePayload {
   p: LshProtocol.SET_STATE;
-  /** An array representing the desired ON/OFF state for each actuator. */
-  s: (0 | 1)[];
+  /** An array of bitpacked bytes representing the desired ON/OFF state for each actuator. */
+  s: number[];
 }
 
 /** Payload: Apply Single Actuator State. Sent to set a single actuator's state. */
@@ -264,6 +274,15 @@ export interface NetworkClickAckPayload {
   /** The type of click being acknowledged. */
   t: ClickType;
   /** The ID of the button whose click is being acknowledged. */
+  i: number;
+}
+
+/** Payload: Network Click Confirm. Sent by the device after receiving an ACK to confirm logic execution. */
+export interface NetworkClickConfirmPayload {
+  p: LshProtocol.NETWORK_CLICK_CONFIRM;
+  /** The type of click being confirmed. */
+  t: ClickType;
+  /** The ID of the button whose click is being confirmed. */
   i: number;
 }
 /** Payload: General Failover. Sent to indicate a system-level failure (e.g., config not loaded). */

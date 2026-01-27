@@ -142,34 +142,46 @@ export const deviceDetailsPayloadSchema = {
 
 /**
  * Schema for the payload of an LSH device's 'state' topic.
- * This payload reports the current state of all actuators.
+ * This payload reports the current state of all actuators using bitpacked bytes.
  */
 export const deviceActuatorsStatePayloadSchema = {
   $id: "DeviceActuatorsStatePayload",
-  description: "Schema for a device's actuator states.",
+  description: "Schema for a device's bitpacked actuator states.",
   type: "object",
   properties: {
     p: { const: LshProtocol.ACTUATORS_STATE },
     s: {
       type: "array",
-      items: { type: "integer", enum: [0, 1] },
-      description: "Array of Actuator States (1=ON, 0=OFF).",
+      items: { type: "integer", minimum: 0, maximum: 255 },
+      minItems: 1,
+      description: "Array of bitpacked bytes (each byte = 8 actuator states).",
     },
   },
   required: ["p", "s"],
   additionalProperties: true,
 };
 
-/** Schema for a Network Click payload. */
-const networkClickPayloadSchema = {
+/** Schema for a Network Click Request payload. */
+const networkClickRequestPayloadSchema = {
   type: "object",
   properties: {
-    p: { const: LshProtocol.NETWORK_CLICK },
+    p: { const: LshProtocol.NETWORK_CLICK_REQUEST },
     i: { type: "integer", description: "Button ID that was pressed." },
     t: { enum: Object.values(ClickType).filter(v => typeof v === 'number'), description: "Click Type ID." },
-    c: { type: "integer", enum: [0, 1], description: "Confirmation flag." },
   },
-  required: ["p", "i", "t", "c"],
+  required: ["p", "i", "t"],
+  additionalProperties: true,
+};
+
+/** Schema for a Network Click Confirmation payload. */
+const networkClickConfirmPayloadSchema = {
+  type: "object",
+  properties: {
+    p: { const: LshProtocol.NETWORK_CLICK_CONFIRM },
+    i: { type: "integer", description: "Button ID that was pressed." },
+    t: { enum: Object.values(ClickType).filter(v => typeof v === 'number'), description: "Click Type ID." },
+  },
+  required: ["p", "i", "t"],
   additionalProperties: true,
 };
 
@@ -203,7 +215,8 @@ export const anyMiscTopicPayloadSchema = {
   description: "Schema for any valid 'misc' topic payload.",
   type: "object",
   oneOf: [
-    networkClickPayloadSchema,
+    networkClickRequestPayloadSchema,
+    networkClickConfirmPayloadSchema,
     deviceBootPayloadSchema,
     pingPayloadSchema,
   ],
