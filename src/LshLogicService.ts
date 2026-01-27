@@ -18,7 +18,8 @@ import {
   DeviceDetailsPayload,
   DeviceActuatorsStatePayload,
   AnyMiscTopicPayload,
-  NetworkClickPayload,
+  NetworkClickRequestPayload,
+  NetworkClickConfirmPayload,
   LshProtocol,
   Actor,
   ServiceResult,
@@ -30,10 +31,10 @@ import {
   RequestDetailsPayload,
   RequestStatePayload,
   NetworkClickAckPayload,
-  FailoverPayload,
-  FailoverClickPayload,
   OtherActorsCommandPayload,
   AlertPayload,
+  FailoverPayload,
+  FailoverClickPayload,
 } from "./types";
 import { formatAlertMessage } from "./utils";
 import { NodeMessage } from "node-red";
@@ -134,8 +135,8 @@ export class LshLogicService {
       config.otherDevicesPrefix,
       otherActorsContext
     );
-    this.clickManager = new ClickTransactionManager(config.clickTimeout);
     this.discoveryManager = new HomieDiscoveryManager(config.homieBasePath, config.haDiscoveryPrefix);
+    this.clickManager = new ClickTransactionManager(config.clickTimeout);
     this.watchdog = new Watchdog(
       config.interrogateThreshold,
       config.pingTimeout
@@ -640,9 +641,35 @@ export class LshLogicService {
       return result;
     }
     try {
-      const states = (payload as DeviceActuatorsStatePayload).s.map(
-        (s) => s === 1
-      );
+      const packedBytes = (payload as DeviceActuatorsStatePayload).s;
+
+      // Get the device to know how many actuators we expect
+      const device = this.deviceManager.getDevice(deviceName);
+      const numActuators = device?.actuatorsIDs.length ?? (packedBytes.length * 8);
+
+      // Validate byte array length: each byte covers 8 actuators
+      const expectedBytes = Math.ceil(numActuators / 8);
+      if (packedBytes.length !== expectedBytes) {
+        result.errors.push(
+          `State mismatch for ${deviceName}: expected ${expectedBytes} bytes for ${numActuators} actuators, received ${packedBytes.length}.`
+        );
+        return result;
+      }
+
+      // LUT for bit masks - same pattern as C++ for consistency across architectures
+      // On modern JS engines (V8, SpiderMonkey) this is optimized to near-native performance
+      const BIT_MASK_8 = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] as const;
+
+      // Unpack using per-byte loop structure (matches C++ implementation)
+      // This avoids Math.floor() and % operations on the hot path
+      const states: boolean[] = [];
+      for (let byteIndex = 0; byteIndex < packedBytes.length && states.length < numActuators; byteIndex++) {
+        const packedByte = packedBytes[byteIndex];
+        for (let bitIndex = 0; bitIndex < 8 && states.length < numActuators; bitIndex++) {
+          states.push((packedByte & BIT_MASK_8[bitIndex]) !== 0);
+        }
+      }
+
       const { isNew, changed, configIsMissing } =
         this.deviceManager.registerActuatorStates(deviceName, states);
       if (isNew)
@@ -690,8 +717,11 @@ export class LshLogicService {
     const result = this.createEmptyResult();
 
     switch (miscPayload.p) {
-      case LshProtocol.NETWORK_CLICK:
-        return this.handleNetworkClick(deviceName, miscPayload);
+      case LshProtocol.NETWORK_CLICK_REQUEST:
+        return this._processNewClickRequest(deviceName, miscPayload as NetworkClickRequestPayload);
+
+      case LshProtocol.NETWORK_CLICK_CONFIRM:
+        return this._processClickConfirmation(deviceName, miscPayload as NetworkClickConfirmPayload);
 
       case LshProtocol.BOOT_NOTIFICATION:
         result.logs.push(`Device '${deviceName}' reported a boot event.`);
@@ -742,21 +772,6 @@ export class LshLogicService {
     return result;
   }
 
-  /**
-   * Orchestrates the two-phase commit protocol for "Network Clicks".
-   * @internal
-   */
-  private handleNetworkClick(
-    deviceName: string,
-    payload: NetworkClickPayload
-  ): ServiceResult {
-    if (payload.c) {
-      // isConfirmation
-      return this._processClickConfirmation(deviceName, payload);
-    } else {
-      return this._processNewClickRequest(deviceName, payload);
-    }
-  }
 
   /**
    * Processes the first phase of a network click: a new request from a device.
@@ -765,7 +780,7 @@ export class LshLogicService {
    */
   private _processNewClickRequest(
     deviceName: string,
-    payload: NetworkClickPayload
+    payload: NetworkClickRequestPayload
   ): ServiceResult {
     const result = this.createEmptyResult();
     const { i: buttonId, t: clickType } = payload;
@@ -839,7 +854,7 @@ export class LshLogicService {
    */
   private _processClickConfirmation(
     deviceName: string,
-    payload: NetworkClickPayload
+    payload: NetworkClickConfirmPayload
   ): ServiceResult {
     const result = this.createEmptyResult();
     const { i: buttonId, t: clickType } = payload;
@@ -1000,21 +1015,35 @@ export class LshLogicService {
           )
         );
       } else {
-        const newState = device.actuatorStates.map((s) => (s ? 1 : 0));
+        const booleanStates = device.actuatorStates.slice();
         if (actor.allActuators) {
-          newState.fill(stateValue);
+          booleanStates.fill(stateToSet);
         } else {
           for (const actuatorId of actor.actuators) {
             const index = device.actuatorIndexes[actuatorId];
-            if (index !== undefined) newState[index] = stateValue;
+            if (index !== undefined) booleanStates[index] = stateToSet;
           }
         }
+
+        // Pack boolean states into bytes (Protocol v2.0 optimized)
+        const BIT_MASK_8 = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] as const;
+        const numBytes = Math.ceil(booleanStates.length / 8);
+        const packedBytes: number[] = new Array(numBytes).fill(0);
+
+        for (let i = 0; i < booleanStates.length; i++) {
+          if (booleanStates[i]) {
+            const byteIndex = i >> 3; // i / 8
+            const bitIndex = i & 7;   // i % 8
+            packedBytes[byteIndex] |= BIT_MASK_8[bitIndex];
+          }
+        }
+
         commands.push(
           this._createLshCommand(
             commandTopic,
             {
               p: LshProtocol.SET_STATE,
-              s: newState,
+              s: packedBytes,
             } as SetStatePayload,
             2
           )

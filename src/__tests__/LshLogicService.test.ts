@@ -1,18 +1,15 @@
 /**
- * @file Comprehensive unit and integration tests for the LshLogicService class.
+ * @file Comprehensive unit tests for the LshLogicService class.
+ * This file verifies general configuration, startup logic, message routing,
+ * and error handling.
  */
 import { ValidateFunction } from "ajv";
 import { LshLogicService } from "../LshLogicService";
 import {
-  ClickType,
   SystemConfig,
   LshProtocol,
   Output,
-  DeviceBootPayload,
-  PingPayload,
-  DeviceDetailsPayload,
 } from "../types";
-import { encode } from "@msgpack/msgpack";
 
 // --- MOCK HELPERS ---
 const createMockValidator = (): jest.Mock & ValidateFunction => {
@@ -46,16 +43,7 @@ const mockServiceConfig = {
 
 const mockSystemConfig: SystemConfig = {
   devices: [
-    {
-      name: "device-sender",
-      longClickButtons: [
-        {
-          id: 1,
-          actors: [{ name: "actor1", allActuators: true, actuators: [] }],
-          otherActors: [],
-        },
-      ],
-    },
+    { name: "device-sender" },
     { name: "actor1" },
     { name: "device-silent" },
   ],
@@ -72,12 +60,15 @@ const setDeviceOnline = (service: LshLogicService, deviceName: string) => {
   (service as any).deviceManager.updateConnectionState(deviceName, "ready");
 };
 
-describe("LshLogicService", () => {
+describe("LshLogicService - Core & Config", () => {
   let service: LshLogicService;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    Object.values(mockValidators).forEach((v) => v.mockReturnValue(true));
+    Object.values(mockValidators).forEach((v) => {
+      v.mockReturnValue(true);
+      v.errors = null;
+    });
     mockContextReader.get.mockClear();
     service = new LshLogicService(
       mockServiceConfig,
@@ -93,6 +84,23 @@ describe("LshLogicService", () => {
       expect(result.warnings).toContain(
         "Configuration not loaded, ignoring message.",
       );
+    });
+
+    it("should warn if verifyInitialDeviceStates is called without config", () => {
+      const result = service.verifyInitialDeviceStates();
+      expect(result.warnings.some(w => w.includes("config not loaded"))).toBe(true);
+    });
+
+    it("should warn if getStartupCommands is called without config", () => {
+      const result = service.getStartupCommands();
+      expect(result.warnings.some(w => w.includes("config not loaded"))).toBe(true);
+    });
+
+    it("should return a clone of systemConfig", () => {
+      service.updateSystemConfig({ devices: [{ name: "dev1" }] });
+      const config = service.getSystemConfig();
+      expect(config).not.toBeNull();
+      expect(config?.devices[0].name).toBe("dev1");
     });
 
     it("should ignore messages on unhandled topics", () => {
@@ -120,9 +128,46 @@ describe("LshLogicService", () => {
       service.clearSystemConfig();
       expect(service.getConfiguredDeviceNames()).toBeNull();
     });
+  });
+
+  // --- STARTUP VERIFICATION ---
+  describe("Startup Verification", () => {
+    beforeEach(() => {
+      service.updateSystemConfig(mockSystemConfig);
+    });
+
+    it("should log success when all devices are connected during initial verification", () => {
+      (service as any).deviceManager.updateConnectionState("device-sender", "ready");
+      (service as any).deviceManager.updateConnectionState("actor1", "ready");
+      (service as any).deviceManager.updateConnectionState("device-silent", "ready");
+      const result = service.verifyInitialDeviceStates();
+      expect(result.logs.some(l => l.includes("all configured devices are connected"))).toBe(true);
+    });
+
+    it("should log success when final verification is successful", () => {
+      // Simulate all responsive
+      (service as any).deviceManager.updateConnectionState("device-sender", "ready");
+      (service as any).deviceManager.updateConnectionState("actor1", "ready");
+      (service as any).deviceManager.updateConnectionState("device-silent", "ready");
+      const result = service.runFinalVerification(["device-sender", "actor1", "device-silent"]);
+      expect(result.logs.some(l => l.includes("Final verification successful"))).toBe(true);
+    });
+
+    it("should get startup commands", () => {
+      const result = service.getStartupCommands();
+      expect(result.logs).toContain(
+        "Node started. Passively waiting for device Homie state announcements.",
+      );
+    });
+  });
+
+  // --- ERROR HANDLING & ROBUSTNESS ---
+  describe("Error Handling & Robustness", () => {
+    beforeEach(() => {
+      service.updateSystemConfig(mockSystemConfig);
+    });
 
     it("should warn on invalid 'conf' payload", () => {
-      service.updateSystemConfig(mockSystemConfig);
       mockValidators.validateDeviceDetails.mockReturnValue(false);
       mockValidators.validateDeviceDetails.errors = [
         { message: "invalid format" },
@@ -136,94 +181,54 @@ describe("LshLogicService", () => {
       );
     });
 
+    it("should carry schema errors in handleLshState warning", () => {
+      mockValidators.validateActuatorStates.mockReturnValue(false);
+      mockValidators.validateActuatorStates.errors = [{ message: "mock state error" }];
+
+      const result = service.processMessage("LSH/actor1/state", { p: LshProtocol.ACTUATORS_STATE });
+      expect(result.warnings.some(w => w.includes("mock state error"))).toBe(true);
+    });
+
+    it("should carry schema errors in handleLshMisc warning", () => {
+      mockValidators.validateAnyMiscTopic.mockReturnValue(false);
+      mockValidators.validateAnyMiscTopic.errors = [{ message: "mock misc error" }];
+
+      const result = service.processMessage("LSH/actor1/misc", { p: LshProtocol.PING });
+      expect(result.warnings.some(w => w.includes("mock misc error"))).toBe(true);
+    });
+
     it("should handle actuator state update errors gracefully", () => {
-      service.updateSystemConfig(mockSystemConfig);
-      setDeviceOnline(service, "actor1"); // Sets actor1 with 1 actuator [1]
+      setDeviceOnline(service, "actor1");
+      // actor1 has 1 actuator [1] thanks to setDeviceOnline
 
       const result = service.processMessage("LSH/actor1/state", {
         p: LshProtocol.ACTUATORS_STATE,
         s: [1, 0],
-      }); // Mismatched state array
+      });
 
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]).toContain("State mismatch for actor1");
+      expect(result.errors[0]).toContain("State mismatch for actor1: expected 1 bytes");
     });
 
-    it("should get startup commands", () => {
-      service.updateSystemConfig(mockSystemConfig);
-      const result = service.getStartupCommands();
-      expect(result.logs).toContain(
-        "Node started. Passively waiting for device Homie state announcements.",
-      );
-    });
-  });
-
-  // --- HOMIE & MISC TOPIC LOGIC ---
-  describe("Homie and Misc Topic Logic", () => {
-    beforeEach(() => {
-      service.updateSystemConfig(mockSystemConfig);
-      // Ensure device exists so 'cameOnline' logic can be tested
-      (service as any).deviceManager.pruneDevice("actor1");
-      service.processMessage("homie/actor1/$state", "init");
-    });
-
-    it("should request state on Homie 'ready' and create 'cameOnline' alert", () => {
-      const result = service.processMessage("homie/actor1/$state", "ready");
-
-      expect(result.stateChanged).toBe(true);
-      expect(result.messages[Output.Lsh]).toBeInstanceOf(Array);
-      const payloads = (result.messages[Output.Lsh] as any[]).map(
-        (m) => m.payload.p,
-      );
-      expect(payloads).toContain(LshProtocol.REQUEST_DETAILS);
-      expect(payloads).toContain(LshProtocol.REQUEST_STATE);
-
-      expect(result.messages[Output.Alerts]).toBeDefined();
-      const alertMsg = result.messages[Output.Alerts] as any;
-      // It can be a single message or array.
-      const payload = Array.isArray(alertMsg) ? alertMsg[0].payload : alertMsg.payload;
-      expect(payload.message).toContain("back online");
-    });
-
-    it("should create 'wentOffline' alert on Homie 'lost'", () => {
-      service.processMessage("homie/actor1/$state", "ready"); // Bring it online first
-      const result = service.processMessage("homie/actor1/$state", "lost");
-      expect(result.messages[Output.Alerts]).toBeDefined();
-      const alertMsg = result.messages[Output.Alerts] as any;
-      const payload = Array.isArray(alertMsg) ? alertMsg[0].payload : alertMsg.payload;
-      expect(payload.message).toContain("Alert");
-    });
-
-    it("should handle a device boot message", () => {
-      const payload: DeviceBootPayload = { p: LshProtocol.BOOT_NOTIFICATION };
-      const result = service.processMessage("LSH/actor1/misc", payload);
-      expect(result.logs).toContain("Device 'actor1' reported a boot event.");
-      expect(result.stateChanged).toBe(true);
-    });
-  });
-
-  // --- NETWORK CLICK LOGIC ---
-  describe("Network Click Logic", () => {
-    beforeEach(() => {
-      service.updateSystemConfig(mockSystemConfig);
-      setDeviceOnline(service, "actor1");
-      setDeviceOnline(service, "device-sender");
-    });
-
-    it("should process a click", () => {
-      const reqResult = service.processMessage("LSH/device-sender/misc", {
-        p: LshProtocol.NETWORK_CLICK,
-        i: 1,
-        t: ClickType.Long,
-        c: 0,
+    it("should catch errors in _handleLshState (Crash Simulation)", () => {
+      // Force a crash by mocking registerActuatorStates to throw
+      jest.spyOn((service as any).deviceManager, "registerActuatorStates").mockImplementation(() => {
+        throw new Error("Simulated crash");
       });
-      expect((reqResult.messages[Output.Lsh] as any).payload.p).toBe(
-        LshProtocol.NETWORK_CLICK_ACK,
-      );
+      const result = service.processMessage("LSH/actor1/state", { p: LshProtocol.ACTUATORS_STATE, s: [0] });
+      expect(result.errors).toContain("Simulated crash");
+    });
+
+    it("should log and request details for a new/unconfigured device sending state", () => {
+      // device unknown-dev is not in mockSystemConfig
+      const result = service.processMessage("LSH/unknown-dev/state", { p: LshProtocol.ACTUATORS_STATE, s: [0] });
+      expect(result.logs.some(l => l.includes("new device"))).toBe(true);
+      expect(result.warnings.some(w => w.includes("configuration is unknown"))).toBe(true);
+      expect(result.messages[Output.Lsh]).toBeDefined();
     });
   });
 
-  // --- HOMIE DISCOVERY INTEGRATION ---
+  // --- HOMIE DISCOVERY ---
   describe("Homie Discovery Integration", () => {
     beforeEach(() => {
       service.updateSystemConfig(mockSystemConfig);
@@ -260,20 +265,17 @@ describe("LshLogicService", () => {
 
   // --- CODEC INTEGRATION ---
   describe("Codec Integration", () => {
-
-
     it("should encode output as MsgPack if configured", () => {
       const configMsgPack = { ...mockServiceConfig, protocol: "msgpack" as const };
       const serviceMsgPack = new LshLogicService(configMsgPack, mockContextReader, mockValidators);
       serviceMsgPack.updateSystemConfig(mockSystemConfig);
       setDeviceOnline(serviceMsgPack, "device-sender");
 
-      // Trigger an ACK
+      // Uses a click request to trigger a response
       const result = serviceMsgPack.processMessage("LSH/device-sender/misc", {
-        p: LshProtocol.NETWORK_CLICK,
+        p: LshProtocol.NETWORK_CLICK_REQUEST,
         i: 1,
-        t: ClickType.Long,
-        c: 0,
+        t: 1, // Long
       });
 
       const msg = result.messages[Output.Lsh] as any;
