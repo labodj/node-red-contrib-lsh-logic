@@ -1,54 +1,89 @@
-# Name of the workflow, which will be displayed on the GitHub "Actions" tab.
-name: Node.js CI & Test
+name: CI & Release
 
-# Controls when the workflow will run.
 on:
-  # Triggers the workflow on push events but only for the main branch.
   push:
-    branches: [main, master] # Adjust if your main branch has a different name
-
-  # Triggers the workflow on pull request events to the main branch.
+    branches: [main, master]
+    tags:
+      - "v*"
   pull_request:
     branches: [main, master]
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel.
-jobs:
-  # This job is named "build-and-test".
-  build-and-test:
-    # The type of runner that the job will run on.
-    # 'ubuntu-latest' is a good, fast, and common choice.
-    runs-on: ubuntu-latest
+# Prevent multiple concurrent runs on the same branch/tag
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-    # Defines a matrix of Node.js versions to test against.
-    # This ensures your node works on different common Node-RED environments.
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         node-version: [18.x, 20.x, 22.x]
-
-    # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
-      # Step 1: Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it.
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Sets up the specified version of Node.js.
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          # Use npm's cache to speed up subsequent builds.
           cache: "npm"
 
-      # Step 3: Installs dependencies using 'npm ci' which is faster and more reliable for CI.
       - name: Install dependencies
         run: npm ci
 
-      # Step 4: Runs the build script defined in your package.json.
-      # This compiles TypeScript to JavaScript.
       - name: Build project
         run: npm run build
 
-      # Step 5: Runs the test script defined in your package.json.
-      # This is the most important step! The job will fail if any test fails.
       - name: Run tests
         run: npm test
+
+  publish:
+    name: Publish to npm & GitHub
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for OIDC (Trusted Publishing)
+      contents: write # Required for GitHub Releases
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+
+      - name: Install latest npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build --if-present
+
+      - name: Verify version matches tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: package.json version ($PKG_VERSION) does not match tag version ($TAG_VERSION)"
+            exit 1
+          fi
+
+      - name: Pack for GitHub Release
+        run: npm pack
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: "*.tgz"
+
+      - name: Publish to npm
+        run: npm publish
