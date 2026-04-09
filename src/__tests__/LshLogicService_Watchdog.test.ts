@@ -1,188 +1,232 @@
-/**
- * @file Unit tests focussed on Watchdog Integration and Device Health for LshLogicService.
- * This covers health checks, ping strategies (broadcast vs staggered), and external
- * device status updates via Homie protocol or LSH boot notifications.
- */
-import { ValidateFunction } from "ajv";
-import { LshLogicService } from "../LshLogicService";
+import { LshProtocol, Output } from "../types";
 import {
-    SystemConfig,
-    LshProtocol,
-    Output,
-    DeviceBootPayload,
-} from "../types";
-
-// --- MOCK HELPERS ---
-const createMockValidator = (): jest.Mock & ValidateFunction => {
-    const mockFn = jest.fn().mockReturnValue(true);
-    const validatorMock = mockFn as jest.Mock & ValidateFunction;
-    validatorMock.errors = null;
-    return validatorMock;
-};
-
-const mockContextReader = { get: jest.fn() };
-
-const mockValidators = {
-    validateSystemConfig: createMockValidator(),
-    validateDeviceDetails: createMockValidator(),
-    validateActuatorStates: createMockValidator(),
-    validateAnyMiscTopic: createMockValidator(),
-};
-
-const mockServiceConfig = {
-    lshBasePath: "LSH/",
-    homieBasePath: "homie/",
-    serviceTopic: "LSH/Node-RED/SRV",
-    protocol: "json" as const,
-    otherDevicesPrefix: "other_devices",
-    clickTimeout: 5,
-    interrogateThreshold: 3,
-    pingTimeout: 5,
-    haDiscovery: true,
-    haDiscoveryPrefix: "homeassistant",
-};
-
-const mockSystemConfig: SystemConfig = {
-    devices: [
-        { name: "device-sender" },
-        { name: "actor1" },
-        { name: "device-silent" },
-    ],
-};
+  createLoadedServiceHarness,
+  createSystemConfig,
+  getAlertPayload,
+  getOutputMessages,
+  getSingleOutputMessage,
+} from "./helpers/serviceTestUtils";
 
 describe("LshLogicService - Watchdog & Health", () => {
-    let service: LshLogicService;
+  const START_TIME = 1_000_000;
 
-    beforeEach(() => {
-        jest.clearAllMocks();
-        Object.values(mockValidators).forEach((v) => v.mockReturnValue(true));
-        mockContextReader.get.mockClear();
-        service = new LshLogicService(
-            mockServiceConfig,
-            mockContextReader,
-            mockValidators,
-        );
-        service.updateSystemConfig(mockSystemConfig);
+  const mockNow = () => jest.spyOn(Date, "now");
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("should request full state and emit a recovery alert on Homie ready", () => {
+    const { sendHomieState } = createLoadedServiceHarness();
+
+    const result = sendHomieState("actor1", "ready");
+    const messages = getOutputMessages(result, Output.Lsh);
+    const payloads = messages.map((message) => message.payload as { p: number });
+
+    expect(result.stateChanged).toBe(true);
+    expect(payloads).toEqual([
+      { p: LshProtocol.REQUEST_DETAILS },
+      { p: LshProtocol.REQUEST_STATE },
+    ]);
+    expect(getAlertPayload(result).message).toContain("back online");
+  });
+
+  it("should emit an unhealthy alert on Homie lost", () => {
+    const { sendHomieState } = createLoadedServiceHarness();
+    sendHomieState("actor1", "ready");
+
+    const result = sendHomieState("actor1", "lost");
+
+    expect(getAlertPayload(result).message).toContain("Alert");
+  });
+
+  it("should prepare a broadcast ping when every configured device is silent", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, service, config } = createLoadedServiceHarness();
+    setDeviceOnline("device-sender");
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-silent");
+
+    nowSpy.mockReturnValue(START_TIME + 4000);
+    const result = service.runWatchdogCheck();
+    const message = getSingleOutputMessage<{ p: number }>(result, Output.Lsh);
+
+    expect(message.topic).toBe(config.serviceTopic);
+    expect(message.payload.p).toBe(LshProtocol.PING);
+    expect(result.staggerLshMessages).toBeUndefined();
+  });
+
+  it("should do nothing when watchdog runs with no configured devices", () => {
+    const { service } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig(),
     });
 
-    // --- HOMIE AVAILABILITY ---
-    it("should request state on Homie 'ready' and create 'cameOnline' alert", () => {
-        const result = service.processMessage("homie/actor1/$state", "ready");
+    expect(service.runWatchdogCheck()).toEqual({
+      messages: {},
+      logs: [],
+      warnings: [],
+      errors: [],
+      stateChanged: false,
+    });
+  });
 
-        expect(result.stateChanged).toBe(true);
-        expect(result.messages[Output.Lsh]).toBeInstanceOf(Array);
-        const payloads = (result.messages[Output.Lsh] as any[]).map(
-            (m) => m.payload.p,
-        );
-        expect(payloads).toContain(LshProtocol.REQUEST_DETAILS);
-        expect(payloads).toContain(LshProtocol.REQUEST_STATE);
+  it("should prepare staggered pings when only some devices are silent", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
 
-        expect(result.messages[Output.Alerts]).toBeDefined();
-        const alertMsg = result.messages[Output.Alerts] as any;
-        // It can be a single message or array.
-        const payload = Array.isArray(alertMsg) ? alertMsg[0].payload : alertMsg.payload;
-        expect(payload.message).toContain("back online");
+    const { setDeviceOnline, sendMisc, service } = createLoadedServiceHarness();
+    setDeviceOnline("device-sender");
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-silent");
+
+    nowSpy.mockReturnValue(START_TIME + 3500);
+    sendMisc("actor1", { p: LshProtocol.PING });
+
+    nowSpy.mockReturnValue(START_TIME + 4001);
+    const result = service.runWatchdogCheck();
+    const messages = getOutputMessages(result, Output.Lsh);
+
+    expect(messages).toHaveLength(2);
+    expect(result.staggerLshMessages).toBe(true);
+    expect(messages.map((message) => message.topic)).toEqual([
+      "LSH/device-sender/IN",
+      "LSH/device-silent/IN",
+    ]);
+  });
+
+  it("should prepare a single targeted ping without staggering when only one device is silent", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, sendMisc, service } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1", "dev2"),
+    });
+    setDeviceOnline("dev1");
+    setDeviceOnline("dev2");
+
+    nowSpy.mockReturnValue(START_TIME + 3500);
+    sendMisc("dev1", { p: LshProtocol.PING });
+
+    nowSpy.mockReturnValue(START_TIME + 4001);
+    const result = service.runWatchdogCheck();
+
+    expect(result.staggerLshMessages).toBeUndefined();
+    expect(getOutputMessages(result, Output.Lsh)).toEqual([
+      expect.objectContaining({ topic: "LSH/dev2/IN" }),
+    ]);
+  });
+
+  it("should emit an alert when a device becomes stale after a timed-out ping", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, service, config } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1"),
+    });
+    setDeviceOnline("dev1");
+
+    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
+    service.runWatchdogCheck();
+
+    nowSpy.mockReturnValue(
+      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000
+    );
+    const result = service.runWatchdogCheck();
+
+    expect(getAlertPayload(result).message).toContain("No response to ping");
+    expect(
+      getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p
+    ).toBe(
+      LshProtocol.PING
+    );
+  });
+
+  it("should not re-mark a recently disconnected device as healthy during watchdog checks", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, sendHomieState, service } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1"),
+    });
+    setDeviceOnline("dev1");
+    sendHomieState("dev1", "lost");
+
+    nowSpy.mockReturnValue(START_TIME + 1000);
+    const result = service.runWatchdogCheck();
+
+    expect(result.messages).toEqual({});
+    expect(result.logs).toEqual([]);
+    expect(service.getDeviceRegistry().dev1.connected).toBe(false);
+    expect(service.getDeviceRegistry().dev1.isHealthy).toBe(false);
+  });
+
+  it("should stop alerting repeatedly once a missing device has already been alerted", () => {
+    const { service } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1"),
     });
 
-    it("should create 'wentOffline' alert on Homie 'lost'", () => {
-        service.processMessage("homie/actor1/$state", "ready"); // Bring it online first
-        const result = service.processMessage("homie/actor1/$state", "lost");
-        expect(result.messages[Output.Alerts]).toBeDefined();
-        const alertMsg = result.messages[Output.Alerts] as any;
-        const payload = Array.isArray(alertMsg) ? alertMsg[0].payload : alertMsg.payload;
-        expect(payload.message).toContain("Alert");
+    const firstResult = service.runWatchdogCheck();
+    const secondResult = service.runWatchdogCheck();
+
+    expect(getAlertPayload(firstResult).message).toContain("Never seen");
+    expect(secondResult.messages).toEqual({});
+  });
+
+  it("should log redundant ping responses without emitting a recovery alert", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, sendMisc } = createLoadedServiceHarness();
+    setDeviceOnline("device-sender");
+
+    nowSpy.mockReturnValue(START_TIME + 1000);
+    const result = sendMisc("device-sender", { p: LshProtocol.PING });
+
+    expect(result.logs).toContain("Received ping response from 'device-sender'.");
+    expect(result.messages[Output.Alerts]).toBeUndefined();
+  });
+
+  it("should emit a recovery alert when an unseen device answers a ping", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { sendMisc, service } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1"),
     });
 
-    // --- WATCHDOG CHECKS ---
-    it("should handle watchdog 'needs_ping' status", () => {
-        jest.spyOn((service as any).watchdog, "checkDeviceHealth").mockReturnValue({ status: "needs_ping" });
+    const result = sendMisc("dev1", { p: LshProtocol.PING });
 
-        const result = service.runWatchdogCheck();
-        expect(result.messages[Output.Lsh]).toBeDefined();
-        const payload = (result.messages[Output.Lsh] as any).payload; // Single payload because strictly 1 device mocked return?
-        // Note: runWatchdogCheck iterates all devices. If we mock checkDeviceHealth to always return needs_ping,
-        // it will collect all of them.
+    expect(result.stateChanged).toBe(true);
+    expect(result.logs).toContain("Device 'dev1' is now responsive.");
+    expect(result.logs).toContain(
+      "Device 'dev1' is healthy again after ping response."
+    );
+    expect(getAlertPayload(result).status).toBe("healthy");
+    expect(service.getDeviceRegistry().dev1.isHealthy).toBe(true);
+  });
 
-        // Actually, if multiple devices need ping, they are aggregated.
-        // Let's verify the payload type (PING) 
-        expect(payload.p).toBe(LshProtocol.PING);
-    });
+  it("should handle a device boot notification", () => {
+    const { sendMisc } = createLoadedServiceHarness();
 
-    it("should handle watchdog 'stale' status", () => {
-        const healthSpy = jest.spyOn((service as any).watchdog, "checkDeviceHealth");
-        healthSpy.mockReturnValueOnce({ status: "stale" }); // device-sender
-        // others will return undefined or default if not mocked per call, assuming subsequent calls follow mock logic or default.
-        // But since we used mockReturnValueOnce, others might fail if we don't handle them.
-        // Safest is to rely on the Loop.
+    const result = sendMisc("actor1", { p: LshProtocol.BOOT_NOTIFICATION });
 
-        // Let's force specific behavior for specific devices if possible, or just accept the first one triggers 'stale'.
-        const result = service.runWatchdogCheck();
+    expect(result.logs).toContain("Device 'actor1' reported a boot event.");
+    expect(result.stateChanged).toBe(true);
+  });
 
-        // Check stale
-        expect(result.messages[Output.Alerts]).toBeDefined();
-    });
+  it("should treat repeated boot notifications as activity without a new state change", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
 
-    it("should skip device health check if skip alerted is true", () => {
-        const configOneDev = { devices: [{ name: "dev1" }] };
-        service.updateSystemConfig(configOneDev);
+    const { sendMisc } = createLoadedServiceHarness();
+    sendMisc("actor1", { p: LshProtocol.BOOT_NOTIFICATION });
 
-        // Ensure device exists in registry by setting it momentarily to ready
-        (service as any).deviceManager.updateConnectionState("dev1", "ready");
+    nowSpy.mockReturnValue(START_TIME + 1000);
+    const result = sendMisc("actor1", { p: LshProtocol.BOOT_NOTIFICATION });
 
-        // Now set it to lost
-        (service as any).deviceManager.updateConnectionState("dev1", "lost");
-
-        // And record that an alert was sent
-        (service as any).deviceManager.recordAlertSent("dev1");
-
-        const spy = jest.spyOn((service as any).watchdog, "checkDeviceHealth");
-        service.runWatchdogCheck();
-        expect(spy).not.toHaveBeenCalled();
-    });
-
-    // --- PING STRATEGIES ---
-    it("should generate broadcast ping when all devices are needed", () => {
-        // Spy on _processWatchdogForDevice to populate actions manually
-        jest.spyOn((service as any), "_processWatchdogForDevice").mockImplementation((name: any, now: any, actions: any) => {
-            actions.devicesToPing.add(name);
-        });
-
-        const result = service.runWatchdogCheck();
-        expect(result.messages[Output.Lsh]).toBeDefined();
-        // Should be a single broadcast message because all 3 devices are added
-        expect(Array.isArray(result.messages[Output.Lsh])).toBe(false);
-        const msg = result.messages[Output.Lsh] as any;
-        expect(msg.topic).toBe(mockServiceConfig.serviceTopic); // Broadcast topic
-        expect(msg.payload.p).toBe(LshProtocol.PING);
-    });
-
-    it("should generate staggered pings when some devices are needed", () => {
-        // Spy on _processWatchdogForDevice to populate actions manually
-        jest.spyOn((service as any), "_processWatchdogForDevice").mockImplementation((name: any, now: any, actions: any) => {
-            if (name === "actor1" || name === "device-sender") {
-                actions.devicesToPing.add(name);
-            }
-        });
-
-        const result = service.runWatchdogCheck();
-        expect(result.messages[Output.Lsh]).toBeDefined();
-        expect(Array.isArray(result.messages[Output.Lsh])).toBe(true);
-        const msgs = result.messages[Output.Lsh] as any[];
-        expect(msgs.length).toBe(2);
-        expect(result.staggerLshMessages).toBe(true);
-    });
-
-    // --- MISC / LOGGING ---
-    it("should handle redundant ping logs when state doesn't change", () => {
-        (service as any).deviceManager.updateConnectionState("device-sender", "ready");
-        const result = service.processMessage("LSH/device-sender/misc", { p: LshProtocol.PING });
-        expect(result.logs.some(l => l.includes("Received ping response"))).toBe(true);
-    });
-
-    it("should handle a device boot message", () => {
-        const payload: DeviceBootPayload = { p: LshProtocol.BOOT_NOTIFICATION };
-        const result = service.processMessage("LSH/actor1/misc", payload);
-        expect(result.logs).toContain("Device 'actor1' reported a boot event.");
-        expect(result.stateChanged).toBe(true);
-    });
+    expect(result.stateChanged).toBe(false);
+    expect(result.logs).toContain("Device 'actor1' reported a boot event.");
+  });
 });

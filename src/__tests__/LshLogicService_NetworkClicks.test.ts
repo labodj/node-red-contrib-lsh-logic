@@ -1,375 +1,386 @@
-/**
- * @file Unit tests focussed on Network Click Logic for LshLogicService.
- * This covers Request-Ack-Confirm flows, Failovers, specialized click types (SuperLong),
- * and bitpacking/actuator targeting logic.
- */
-import { ValidateFunction } from "ajv";
-import { LshLogicService, ClickValidationError } from "../LshLogicService";
+import { ClickTransactionManager } from "../ClickTransactionManager";
+import { ClickType, LshProtocol, Output, SystemConfig } from "../types";
 import {
-    ClickType,
-    SystemConfig,
-    LshProtocol,
-    Output,
-    Actor,
-} from "../types";
+  createLoadedServiceHarness,
+  createServiceHarness,
+  getOtherActorsPayload,
+  getOutputMessages,
+  getSingleOutputMessage,
+  ServiceHarness,
+} from "./helpers/serviceTestUtils";
 
-// --- MOCK HELPERS (Duplicated for isolation) ---
-const createMockValidator = (): jest.Mock & ValidateFunction => {
-    const mockFn = jest.fn().mockReturnValue(true);
-    const validatorMock = mockFn as jest.Mock & ValidateFunction;
-    validatorMock.errors = null;
-    return validatorMock;
-};
-
-const mockContextReader = { get: jest.fn() };
-
-const mockValidators = {
-    validateSystemConfig: createMockValidator(),
-    validateDeviceDetails: createMockValidator(),
-    validateActuatorStates: createMockValidator(),
-    validateAnyMiscTopic: createMockValidator(),
-};
-
-const mockServiceConfig = {
-    lshBasePath: "LSH/",
-    homieBasePath: "homie/",
-    serviceTopic: "LSH/Node-RED/SRV",
-    protocol: "json" as const,
-    otherDevicesPrefix: "other_devices",
-    clickTimeout: 5,
-    interrogateThreshold: 3,
-    pingTimeout: 5,
-    haDiscovery: true,
-    haDiscoveryPrefix: "homeassistant",
-};
-
-const mockSystemConfig: SystemConfig = {
-    devices: [
+const defaultClickSystemConfig: SystemConfig = {
+  devices: [
+    {
+      name: "device-sender",
+      longClickButtons: [
         {
-            name: "device-sender",
-            longClickButtons: [
-                {
-                    id: 1,
-                    actors: [{ name: "actor1", allActuators: true, actuators: [] }],
-                    otherActors: [],
-                },
-            ],
-            superLongClickButtons: [
-                {
-                    id: 1,
-                    actors: [{ name: "actor1", allActuators: true, actuators: [] }],
-                    otherActors: [],
-                },
-            ],
+          id: 1,
+          actors: [{ name: "actor1", allActuators: true, actuators: [] }],
+          otherActors: [],
         },
-        { name: "actor1" },
-        { name: "device-silent" },
-    ],
+      ],
+      superLongClickButtons: [
+        {
+          id: 1,
+          actors: [{ name: "actor1", allActuators: true, actuators: [] }],
+          otherActors: [],
+        },
+      ],
+    },
+    { name: "actor1" },
+  ],
 };
 
-// Helper to set a device as online
-const setDeviceOnline = (service: LshLogicService, deviceName: string) => {
-    service.processMessage(`LSH/${deviceName}/conf`, {
-        p: LshProtocol.DEVICE_DETAILS,
-        n: deviceName,
-        a: [1],
-        b: [],
-    });
-    (service as any).deviceManager.updateConnectionState(deviceName, "ready");
-};
+const createClickHarness = (
+  systemConfig: SystemConfig = defaultClickSystemConfig
+) => createLoadedServiceHarness({ systemConfig });
+
+const startClick = (
+  sendMisc: ServiceHarness["sendMisc"],
+  deviceName: string,
+  clickType: ClickType = ClickType.Long,
+  buttonId = 1
+) =>
+  sendMisc(deviceName, {
+    p: LshProtocol.NETWORK_CLICK_REQUEST,
+    i: buttonId,
+    t: clickType,
+  });
+
+const confirmClick = (
+  sendMisc: ServiceHarness["sendMisc"],
+  deviceName: string,
+  clickType: ClickType = ClickType.Long,
+  buttonId = 1
+) =>
+  sendMisc(deviceName, {
+    p: LshProtocol.NETWORK_CLICK_CONFIRM,
+    i: buttonId,
+    t: clickType,
+  });
 
 describe("LshLogicService - Network Click Logic", () => {
-    let service: LshLogicService;
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
-    beforeEach(() => {
-        jest.clearAllMocks();
-        Object.values(mockValidators).forEach((v) => v.mockReturnValue(true));
-        mockContextReader.get.mockClear();
-        service = new LshLogicService(
-            mockServiceConfig,
-            mockContextReader,
-            mockValidators,
-        );
-        service.updateSystemConfig(mockSystemConfig);
-        setDeviceOnline(service, "actor1");
-        setDeviceOnline(service, "device-sender");
+  it("should handle the 3-way click handshake", () => {
+    const { setDeviceOnline, sendMisc } = createClickHarness();
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-sender");
+
+    const requestResult = startClick(sendMisc, "device-sender");
+
+    expect(
+      getSingleOutputMessage<{ p: number }>(requestResult, Output.Lsh).payload.p
+    ).toBe(LshProtocol.NETWORK_CLICK_ACK);
+
+    const confirmResult = confirmClick(sendMisc, "device-sender");
+
+    expect(confirmResult.logs).toContain(
+      "Click confirmed for device-sender.1.1. Executing logic."
+    );
+    expect(getOutputMessages(confirmResult, Output.Lsh)[0].topic).toBe(
+      "LSH/actor1/IN"
+    );
+  });
+
+  it("should reject confirmations for unknown or expired clicks", () => {
+    const { setDeviceOnline, sendMisc } = createClickHarness();
+    setDeviceOnline("device-sender");
+
+    const result = confirmClick(sendMisc, "device-sender", ClickType.Long, 99);
+
+    expect(result.warnings).toContain(
+      "Received confirmation for an expired or unknown click: device-sender.99.1."
+    );
+  });
+
+  it("should handle a super-long click by turning the target off", () => {
+    const { setDeviceOnline, sendMisc } = createClickHarness();
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-sender");
+
+    startClick(sendMisc, "device-sender", ClickType.SuperLong);
+    const result = confirmClick(sendMisc, "device-sender", ClickType.SuperLong);
+
+    const command = getOutputMessages(result, Output.Lsh)[0] as {
+      payload: { p: number; s: number[] };
+    };
+    expect(command.payload.p).toBe(LshProtocol.SET_STATE);
+    expect(command.payload.s).toEqual([0]);
+  });
+
+  it("should target a specific subset of actuators with packed state", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "actor1", allActuators: false, actuators: [1, 3] }],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "actor1" },
+      ],
+    };
+
+    const { setDeviceOnline, sendLshState, sendMisc } =
+      createClickHarness(systemConfig);
+    setDeviceOnline("sender");
+    setDeviceOnline("actor1", { a: [1, 2, 3, 4] });
+    sendLshState("actor1", [0]);
+
+    startClick(sendMisc, "sender");
+    const result = confirmClick(sendMisc, "sender");
+
+    const command = getOutputMessages(result, Output.Lsh)[0] as {
+      payload: { p: number; s: number[] };
+    };
+    expect(command.payload.p).toBe(LshProtocol.SET_STATE);
+    expect(command.payload.s).toEqual([5]);
+  });
+
+  it("should use SET_SINGLE_ACTUATOR when a single actuator is targeted", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "device-sender-specific",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [
+                { name: "actor1", allActuators: false, actuators: [2] },
+              ],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "actor1" },
+      ],
+    };
+
+    const { setDeviceOnline, sendMisc } = createClickHarness(systemConfig);
+    setDeviceOnline("actor1", { a: [1, 2] });
+    setDeviceOnline("device-sender-specific");
+
+    startClick(sendMisc, "device-sender-specific");
+    const result = confirmClick(sendMisc, "device-sender-specific");
+
+    const command = getOutputMessages(result, Output.Lsh)[0] as {
+      payload: { p: number; i: number; s: number };
+    };
+    expect(command.payload).toEqual({
+      p: LshProtocol.SET_SINGLE_ACTUATOR,
+      i: 2,
+      s: 1,
     });
+  });
 
-    // --- BASIC HANDSHAKE ---
-    it("should handle the 3-way click handshake (REQUEST -> ACK -> CONFIRM)", () => {
-        // Phase 1: Request
-        const reqResult = service.processMessage("LSH/device-sender/misc", {
-            p: LshProtocol.NETWORK_CLICK_REQUEST,
-            i: 1,
-            t: ClickType.Long,
-        });
+  it("should correctly unpack bitpacked actuator states", () => {
+    const { loadConfig, sendDeviceDetails, sendLshState, service } =
+      createServiceHarness();
+    loadConfig();
+    sendDeviceDetails("actor1", { a: [1, 2, 3, 4, 5, 6, 7, 8, 9] });
 
-        // Should send ACK
-        expect((reqResult.messages[Output.Lsh] as any).payload.p).toBe(
-            LshProtocol.NETWORK_CLICK_ACK,
-        );
-        expect(reqResult.logs.some(l => l.includes("Validation OK"))).toBe(true);
+    const result = sendLshState("actor1", [0b10101010, 0b00000001]);
+    const actorState = service.getDeviceRegistry()["actor1"];
 
-        // Phase 2: Confirm (Logic should execute here)
-        const confResult = service.processMessage("LSH/device-sender/misc", {
-            p: LshProtocol.NETWORK_CLICK_CONFIRM,
-            i: 1,
-            t: ClickType.Long,
-        });
+    expect(result.stateChanged).toBe(true);
+    expect(actorState.actuatorStates[0]).toBe(false);
+    expect(actorState.actuatorStates[1]).toBe(true);
+    expect(actorState.actuatorStates[8]).toBe(true);
+  });
 
-        expect(confResult.logs.some(l => l.includes("Click confirmed"))).toBe(true);
-        // actor1 should be turned on
-        expect(confResult.messages[Output.Lsh]).toBeDefined();
-        const actorMsg = (confResult.messages[Output.Lsh] as any)[0];
-        expect(actorMsg.topic).toBe("LSH/actor1/IN");
+  it("should include other actors in click execution results", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender-other",
+          longClickButtons: [
+            { id: 1, actors: [], otherActors: ["zigbee-bulb"] },
+          ],
+        },
+      ],
+    };
+
+    const { setDeviceOnline, sendMisc, contextReader } =
+      createClickHarness(systemConfig);
+    setDeviceOnline("sender-other");
+    contextReader.get.mockReturnValue(false);
+
+    startClick(sendMisc, "sender-other");
+    const result = confirmClick(sendMisc, "sender-other");
+
+    expect(getOtherActorsPayload(result)).toEqual({
+      otherActors: ["zigbee-bulb"],
+      stateToSet: true,
     });
+  });
 
-    it("should reject unconfirmed or expired clicks", () => {
-        const confResult = service.processMessage("LSH/device-sender/misc", {
-            p: LshProtocol.NETWORK_CLICK_CONFIRM,
-            i: 99, // Unknown button
-            t: ClickType.Long,
-        });
+  it("should propagate smart-toggle warnings for other actors with unknown state", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender-other",
+          longClickButtons: [
+            { id: 1, actors: [], otherActors: ["zigbee-bulb"] },
+          ],
+        },
+      ],
+    };
 
-        expect(confResult.warnings[0]).toContain("Received confirmation for an expired or unknown click");
+    const { setDeviceOnline, sendMisc, contextReader } =
+      createClickHarness(systemConfig);
+    setDeviceOnline("sender-other");
+    contextReader.get.mockReturnValue("unknown");
+
+    startClick(sendMisc, "sender-other");
+    const result = confirmClick(sendMisc, "sender-other");
+
+    expect(result.warnings).toContain(
+      "State for otherActor 'zigbee-bulb' not found or not a boolean."
+    );
+    expect(getOtherActorsPayload(result)).toEqual({
+      otherActors: ["zigbee-bulb"],
+      stateToSet: false,
     });
+  });
 
-    // --- ADVANCED CLICK TYPES ---
-    it("should handle SuperLong click by setting state to OFF", () => {
-        // Phase 1: Request
-        service.processMessage("LSH/device-sender/misc", {
-            p: LshProtocol.NETWORK_CLICK_REQUEST,
-            i: 1,
-            t: ClickType.SuperLong,
-        });
+  it("should turn a target off when the smart-toggle majority is already active", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "actor1", allActuators: true, actuators: [] }],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "actor1" },
+      ],
+    };
 
-        // Phase 2: Confirmation
-        const result = service.processMessage("LSH/device-sender/misc", {
-            p: LshProtocol.NETWORK_CLICK_CONFIRM,
-            i: 1,
-            t: ClickType.SuperLong,
-        });
+    const { setDeviceOnline, sendLshState, sendMisc } =
+      createClickHarness(systemConfig);
+    setDeviceOnline("sender");
+    setDeviceOnline("actor1", { a: [1, 2] });
+    sendLshState("actor1", [0b11]);
 
-        expect(result.messages[Output.Lsh]).toBeDefined();
-        const cmd = (result.messages[Output.Lsh] as any[])[0];
-        expect(cmd.payload.p).toBe(LshProtocol.SET_STATE);
-        // expect state to be bitpacked (1 byte for 1-8 actuators)
-        // bit 0 = actuator ID 1. All OFF -> bit 0 = 0 -> byte = 0
-        expect(cmd.payload.s).toEqual([0]);
-    });
+    startClick(sendMisc, "sender");
+    const result = confirmClick(sendMisc, "sender");
 
-    // --- ACTUATOR TARGETING & BITPACKING ---
-    it("should target specific subset of actuators", () => {
-        // Reconfigure actor1 to have 4 actuators
-        service.updateSystemConfig({
-            devices: [
-                {
-                    name: "sender",
-                    longClickButtons: [{
-                        id: 1,
-                        actors: [{ name: "actor1", allActuators: false, actuators: [1, 3] }],
-                        otherActors: []
-                    }]
-                },
-                { name: "actor1" }
-            ]
-        });
-        setDeviceOnline(service, "sender");
+    expect(result.logs).toContain("Smart Toggle: 2/2 active. Decision: OFF");
+    expect(getOutputMessages(result, Output.Lsh)[0]).toEqual(
+      expect.objectContaining({
+        topic: "LSH/actor1/IN",
+        payload: { p: LshProtocol.SET_STATE, s: [0] },
+      })
+    );
+  });
 
-        // Manually register actor1 details with 4 actuators
-        service.processMessage("LSH/actor1/conf", {
-            p: LshProtocol.DEVICE_DETAILS,
-            n: "actor1",
-            a: [1, 2, 3, 4],
-            b: []
-        });
-        (service as any).deviceManager.updateConnectionState("actor1", "ready");
-        (service as any).deviceManager.registerActuatorStates("actor1", [false, false, false, false]);
+  it("should send failover when target actors are offline", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "offline_act", allActuators: true, actuators: [] }],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "offline_act" },
+      ],
+    };
 
-        // Phase 1: Request
-        service.processMessage("LSH/sender/misc", {
-            p: LshProtocol.NETWORK_CLICK_REQUEST,
-            i: 1,
-            t: ClickType.Long,
-        });
+    const { setDeviceOnline, sendMisc } = createClickHarness(systemConfig);
+    setDeviceOnline("sender");
 
-        // Phase 2: Confirmation
-        const result = service.processMessage("LSH/sender/misc", {
-            p: LshProtocol.NETWORK_CLICK_CONFIRM,
-            i: 1,
-            t: ClickType.Long,
-        });
+    const result = startClick(sendMisc, "sender");
 
-        expect(result.messages[Output.Lsh]).toBeDefined();
-        const cmd = (result.messages[Output.Lsh] as any[])[0];
-        expect(cmd.payload.p).toBe(LshProtocol.SET_STATE);
-        // Target: Actuators 1 and 3 (bits 0 and 2) to ON (1).
-        // 0b00000101 = 5
-        expect(cmd.payload.s).toEqual([5]);
-    });
+    expect(
+      getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p
+    ).toBe(LshProtocol.FAILOVER);
+  });
 
-    it("should generate a specific c_asas command for a single targeted actuator", () => {
-        const advancedConfig: SystemConfig = {
-            devices: [
-                {
-                    name: "device-sender-specific",
-                    longClickButtons: [
-                        {
-                            id: 1,
-                            actors: [
-                                {
-                                    name: "actor1",
-                                    allActuators: false,
-                                    actuators: [2], // Target ONLY actuator 2
-                                },
-                            ],
-                            otherActors: [],
-                        },
-                    ],
-                },
-                { name: "actor1" },
-            ],
-        };
-        service.updateSystemConfig(advancedConfig);
+  it("should send failover when no action is configured for a button", () => {
+    const systemConfig: SystemConfig = {
+      devices: [{ name: "sender", longClickButtons: [] }],
+    };
 
-        // Register actor1 with 2 actuators
-        service.processMessage("LSH/actor1/conf", {
-            p: LshProtocol.DEVICE_DETAILS,
-            n: "actor1",
-            a: [1, 2],
-            b: [],
-        });
-        (service as any).deviceManager.updateConnectionState("actor1", "ready");
+    const { setDeviceOnline, sendMisc } = createClickHarness(systemConfig);
+    setDeviceOnline("sender");
 
-        // Phase 1: Request
-        service.processMessage("LSH/device-sender-specific/misc", {
-            p: LshProtocol.NETWORK_CLICK_REQUEST,
-            i: 1,
-            t: ClickType.Long,
-        });
+    const result = startClick(sendMisc, "sender", ClickType.Long, 99);
 
-        // Phase 2: Confirmation
-        const result = service.processMessage("LSH/device-sender-specific/misc", {
-            p: LshProtocol.NETWORK_CLICK_CONFIRM,
-            i: 1,
-            t: ClickType.Long,
-        });
+    expect(
+      getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p
+    ).toBe(LshProtocol.FAILOVER);
+  });
 
-        expect(result.messages[Output.Lsh]).toBeDefined();
-        const cmd = (result.messages[Output.Lsh] as any[])[0];
-        // Expect c_asas (p: 13)
-        expect(cmd.payload.p).toBe(LshProtocol.SET_SINGLE_ACTUATOR);
-        expect(cmd.payload.i).toBe(2);
-        // Toggle logic: initially off, so should turn ON (1)
-        expect(cmd.payload.s).toBe(1);
-    });
+  it("should send failover when an action has no targets", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [{ id: 1, actors: [], otherActors: [] }],
+        },
+      ],
+    };
 
-    it("should correctly handle bitpacked state updates (ACTUATORS_STATE) processing", () => {
-        // Prepare actor with 9 actuators
-        service.processMessage("LSH/actor1/conf", {
-            p: LshProtocol.DEVICE_DETAILS,
-            n: "actor1",
-            a: [1, 2, 3, 4, 5, 6, 7, 8, 9], // 9 actuators to test multiple bytes
-            b: [],
-        });
+    const { setDeviceOnline, sendMisc } = createClickHarness(systemConfig);
+    setDeviceOnline("sender");
 
-        // Send state: byte0=0b10101010 (actuators 1,3,5,7 off, 2,4,6,8 on), byte1=0b00000001 (actuator 9 on)
-        // Note: LSH uses 0-indexed bits for actuator IDs (ID 1 = bit 0, ID 2 = bit 1, etc.)
-        const result = service.processMessage("LSH/actor1/state", {
-            p: LshProtocol.ACTUATORS_STATE,
-            s: [0b10101010, 0b00000001],
-        });
+    const result = startClick(sendMisc, "sender");
 
-        expect(result.stateChanged).toBe(true);
-        const registry = service.getDeviceRegistry()["actor1"];
-        expect(registry.actuatorStates[0]).toBe(false); // ID 1 (bit 0)
-        expect(registry.actuatorStates[1]).toBe(true);  // ID 2 (bit 1)
-        expect(registry.actuatorStates[8]).toBe(true);  // ID 9 (bit 0 of byte 1)
-    });
+    expect(
+      getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p
+    ).toBe(LshProtocol.FAILOVER);
+  });
 
-    // --- OTHER ACTORS (Non-LSH) ---
-    it("should include otherActors in click execution results", () => {
-        service.updateSystemConfig({
-            devices: [{
-                name: "sender-other",
-                longClickButtons: [{
-                    id: 1, actors: [], otherActors: ["zigbee-bulb"]
-                }]
-            }]
-        });
-        setDeviceOnline(service, "sender-other");
+  it("should surface unexpected errors while starting a click transaction", () => {
+    jest
+      .spyOn(ClickTransactionManager.prototype, "startTransaction")
+      .mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
 
-        // Mock context to return 'false' (OFF) for zigbee-bulb
-        mockContextReader.get.mockReturnValue(false);
+    const { setDeviceOnline, sendMisc } = createClickHarness();
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-sender");
 
-        // Request
-        service.processMessage("LSH/sender-other/misc", { p: LshProtocol.NETWORK_CLICK_REQUEST, i: 1, t: ClickType.Long });
+    const result = startClick(sendMisc, "device-sender");
 
-        // Confirm
-        const result = service.processMessage("LSH/sender-other/misc", { p: LshProtocol.NETWORK_CLICK_CONFIRM, i: 1, t: ClickType.Long });
+    expect(result.errors).toContain(
+      "Unexpected error during click processing for device-sender.1.1: Error: storage unavailable"
+    );
+    expect(result.messages).toEqual({});
+  });
 
-        expect(result.messages[Output.OtherActors]).toBeDefined();
-        const otherMsg = result.messages[Output.OtherActors] as any;
-        expect(otherMsg.payload.otherActors).toEqual(["zigbee-bulb"]);
-        expect(otherMsg.payload.stateToSet).toBe(true); // Default toggle ON
-    });
+  it("should clean up expired pending click transactions", () => {
+    const nowSpy = jest.spyOn(Date, "now");
+    nowSpy.mockReturnValue(1_000);
 
-    // --- ERROR HANDLING & FAILOVERS ---
-    it("should catch unexpected errors during click processing", () => {
-        service.updateSystemConfig({ devices: [{ name: "sender" }] });
-        jest.spyOn((service as any), "_validateClickRequest").mockImplementation(() => {
-            throw new Error("Boom");
-        });
-        const result = service.processMessage("LSH/sender/misc", { p: LshProtocol.NETWORK_CLICK_REQUEST, i: 1, t: ClickType.Long });
-        expect(result.errors.some(e => e.includes("Unexpected error"))).toBe(true);
-    });
+    const { setDeviceOnline, sendMisc, service, config } = createClickHarness();
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-sender");
 
-    it("should fail validation if target actors are offline (Failover)", () => {
-        service.updateSystemConfig({
-            devices: [
-                { name: "sender", longClickButtons: [{ id: 1, actors: [{ name: "offline_act", allActuators: true, actuators: [] }], otherActors: [] }] },
-                { name: "offline_act" }
-            ]
-        });
-        (service as any).deviceManager.updateConnectionState("sender", "ready");
-        // No update for offline_act -> it's offline
+    startClick(sendMisc, "device-sender");
 
-        const result = service.processMessage("LSH/sender/misc", { p: LshProtocol.NETWORK_CLICK_REQUEST, i: 1, t: ClickType.Long });
-        expect(result.messages[Output.Lsh]).toBeDefined();
-        // Check if failover was sent
-        const payload = (result.messages[Output.Lsh] as any).payload;
-        expect(payload.p).toBe(LshProtocol.FAILOVER);
-    });
+    nowSpy.mockReturnValue(1_000 + config.clickTimeout * 1000 + 1);
 
-    it("should throw ClickValidationError if no action is configured", () => {
-        service.updateSystemConfig({ devices: [{ name: "sender", longClickButtons: [] }] });
-        (service as any).deviceManager.updateConnectionState("sender", "ready");
-        const result = service.processMessage("LSH/sender/misc", { p: LshProtocol.NETWORK_CLICK_REQUEST, i: 99, t: ClickType.Long });
-        expect((result.messages[Output.Lsh] as any).payload.p).toBe(LshProtocol.FAILOVER);
-    });
-
-    it("should send General Failover (p:16) if a general ClickValidationError occurs", () => {
-        service.updateSystemConfig({
-            devices: [{ name: "sender", longClickButtons: [{ id: 1, actors: [{ name: "act1", allActuators: true, actuators: [] }], otherActors: [] }] }, { name: "act1" }]
-        });
-        (service as any).deviceManager.updateConnectionState("sender", "ready");
-        (service as any).deviceManager.updateConnectionState("act1", "ready");
-
-        jest.spyOn((service as any), "_validateClickRequest").mockImplementation(() => {
-            throw new ClickValidationError("forced fail", "general");
-        });
-
-        const result = service.processMessage("LSH/sender/misc", { p: LshProtocol.NETWORK_CLICK_REQUEST, i: 1, t: ClickType.Long });
-        expect(result.errors.some(e => e.includes("System failure on click"))).toBe(true);
-        expect((result.messages[Output.Lsh] as any).payload.p).toBe(LshProtocol.GENERAL_FAILOVER);
-    });
-
-    it("should throw ClickValidationError if action has no targets", () => {
-        service.updateSystemConfig({
-            devices: [{ name: "sender", longClickButtons: [{ id: 1, actors: [], otherActors: [] }] }]
-        });
-        (service as any).deviceManager.updateConnectionState("sender", "ready");
-        const result = service.processMessage("LSH/sender/misc", { p: LshProtocol.NETWORK_CLICK_REQUEST, i: 1, t: ClickType.Long });
-        expect((result.messages[Output.Lsh] as any).payload.p).toBe(LshProtocol.FAILOVER);
-    });
+    expect(service.cleanupPendingClicks()).toBe(
+      "Cleaned up 1 expired click transactions."
+    );
+  });
 });

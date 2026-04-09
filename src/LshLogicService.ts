@@ -142,7 +142,6 @@ export class LshLogicService {
       config.pingTimeout
     );
     this.codec = new LshCodec();
-    this.codec = new LshCodec();
   }
 
   /**
@@ -493,6 +492,10 @@ export class LshLogicService {
       return; // Skip already alerted devices
     }
     const healthResult = this.watchdog.checkDeviceHealth(deviceState, now);
+    if (healthResult.status === "ok" && deviceState && !deviceState.connected) {
+      return;
+    }
+
     const { stateChanged } = this.deviceManager.updateHealthFromResult(
       deviceName,
       healthResult

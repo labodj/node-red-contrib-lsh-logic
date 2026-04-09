@@ -1,7 +1,7 @@
 # Node-RED Contrib LSH Logic
 
 [![NPM version](https://badge.fury.io/js/node-red-contrib-lsh-logic.svg)](https://badge.fury.io/js/node-red-contrib-lsh-logic)
-[![Build Status](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml/badge.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yml)
+[![Build Status](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml/badge.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 A powerful, high-performance Node-RED node designed to manage advanced automation logic for embedded smart home devices (ESP32/ESP8266 based). Built with TypeScript for maximum reliability and type safety.

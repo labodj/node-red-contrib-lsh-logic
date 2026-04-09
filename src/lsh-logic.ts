@@ -33,6 +33,7 @@ export class LshLogicNode {
   private watcher: chokidar.FSWatcher | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private watchdogInterval: NodeJS.Timeout | null = null;
+  private warmupTimer: NodeJS.Timeout | null = null;
   private initialVerificationTimer: NodeJS.Timeout | null = null;
   private finalVerificationTimer: NodeJS.Timeout | null = null;
   private isWarmingUp: boolean = false;
@@ -140,8 +141,6 @@ export class LshLogicNode {
     });
   }
 
-  // In src/lsh-logic.ts, replace the existing handleInput method with this one.
-
   /**
    * The main handler for all incoming messages from Node-RED.
    * It detects if the payload is a Buffer (indicating MsgPack) and decodes it
@@ -153,9 +152,9 @@ export class LshLogicNode {
     let processedPayload: unknown = msg.payload;
 
     try {
-      // Use the centralized Codec to decode the payload (handles Buffer/MsgPack, JSON, etc.)
-      processedPayload = this.codec.decode(msg.payload);
-      if (Buffer.isBuffer(msg.payload)) {
+      const payloadProtocol = this.getPayloadProtocol(msg.topic || "");
+      processedPayload = this.codec.decode(msg.payload, payloadProtocol);
+      if (Buffer.isBuffer(msg.payload) && payloadProtocol === "msgpack") {
         this.node.log(`Decoded MsgPack payload from topic: ${msg.topic || 'unknown'}`);
       }
     } catch (error) {
@@ -181,6 +180,10 @@ export class LshLogicNode {
     done();
   }
 
+  private getPayloadProtocol(topic: string): "json" | "msgpack" | "text" {
+    return topic.startsWith(this.config.lshBasePath) ? this.config.protocol : "text";
+  }
+
   /**
    * Takes a result from the service layer and performs the required Node-RED actions
    * (logging, sending messages, updating state).
@@ -198,7 +201,7 @@ export class LshLogicNode {
     if (this.isWarmingUp && result.messages[Output.Alerts]) {
       const alertMsg = result.messages[Output.Alerts] as NodeMessage;
 
-      if (typeof alertMsg.payload === 'string' && alertMsg.payload.startsWith('✅')) {
+      if (this.isRecoveryAlert(alertMsg)) {
         this.node.log("Suppressing 'device recovered' alert during warm-up period.");
         delete result.messages[Output.Alerts];
       }
@@ -224,6 +227,19 @@ export class LshLogicNode {
     }
   }
 
+  private isRecoveryAlert(msg: NodeMessage): boolean {
+    const { payload } = msg;
+    if (typeof payload === "string") {
+      return payload.startsWith("✅");
+    }
+    if (payload && typeof payload === "object") {
+      const alertPayload = payload as { status?: unknown; message?: unknown };
+      return alertPayload.status === "healthy"
+        || (typeof alertPayload.message === "string" && alertPayload.message.startsWith("✅"));
+    }
+    return false;
+  }
+
   /**
    * Loads, parses, and validates the `system-config.json` file.
    * This now also triggers the initial state verification sequence.
@@ -234,8 +250,10 @@ export class LshLogicNode {
     // Clear any pending verification timers from a previous load.
     if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
     if (this.finalVerificationTimer) clearTimeout(this.finalVerificationTimer);
+    if (this.warmupTimer) clearTimeout(this.warmupTimer);
     this.initialVerificationTimer = null;
     this.finalVerificationTimer = null;
+    this.warmupTimer = null;
 
     try {
       this.node.log(`Loading config from: ${filePath}`);
@@ -275,9 +293,10 @@ export class LshLogicNode {
     this.node.log(`Starting warm-up period for ${totalWarmupTimeMs / 1000}s.`);
     this.isWarmingUp = true;
 
-    setTimeout(() => {
+    this.warmupTimer = setTimeout(() => {
       this.isWarmingUp = false;
       this.node.log("Warm-up period finished. Node is now fully operational.");
+      this.warmupTimer = null;
     }, totalWarmupTimeMs);
 
     // This pattern avoids a 'no-misused-promises' error for async setTimeout callbacks.
@@ -289,7 +308,8 @@ export class LshLogicNode {
       const pingedDevices = result.messages[Output.Lsh]
         ? (result.messages[Output.Lsh] as NodeMessage[])
           .filter((msg): msg is NodeMessage & { topic: string } => typeof msg.topic === 'string')
-          .map(msg => msg.topic.split('/')[1])
+          .map(msg => this.getDeviceNameFromLshCommandTopic(msg.topic))
+          .filter((deviceName): deviceName is string => deviceName !== null)
         : [];
 
       if (pingedDevices.length > 0) {
@@ -311,6 +331,15 @@ export class LshLogicNode {
     this.initialVerificationTimer = setTimeout(() => {
       void initialVerification();
     }, initialStateTimeoutMs);
+  }
+
+  private getDeviceNameFromLshCommandTopic(topic: string): string | null {
+    const prefix = this.config.lshBasePath;
+    const suffix = "/IN";
+    if (!topic.startsWith(prefix) || !topic.endsWith(suffix)) {
+      return null;
+    }
+    return topic.slice(prefix.length, -suffix.length);
   }
 
 
@@ -377,6 +406,7 @@ export class LshLogicNode {
   public async _cleanupResources(): Promise<void> {
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
+    if (this.warmupTimer) clearTimeout(this.warmupTimer);
     if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
     if (this.finalVerificationTimer) clearTimeout(this.finalVerificationTimer);
     if (this.watcher) {
