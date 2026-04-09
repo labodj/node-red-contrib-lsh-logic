@@ -130,9 +130,10 @@ export class DeviceRegistryManager {
     );
 
     // Merge new details into the existing device state
+    const now = Date.now();
     Object.assign(device, {
-      lastSeenTime: Date.now(),
-      lastDetailsTime: Date.now(),
+      lastSeenTime: now,
+      lastDetailsTime: now,
       actuatorsIDs: details.a,
       buttonsIDs: details.b,
       actuatorIndexes,
@@ -246,11 +247,12 @@ export class DeviceRegistryManager {
 
     const stateChanged = !wasHealthy || wasStale;
 
+    device.lastSeenTime = Date.now();
+
     if (stateChanged) {
       device.isHealthy = true;
       device.isStale = false;
       device.alertSent = false;
-      device.lastSeenTime = Date.now();
     }
 
     return { stateChanged };

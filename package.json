@@ -1,10 +1,10 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "A single, powerful node to manage advanced automation logic for an LSH (Labo Smart Home) style system.",
   "main": "dist/lsh-logic.js",
   "scripts": {
-    "clean": "rimraf ./dist",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "copy-assets": "copyfiles -u 1 src/**/*.html dist/",
     "dev:build": "npm run clean && tsc && npm run copy-assets",
     "build": "npm run clean && tsc -p tsconfig.prod.json && npm run copy-assets",
@@ -16,6 +16,7 @@
   },
   "files": [
     "dist/",
+    "images/",
     "LICENSE",
     "README.md",
     "examples/"
@@ -54,15 +55,14 @@
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",
     "ajv": "^8.18.0",
-    "chokidar": "^5.0.0"
+    "chokidar": "^4.0.3"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.3.3",
+    "@types/node": "^25.5.2",
     "@types/node-red": "^1.3.5",
     "copyfiles": "^2.4.1",
-    "jest": "^30.2.0",
-    "rimraf": "^6.1.3",
-    "ts-jest": "^29.4.6"
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.9"
   }
 }

@@ -346,7 +346,7 @@
     </li>
     <li>
       <strong>Intelligent Watchdog:</strong> Actively monitors device health
-      using a combination of passive (Homie `$`state) and active (LSH ping)
+      using a combination of passive (Homie <code>$state</code>) and active (LSH ping)
       checks. It uses a smart initial verification process to quickly and
       accurately detect offline devices at startup, preventing false alarms and
       alert spam.
@@ -374,10 +374,11 @@
   <ol style="margin-bottom: 20px;">
     <li>
       <b>LSH Commands:</b> Outputs MQTT messages for devices using the LSH
-      protocol. This includes actuator state commands (<code>c_aas</code>,
-      <code>c_asas</code>), network click acknowledgements (<code>d_nca</code>),
-      failovers (<code>c_f</code>, <code>c_gf</code>), and watchdog pings
-      (<code>d_p</code>).
+      protocol. This includes actuator state commands
+      (<code>SET_STATE</code>, <code>SET_SINGLE_ACTUATOR</code>), network click
+      acknowledgements (<code>NETWORK_CLICK_ACK</code>), failovers
+      (<code>FAILOVER</code>, <code>GENERAL_FAILOVER</code>), and watchdog
+      pings (<code>PING</code>).
     </li>
     <li>
       <b>Other Actor Commands:</b> Outputs generic commands intended for
