@@ -35,7 +35,7 @@ This node acts as the central orchestrator for your custom smart home devices. I
 
 ### Inputs
 
-The node's "Configuration" output connects to an `mqtt-in` node to dynamically manage subscriptions. It processes:
+The node accepts messages from an `mqtt-in` node. It processes:
 
 1.  **LSH Protocol Topics**:
     *   `<lshBase>/<device>/conf`: Static configuration (actuators `a`, buttons `b`).
@@ -120,6 +120,10 @@ To use MsgPack:
 3.  Ensure your ESP firmware supports decoding MsgPack payloads.
 
 The node handles decoding (Input) and encoding (Output) transparently.
+
+## Dependency Notes
+
+`chokidar` is kept at v4.x because v5 requires Node.js >= 20.19 and is ESM-only. Since this package supports Node.js >= 18 (to match Node-RED's supported runtimes), upgrading to chokidar v5 is not possible at this time.
 
 ## Contributing
 
