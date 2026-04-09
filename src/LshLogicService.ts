@@ -492,6 +492,13 @@ export class LshLogicService {
       return; // Skip already alerted devices
     }
     const healthResult = this.watchdog.checkDeviceHealth(deviceState, now);
+
+    // If a device appears healthy to the watchdog (recent lastSeenTime) but is not
+    // connected via Homie, skip health updates entirely. This covers two cases:
+    // 1. A device that just disconnected — its lastSeenTime is still fresh, but it
+    //    shouldn't be re-marked as healthy since Homie reported it offline.
+    // 2. A device that hasn't connected yet in this session — updating health would
+    //    generate a spurious recovery event.
     if (healthResult.status === "ok" && deviceState && !deviceState.connected) {
       return;
     }
