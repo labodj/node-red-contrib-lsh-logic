@@ -141,3 +141,4 @@ vite.config.ts.timestamp-*
 # Local Codex workspace files
 .codex
 AGENTS.md
+__pycache__/
