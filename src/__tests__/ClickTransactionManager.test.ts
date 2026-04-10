@@ -24,13 +24,13 @@ describe("ClickTransactionManager", () => {
 
   it("should start a transaction correctly", () => {
     expect(manager.getPendingCount()).toBe(0);
-    manager.startTransaction("slot1", "key1", [], []);
+    manager.startTransaction("slot1", "key1", "source-1", [], []);
     expect(manager.getPendingCount()).toBe(1);
   });
 
   it("should consume a pending transaction and return its details", () => {
     const actors: Actor[] = [{ name: "actor1", allActuators: true, actuators: [] }];
-    manager.startTransaction("slot1", "key1", actors, ["other1"]);
+    manager.startTransaction("slot1", "key1", "source-1", actors, ["other1"]);
 
     const consumed = manager.consumeTransaction("key1");
 
@@ -47,7 +47,7 @@ describe("ClickTransactionManager", () => {
   });
 
   it("should not clean up a recent transaction", () => {
-    manager.startTransaction("slot1", "key1", [], []);
+    manager.startTransaction("slot1", "key1", "source-1", [], []);
 
     // Advance time by less than the timeout period.
     jest.advanceTimersByTime((CLICK_TIMEOUT_SEC - 1) * 1000);
@@ -58,7 +58,7 @@ describe("ClickTransactionManager", () => {
   });
 
   it("should clean up an expired transaction", () => {
-    manager.startTransaction("slot1", "key1", [], []);
+    manager.startTransaction("slot1", "key1", "source-1", [], []);
 
     // Advance time by more than the timeout period.
     jest.advanceTimersByTime((CLICK_TIMEOUT_SEC + 1) * 1000);
@@ -69,8 +69,8 @@ describe("ClickTransactionManager", () => {
   });
 
   it("should replace the previous correlation for the same logical slot", () => {
-    manager.startTransaction("slot1", "key1", [], []);
-    manager.startTransaction("slot1", "key2", [], []);
+    manager.startTransaction("slot1", "key1", "source-1", [], []);
+    manager.startTransaction("slot1", "key2", "source-1", [], []);
 
     expect(manager.consumeTransaction("key1")).toBeNull();
     expect(manager.consumeTransaction("key2")).not.toBeNull();

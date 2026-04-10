@@ -97,7 +97,9 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
     deviceName: string,
     details: Partial<Omit<DeviceDetailsPayload, "p" | "n">> = {},
   ): void => {
+    const actuatorIds = details.a ?? [1];
     sendDeviceDetails(deviceName, details);
+    sendLshState(deviceName, new Array<number>(Math.ceil(actuatorIds.length / 8)).fill(0));
     sendHomieState(deviceName, "ready");
   };
 
