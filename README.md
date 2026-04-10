@@ -14,7 +14,7 @@ This node replaces complex Node-RED flows with a single, robust, and stateful co
 
 ## Key Features
 
-- **Protocol v2.0 Support**: Implements the efficient LSH Protocol v2.0, utilizing numeric IDs and optimized payloads (JSON or MsgPack) to minimize network overhead.
+- **Shared LSH Protocol Support**: Uses the generated contract vendored from `lsh-protocol`, keeping command IDs, compact keys and examples aligned with the firmware repositories.
 - **Robust Health Monitoring**: Features a multi-stage intelligent Watchdog that detects stale or offline devices without generating false positives during startup or temporary network glitches.
 - **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when all target devices are ready and online.
 - **Homie & HA Discovery**: Fully compliant with the [Homie Convention](https://homieiot.github.io/) for state tracking and automatically generates Home Assistant Auto-Discovery payloads for seamless integration.
@@ -35,22 +35,11 @@ This node acts as the central orchestrator for your custom smart home devices. I
 
 The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
 
-### Shared Protocol Workflow
+The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
 
-This repository vendors the shared wire-protocol source of truth at [vendor/lsh-protocol](vendor/lsh-protocol).
-
-Refresh the vendored copy:
+To verify that the Node-RED generated protocol files match the vendored source of truth:
 
 ```bash
-git remote add lsh-protocol git@github.com:labodj/lsh-protocol.git || git remote set-url lsh-protocol git@github.com:labodj/lsh-protocol.git
-git fetch lsh-protocol
-git subtree pull --prefix=vendor/lsh-protocol lsh-protocol main --squash
-```
-
-Regenerate or verify the Node-RED generated files:
-
-```bash
-python3 tools/update_lsh_protocol.py
 python3 tools/update_lsh_protocol.py --check
 ```
 
