@@ -60,7 +60,6 @@ export class DeviceRegistryManager {
         isStale: false,
         alertSent: false,
         lastSeenTime: 0,
-        lastBootTime: 0,
         lastDetailsTime: 0,
         lastStateTime: 0,
         actuatorsIDs: [],
@@ -222,44 +221,6 @@ export class DeviceRegistryManager {
       device.isStale = false;
     }
     return { stateChanged: true, wasConnected, isConnected };
-  }
-
-  /**
-   * Records a boot event from a device, marking it as healthy and invalidating
-   * any cached topology/state that must be refreshed after reboot.
-   * @param deviceName - The name of the device that booted.
-   * @returns An object indicating if the state was changed.
-   */
-  public recordBoot(deviceName: string): { stateChanged: boolean } {
-    const device = this._ensureDeviceExists(deviceName);
-    const hadCachedTopology =
-      device.lastDetailsTime !== 0 ||
-      device.actuatorsIDs.length > 0 ||
-      device.buttonsIDs.length > 0 ||
-      device.actuatorStates.length > 0 ||
-      Object.keys(device.actuatorIndexes).length > 0;
-    const willChange =
-      !device.connected ||
-      !device.isHealthy ||
-      device.isStale ||
-      device.alertSent ||
-      hadCachedTopology;
-
-    const now = Date.now();
-    device.lastSeenTime = now;
-    device.lastBootTime = now;
-    device.lastDetailsTime = 0;
-    device.lastStateTime = 0;
-    device.connected = true;
-    device.isHealthy = true;
-    device.isStale = false;
-    device.alertSent = false;
-    device.actuatorsIDs = [];
-    device.buttonsIDs = [];
-    device.actuatorStates = [];
-    device.actuatorIndexes = {};
-
-    return { stateChanged: willChange };
   }
 
   /**

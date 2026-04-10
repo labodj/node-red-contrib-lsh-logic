@@ -347,6 +347,44 @@ export class LshLogicService {
   }
 
   /**
+   * Builds the minimum snapshot recovery commands required to make a device authoritative again.
+   * If details are missing, a full `REQUEST_DETAILS` + `REQUEST_STATE` cycle is required.
+   * If only state is missing, a single `REQUEST_STATE` is sufficient.
+   * @internal
+   */
+  private _buildSnapshotRecoveryCommands(deviceName: string): NodeMessage[] {
+    const device = this.deviceManager.getDevice(deviceName);
+    const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
+
+    if (!device || device.lastDetailsTime === 0) {
+      return [
+        this._createLshCommand(
+          commandTopic,
+          { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
+          1,
+        ),
+        this._createLshCommand(
+          commandTopic,
+          { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
+          1,
+        ),
+      ];
+    }
+
+    if (device.lastStateTime === 0) {
+      return [
+        this._createLshCommand(
+          commandTopic,
+          { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
+          1,
+        ),
+      ];
+    }
+
+    return [];
+  }
+
+  /**
    * Processes an incoming message by matching its topic against known patterns.
    * This implementation avoids Regex for performance, using efficient string parsing instead.
    * @param topic - The MQTT topic of the message.
@@ -715,39 +753,10 @@ export class LshLogicService {
       case LshProtocol.NETWORK_CLICK_CONFIRM:
         return this._processClickConfirmation(deviceName, miscPayload);
 
-      case LshProtocol.BOOT_NOTIFICATION:
-        result.logs.push(`Device '${deviceName}' reported a boot event.`);
-        {
-          const clearedPendingClicks = this.clickManager.clearForDevice(deviceName);
-          if (clearedPendingClicks > 0) {
-            result.logs.push(
-              `Cleared ${clearedPendingClicks} pending click transaction(s) because a device reboot invalidated in-flight assumptions.`,
-            );
-          }
-        }
-        if (this.deviceManager.recordBoot(deviceName).stateChanged) {
-          result.stateChanged = true;
-          result.logs.push(
-            `Device '${deviceName}' boot invalidated cached details. Requesting full resync.`,
-          );
-          result.messages[Output.Lsh] = [
-            this._createLshCommand(
-              `${this.lshBasePath}${deviceName}/IN`,
-              { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
-              1,
-            ),
-            this._createLshCommand(
-              `${this.lshBasePath}${deviceName}/IN`,
-              { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
-              1,
-            ),
-          ];
-        }
-        break;
-
       case LshProtocol.PING:
         {
           const { stateChanged, becameHealthy } = this.deviceManager.recordPingResponse(deviceName);
+          const recoveryCommands = this._buildSnapshotRecoveryCommands(deviceName);
 
           if (stateChanged) {
             result.logs.push(`Device '${deviceName}' is now responsive.`);
@@ -766,8 +775,20 @@ export class LshLogicService {
           } else {
             result.logs.push(`Received ping response from '${deviceName}'.`);
           }
+
+          if (recoveryCommands.length > 0) {
+            result.messages[Output.Lsh] = recoveryCommands;
+            result.logs.push(
+              recoveryCommands.length === 2
+                ? `Device '${deviceName}' is missing details and state. Requesting a full authoritative snapshot.`
+                : `Device '${deviceName}' is missing an authoritative state snapshot. Requesting state refresh.`,
+            );
+          }
         }
         break;
+
+      default:
+        return result;
     }
     return result;
   }
@@ -789,7 +810,7 @@ export class LshLogicService {
 
     try {
       const { actors, otherActors } = this._validateClickRequest(deviceName, buttonId, clickType);
-      this.clickManager.startTransaction(slotKey, transactionKey, deviceName, actors, otherActors);
+      this.clickManager.startTransaction(slotKey, transactionKey, actors, otherActors);
 
       result.messages[Output.Lsh] = this._createLshCommand(
         commandTopic,

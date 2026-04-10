@@ -17,7 +17,6 @@ describe("Watchdog", () => {
     isHealthy: true,
     isStale: false,
     lastSeenTime: 0,
-    lastBootTime: 0,
     lastDetailsTime: 1, // Mark as configured to avoid edge cases
     lastStateTime: 1,
     alertSent: false,

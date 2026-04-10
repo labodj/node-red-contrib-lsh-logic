@@ -16,6 +16,7 @@ This node replaces complex Node-RED flows with a single, robust, and stateful co
 
 - **Shared LSH Protocol Support**: Uses the generated contract vendored from `lsh-protocol`, keeping command IDs, compact keys and examples aligned with the firmware repositories.
 - **Robust Health Monitoring**: Features a multi-stage intelligent Watchdog that detects stale or offline devices without generating false positives during startup or temporary network glitches.
+- **Robust Cold Recovery**: If Node-RED restarts and retained MQTT state is incomplete, the node actively pings silent devices and requests the missing `details`/`state` snapshot needed to rebuild an authoritative registry.
 - **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when all target devices are ready and online.
 - **Homie & HA Discovery**: Fully compliant with the [Homie Convention](https://homieiot.github.io/) for state tracking and automatically generates Home Assistant Auto-Discovery payloads for seamless integration.
 - **High Performance**: Optimized message routing using direct string parsing and efficient internal state management.
@@ -34,6 +35,8 @@ npm install node-red-contrib-lsh-logic
 This node acts as the central orchestrator for your custom smart home devices. It subscribes to MQTT topics, processes incoming telemetry and events, updates its internal state registry, and dispatches commands.
 
 The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
+
+At startup the node prefers retained Homie/LSH topics, but it does not depend on them exclusively: silent devices are pinged during initial verification, and a ping response from a device that is still missing `conf` or `state` automatically triggers the minimum `REQUEST_DETAILS` / `REQUEST_STATE` recovery sequence.
 
 The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
 
