@@ -209,7 +209,14 @@ describe("LshLogicService - Watchdog & Health", () => {
     const result = sendMisc("actor1", { p: LshProtocol.BOOT_NOTIFICATION });
 
     expect(result.logs).toContain("Device 'actor1' reported a boot event.");
+    expect(result.logs).toContain(
+      "Device 'actor1' boot invalidated cached details. Requesting full resync.",
+    );
     expect(result.stateChanged).toBe(true);
+    expect(getOutputMessages(result, Output.Lsh).map((message) => message.payload)).toEqual([
+      { p: LshProtocol.REQUEST_DETAILS },
+      { p: LshProtocol.REQUEST_STATE },
+    ]);
   });
 
   it("should treat repeated boot notifications as activity without a new state change", () => {
@@ -224,5 +231,6 @@ describe("LshLogicService - Watchdog & Health", () => {
 
     expect(result.stateChanged).toBe(false);
     expect(result.logs).toContain("Device 'actor1' reported a boot event.");
+    expect(result.messages).toEqual({});
   });
 });

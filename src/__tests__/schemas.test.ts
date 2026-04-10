@@ -82,4 +82,41 @@ describe("schemas", () => {
 
     expect(isValid).toBe(false);
   });
+
+  it("rejects zero-valued IDs in configs and protocol payloads", () => {
+    const configValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "c1",
+          longClickButtons: [{ id: 0, actors: [], otherActors: [] }],
+        },
+      ],
+    });
+    const detailsValid = validators.validateDeviceDetails({
+      p: LshProtocol.DEVICE_DETAILS,
+      v: LSH_WIRE_PROTOCOL_MAJOR,
+      n: "c1",
+      a: [0],
+      b: [7],
+    });
+    const miscValid = validators.validateAnyMiscTopic({
+      p: LshProtocol.NETWORK_CLICK_REQUEST,
+      c: 0,
+      i: 7,
+      t: ClickType.Long,
+    });
+
+    expect(configValid).toBe(false);
+    expect(detailsValid).toBe(false);
+    expect(miscValid).toBe(false);
+  });
+
+  it("accepts empty bitpacked state payloads for zero-actuator devices", () => {
+    const isValid = validators.validateActuatorStates({
+      p: LshProtocol.ACTUATORS_STATE,
+      s: [],
+    });
+
+    expect(isValid).toBe(true);
+  });
 });

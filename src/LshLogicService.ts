@@ -620,7 +620,8 @@ export class LshLogicService {
 
       // Get the device to know how many actuators we expect
       const device = this.deviceManager.getDevice(deviceName);
-      const numActuators = device?.actuatorsIDs.length ?? packedBytes.length * 8;
+      const hasKnownDetails = device !== undefined && device.lastDetailsTime !== 0;
+      const numActuators = hasKnownDetails ? device.actuatorsIDs.length : packedBytes.length * 8;
 
       // Validate byte array length: each byte covers 8 actuators
       const expectedBytes = Math.ceil(numActuators / 8);
@@ -699,6 +700,21 @@ export class LshLogicService {
         result.logs.push(`Device '${deviceName}' reported a boot event.`);
         if (this.deviceManager.recordBoot(deviceName).stateChanged) {
           result.stateChanged = true;
+          result.logs.push(
+            `Device '${deviceName}' boot invalidated cached details. Requesting full resync.`,
+          );
+          result.messages[Output.Lsh] = [
+            this._createLshCommand(
+              `${this.lshBasePath}${deviceName}/IN`,
+              { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
+              1,
+            ),
+            this._createLshCommand(
+              `${this.lshBasePath}${deviceName}/IN`,
+              { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
+              1,
+            ),
+          ];
         }
         break;
 
