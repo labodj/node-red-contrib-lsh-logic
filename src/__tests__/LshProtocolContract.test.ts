@@ -34,16 +34,26 @@ type GoldenPayloads = {
   payloads: Record<string, Record<string, unknown>>;
 };
 
-const ROOT = resolve(__dirname, "../../..");
-const SPEC_PATH = resolve(ROOT, "shared/lsh_protocol.json");
-const GOLDEN_PATH = resolve(ROOT, "shared/lsh_protocol_golden_payloads.json");
-const CORE_PROTOCOL_PATH = resolve(ROOT, "lsh-core/src/communication/constants/protocol.hpp");
+const NODE_RED_ROOT = resolve(__dirname, "../..");
+const WORKSPACE_ROOT = resolve(NODE_RED_ROOT, "..");
+const SPEC_PATH = resolve(NODE_RED_ROOT, "vendor/lsh-protocol/shared/lsh_protocol.json");
+const GOLDEN_PATH = resolve(
+  NODE_RED_ROOT,
+  "vendor/lsh-protocol/shared/lsh_protocol_golden_payloads.json",
+);
+const CORE_PROTOCOL_PATH = resolve(
+  WORKSPACE_ROOT,
+  "lsh-core/src/communication/constants/protocol.hpp",
+);
 const CORE_STATIC_PAYLOADS_PATH = resolve(
-  ROOT,
+  WORKSPACE_ROOT,
   "lsh-core/src/communication/constants/static_payloads.hpp",
 );
-const ESP_PROTOCOL_PATH = resolve(ROOT, "lsh-esp_bak/src/constants/communicationprotocol.hpp");
-const ESP_STATIC_PAYLOADS_PATH = resolve(ROOT, "lsh-esp_bak/src/constants/payloads.hpp");
+const ESP_PROTOCOL_PATH = resolve(
+  WORKSPACE_ROOT,
+  "lsh-esp_bak/src/constants/communicationprotocol.hpp",
+);
+const ESP_STATIC_PAYLOADS_PATH = resolve(WORKSPACE_ROOT, "lsh-esp_bak/src/constants/payloads.hpp");
 
 const hasCrossRepoWorkspace = [
   SPEC_PATH,
