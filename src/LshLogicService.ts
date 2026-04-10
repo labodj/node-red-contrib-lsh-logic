@@ -260,6 +260,7 @@ export class LshLogicService {
   public updateSystemConfig(newConfig: SystemConfig): string {
     this.systemConfig = newConfig;
     this.deviceConfigMap.clear();
+    const clearedPendingClicks = this.clickManager.clearAll();
 
     const newDeviceNames = new Set(this.systemConfig.devices.map((d) => d.name));
     for (const device of this.systemConfig.devices) {
@@ -277,6 +278,9 @@ export class LshLogicService {
     if (prunedDevices.length > 0) {
       logMessage += ` Pruned stale devices from registry: ${prunedDevices.join(", ")}.`;
     }
+    if (clearedPendingClicks > 0) {
+      logMessage += ` Cleared ${clearedPendingClicks} pending click transaction(s).`;
+    }
     return logMessage;
   }
 
@@ -286,6 +290,7 @@ export class LshLogicService {
   public clearSystemConfig(): void {
     this.systemConfig = null;
     this.deviceConfigMap.clear();
+    this.clickManager.clearAll();
   }
 
   /**
@@ -339,7 +344,6 @@ export class LshLogicService {
     };
   }
 
-  /**
   /**
    * Processes an incoming message by matching its topic against known patterns.
    * This implementation avoids Regex for performance, using efficient string parsing instead.
@@ -698,6 +702,14 @@ export class LshLogicService {
 
       case LshProtocol.BOOT_NOTIFICATION:
         result.logs.push(`Device '${deviceName}' reported a boot event.`);
+        {
+          const clearedPendingClicks = this.clickManager.clearAll();
+          if (clearedPendingClicks > 0) {
+            result.logs.push(
+              `Cleared ${clearedPendingClicks} pending click transaction(s) because a device reboot invalidated in-flight assumptions.`,
+            );
+          }
+        }
         if (this.deviceManager.recordBoot(deviceName).stateChanged) {
           result.stateChanged = true;
           result.logs.push(
@@ -948,7 +960,11 @@ export class LshLogicService {
       stateToSet = toggleResult.stateToSet;
     }
 
-    const lshCommands = this.buildStateCommands(actors, stateToSet);
+    const { commands: lshCommands, warnings: commandWarnings } = this.buildStateCommands(
+      actors,
+      stateToSet,
+    );
+    result.warnings.push(...commandWarnings);
     if (lshCommands.length > 0) {
       result.messages[Output.Lsh] = lshCommands;
     }
@@ -968,13 +984,21 @@ export class LshLogicService {
    * Builds an array of MQTT messages to set the state of LSH actuators.
    * @internal
    */
-  private buildStateCommands(actors: Actor[], stateToSet: boolean): NodeMessage[] {
+  private buildStateCommands(
+    actors: Actor[],
+    stateToSet: boolean,
+  ): { commands: NodeMessage[]; warnings: string[] } {
     const commands: NodeMessage[] = [];
+    const warnings: string[] = [];
     const stateValue = stateToSet ? 1 : 0;
     for (const actor of actors) {
-      // The device's existence is guaranteed by _validateClickRequest.
-      // We can assert non-null here to satisfy TypeScript.
-      const device = this.deviceManager.getDevice(actor.name)!;
+      const device = this.deviceManager.getDevice(actor.name);
+      if (!device) {
+        warnings.push(
+          `Skipping actor '${actor.name}' because it disappeared before command execution.`,
+        );
+        continue;
+      }
 
       const commandTopic = `${this.lshBasePath}${actor.name}/IN`;
       // Optimization: use the more specific 'c_asas' command if only one actuator is targeted.
@@ -1028,7 +1052,7 @@ export class LshLogicService {
         );
       }
     }
-    return commands;
+    return { commands, warnings };
   }
 
   /**

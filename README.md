@@ -50,7 +50,7 @@ The node accepts messages from an `mqtt-in` node. It processes:
 1.  **LSH Protocol Topics**:
     - `<lshBase>/<device>/conf`: Static configuration (actuators `a`, buttons `b`).
     - `<lshBase>/<device>/state`: Live actuator states (`s`).
-    - `<lshBase>/<device>/misc`: Events like Clicks, Boot notifications, Pings.
+    - `<lshBase>/<device>/misc`: Events like Clicks, forwarded Boot notifications, Pings. A boot event invalidates cached topology and triggers a fresh `REQUEST_DETAILS` + `REQUEST_STATE` cycle.
 2.  **Homie Topics**:
     - `<homieBase>/<device>/$state`: Connectivity status (`ready`, `lost`).
     - Homie attributes (`$mac`, `$fw/version`, etc.) for HA Discovery.

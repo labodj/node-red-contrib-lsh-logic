@@ -524,4 +524,22 @@ describe("LshLogicService - Network Click Logic", () => {
       "Click confirmed for device-sender.1.1.8. Executing logic.",
     );
   });
+
+  it("should discard pending clicks when a boot event invalidates cached assumptions", () => {
+    const { setDeviceOnline, sendMisc } = createClickHarness();
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-sender");
+
+    startClick(sendMisc, "device-sender", ClickType.Long, 1, 7);
+
+    const bootResult = sendMisc("actor1", { p: LshProtocol.BOOT_NOTIFICATION });
+    const confirmResult = confirmClick(sendMisc, "device-sender", ClickType.Long, 1, 7);
+
+    expect(bootResult.logs).toContain(
+      "Cleared 1 pending click transaction(s) because a device reboot invalidated in-flight assumptions.",
+    );
+    expect(confirmResult.warnings).toContain(
+      "Received confirmation for an expired or unknown click: device-sender.1.1.7.",
+    );
+  });
 });

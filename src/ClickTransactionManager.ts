@@ -91,6 +91,19 @@ export class ClickTransactionManager {
   }
 
   /**
+   * Clears every pending click transaction.
+   * This is used when a config reload or a device boot invalidates the assumptions
+   * under which the pending transactions were validated.
+   * @returns The number of transactions that were discarded.
+   */
+  public clearAll(): number {
+    const clearedCount = this.pendingClicks.size;
+    this.pendingClicks.clear();
+    this.activeSlots.clear();
+    return clearedCount;
+  }
+
+  /**
    * Gets the current number of pending clicks. Useful for testing and monitoring.
    * @returns The number of pending clicks.
    */
