@@ -5,16 +5,87 @@
  * This approach prevents runtime errors from malformed data.
  */
 
-import Ajv, { ValidateFunction } from "ajv";
-import {
+import type { ValidateFunction } from "ajv";
+import Ajv from "ajv";
+import type {
   AnyMiscTopicPayload,
-  ClickType,
   DeviceActuatorsStatePayload,
   DeviceDetailsPayload,
-  LshProtocol,
-  SystemConfig
+  SystemConfig,
 } from "./types";
+import { ClickType, LshProtocol } from "./types";
 
+const uint8IntegerSchema = {
+  type: "integer",
+  minimum: 0,
+  maximum: 255,
+} as const;
+
+const nonEmptyStringSchema = {
+  type: "string",
+  minLength: 1,
+} as const;
+
+const clickTypeEnum = Object.values(ClickType).filter(
+  (value): value is number => typeof value === "number",
+);
+
+function hasUniqueItemProperty(propertyName: string, data: unknown): boolean {
+  if (!Array.isArray(data)) {
+    return true;
+  }
+
+  const seen = new Set<unknown>();
+  for (const item of data) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+
+    const value = (item as Record<string, unknown>)[propertyName];
+    if (seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+  }
+
+  return true;
+}
+
+const actorSchema = {
+  type: "object",
+  properties: {
+    name: {
+      ...nonEmptyStringSchema,
+      description: "The name of the target device.",
+    },
+    allActuators: {
+      type: "boolean",
+      description: "Whether to control all actuators on the device.",
+    },
+    actuators: {
+      type: "array",
+      description: "A list of specific actuator IDs to control (if allActuators is false).",
+      items: uint8IntegerSchema,
+      uniqueItems: true,
+    },
+  },
+  required: ["name", "allActuators"],
+  additionalProperties: false,
+  if: {
+    properties: { allActuators: { const: false } },
+  },
+  then: {
+    required: ["actuators"],
+    properties: {
+      actuators: { type: "array", minItems: 1, items: uint8IntegerSchema, uniqueItems: true },
+    },
+  },
+  else: {
+    properties: {
+      actuators: { type: "array", maxItems: 0, items: uint8IntegerSchema },
+    },
+  },
+} as const;
 
 /**
  * Schema for a single button action configuration, used within `longClickConfigSchema`.
@@ -24,57 +95,24 @@ const buttonActionSchema = {
   type: "object",
   properties: {
     id: {
-      type: "integer",
+      ...uint8IntegerSchema,
       description: "The unique identifier for the button (e.g., '7').",
     },
     actors: {
       type: "array",
       description: "A list of primary LSH actors controlled by this button.",
-      items: {
-        type: "object",
-        properties: {
-          name: {
-            type: "string",
-            description: "The name of the target device.",
-          },
-          allActuators: {
-            type: "boolean",
-            description: "Whether to control all actuators on the device.",
-          },
-          actuators: {
-            type: "array",
-            description:
-              "A list of specific actuator IDs to control (if allActuators is false).",
-            items: { type: "integer" },
-          },
-        },
-        required: ["name", "allActuators"],
-
-        if: {
-          properties: { allActuators: { const: false } },
-        },
-        then: {
-          required: ["actuators"],
-          properties: {
-            actuators: { type: "array", minItems: 1 }
-          }
-        },
-        else: {
-          properties: {
-            actuators: { type: "array", maxItems: 0 }
-          }
-        }
-      },
+      items: actorSchema,
     },
     otherActors: {
       type: "array",
-      description:
-        "A list of secondary actor names (e.g., Tasmota, Zigbee devices).",
-      items: { type: "string" },
+      description: "A list of secondary actor names (e.g., Tasmota, Zigbee devices).",
+      items: nonEmptyStringSchema,
+      uniqueItems: true,
     },
   },
   required: ["id", "actors", "otherActors"],
-};
+  additionalProperties: false,
+} as const;
 
 /**
  * Schema for the main `system-config.json` file.
@@ -88,31 +126,35 @@ export const systemConfigSchema = {
   properties: {
     devices: {
       type: "array",
+      uniqueItemProperty: "name",
       items: {
         type: "object",
         properties: {
           name: {
-            type: "string",
+            ...nonEmptyStringSchema,
             description: "The unique name of the device.",
           },
           longClickButtons: {
             type: "array",
             description: "Actions to perform on a long click.",
             items: buttonActionSchema,
+            uniqueItemProperty: "id",
           },
           superLongClickButtons: {
             type: "array",
             description: "Actions to perform on a super-long click.",
             items: buttonActionSchema,
+            uniqueItemProperty: "id",
           },
         },
         required: ["name"],
+        additionalProperties: false,
       },
     },
   },
   required: ["devices"],
-};
-
+  additionalProperties: false,
+} as const;
 
 /**
  * Schema for the payload of an LSH device's 'conf' topic.
@@ -124,21 +166,27 @@ export const deviceDetailsPayloadSchema = {
   type: "object",
   properties: {
     p: { const: LshProtocol.DEVICE_DETAILS },
-    n: { type: "string", description: "Device Name." },
+    v: {
+      ...uint8IntegerSchema,
+      description: "Handshake-only protocol major.",
+    },
+    n: { ...nonEmptyStringSchema, description: "Device Name." },
     a: {
       type: "array",
-      items: { type: "integer" },
+      items: uint8IntegerSchema,
+      uniqueItems: true,
       description: "Array of Actuator IDs.",
     },
     b: {
       type: "array",
-      items: { type: "integer" },
+      items: uint8IntegerSchema,
+      uniqueItems: true,
       description: "Array of Button IDs.",
     },
   },
-  required: ["p", "n", "a", "b"],
-  additionalProperties: true,
-};
+  required: ["p", "v", "n", "a", "b"],
+  additionalProperties: false,
+} as const;
 
 /**
  * Schema for the payload of an LSH device's 'state' topic.
@@ -158,32 +206,34 @@ export const deviceActuatorsStatePayloadSchema = {
     },
   },
   required: ["p", "s"],
-  additionalProperties: true,
-};
+  additionalProperties: false,
+} as const;
 
 /** Schema for a Network Click Request payload. */
 const networkClickRequestPayloadSchema = {
   type: "object",
   properties: {
     p: { const: LshProtocol.NETWORK_CLICK_REQUEST },
-    i: { type: "integer", description: "Button ID that was pressed." },
-    t: { enum: Object.values(ClickType).filter(v => typeof v === 'number'), description: "Click Type ID." },
+    c: { ...uint8IntegerSchema, description: "Click correlation ID." },
+    i: { ...uint8IntegerSchema, description: "Button ID that was pressed." },
+    t: { enum: clickTypeEnum, description: "Click Type ID." },
   },
-  required: ["p", "i", "t"],
-  additionalProperties: true,
-};
+  required: ["p", "c", "i", "t"],
+  additionalProperties: false,
+} as const;
 
 /** Schema for a Network Click Confirmation payload. */
 const networkClickConfirmPayloadSchema = {
   type: "object",
   properties: {
     p: { const: LshProtocol.NETWORK_CLICK_CONFIRM },
-    i: { type: "integer", description: "Button ID that was pressed." },
-    t: { enum: Object.values(ClickType).filter(v => typeof v === 'number'), description: "Click Type ID." },
+    c: { ...uint8IntegerSchema, description: "Click correlation ID." },
+    i: { ...uint8IntegerSchema, description: "Button ID that was pressed." },
+    t: { enum: clickTypeEnum, description: "Click Type ID." },
   },
-  required: ["p", "i", "t"],
-  additionalProperties: true,
-};
+  required: ["p", "c", "i", "t"],
+  additionalProperties: false,
+} as const;
 
 /** Schema for a Device Boot payload. */
 const deviceBootPayloadSchema = {
@@ -192,8 +242,8 @@ const deviceBootPayloadSchema = {
     p: { const: LshProtocol.BOOT_NOTIFICATION },
   },
   required: ["p"],
-  additionalProperties: true,
-};
+  additionalProperties: false,
+} as const;
 
 /** Schema for a Ping payload. */
 const pingPayloadSchema = {
@@ -202,8 +252,8 @@ const pingPayloadSchema = {
     p: { const: LshProtocol.PING },
   },
   required: ["p"],
-  additionalProperties: true,
-};
+  additionalProperties: false,
+} as const;
 
 /**
  * A "super-schema" that validates any valid 'misc' topic payload.
@@ -239,11 +289,20 @@ export interface AppValidators {
  */
 export function createAppValidators(): AppValidators {
   const ajv = new Ajv({ discriminator: false, allErrors: true });
+  ajv.addKeyword({
+    keyword: "uniqueItemProperty",
+    type: "array",
+    schemaType: "string",
+    validate: hasUniqueItemProperty,
+    errors: false,
+  });
 
   return {
     validateSystemConfig: ajv.compile<SystemConfig>(systemConfigSchema),
     validateDeviceDetails: ajv.compile<DeviceDetailsPayload>(deviceDetailsPayloadSchema),
-    validateActuatorStates: ajv.compile<DeviceActuatorsStatePayload>(deviceActuatorsStatePayloadSchema),
+    validateActuatorStates: ajv.compile<DeviceActuatorsStatePayload>(
+      deviceActuatorsStatePayloadSchema,
+    ),
     validateAnyMiscTopic: ajv.compile<AnyMiscTopicPayload>(anyMiscTopicPayloadSchema),
   };
 }

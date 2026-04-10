@@ -15,9 +15,7 @@ describe("sleep", () => {
 
 describe("formatAlertMessage", () => {
   it("should create a correctly formatted message for an unhealthy device", () => {
-    const unhealthyDevices = [
-      { name: "living-room-light", reason: "Ping failed." },
-    ];
+    const unhealthyDevices = [{ name: "living-room-light", reason: "Ping failed." }];
     const expectedMessage =
       "‼️ *System Health Alert* ‼️\n\n" +
       "The following event occurred:\n" +
@@ -29,9 +27,7 @@ describe("formatAlertMessage", () => {
   });
 
   it("should create a correctly formatted message for a healthy device", () => {
-    const healthyDevices = [
-      { name: "living-room-light", reason: "Device is now connected." },
-    ];
+    const healthyDevices = [{ name: "living-room-light", reason: "Device is now connected." }];
     const expectedMessage =
       "✅ *System Health Recovery* ✅\n\n" +
       "The following devices are now back online:\n" +
@@ -86,4 +82,3 @@ describe("areSameArray", () => {
     expect(areSameArray([1, 2, 3], ["1", "2", "3"])).toBe(false);
   });
 });
-

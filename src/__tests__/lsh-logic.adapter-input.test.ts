@@ -1,15 +1,13 @@
 import * as chokidar from "chokidar";
 import * as fs from "fs/promises";
-import { NodeAPI } from "node-red";
+import type { NodeAPI } from "node-red";
 import { LshLogicService } from "../LshLogicService";
 import { LshCodec } from "../LshCodec";
-import { LshLogicNode } from "../lsh-logic";
+import type { LshLogicNode } from "../lsh-logic";
+import type { MockNodeInstance } from "./helpers/nodeRedTestUtils";
+import { defaultNodeConfig } from "./helpers/nodeRedTestUtils";
+import type { AdapterHarness } from "./helpers/lshLogicAdapterTestUtils";
 import {
-  defaultNodeConfig,
-  MockNodeInstance,
-} from "./helpers/nodeRedTestUtils";
-import {
-  AdapterHarness,
   createAdapterHarness,
   createServiceResult,
   getCloseHandler,
@@ -30,7 +28,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
   const initializeNode = async (
     config = defaultNodeConfig,
-    red = mockRED
+    red = mockRED,
   ): Promise<LshLogicNode> => {
     nodeInstance = await adapterHarness.initializeNode(config, red);
     return nodeInstance;
@@ -74,7 +72,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     await initializeNode();
 
     expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      "Critical error during initialization: File not found"
+      "Critical error during initialization: File not found",
     );
     expect(mockNodeInstance.status).toHaveBeenCalledWith({
       fill: "red",
@@ -94,10 +92,10 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
     expect(fs.readFile).toHaveBeenCalledWith(
       expect.stringContaining(defaultNodeConfig.systemConfigPath),
-      "utf-8"
+      "utf-8",
     );
     expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      "Critical error during initialization: missing config"
+      "Critical error during initialization: missing config",
     );
   });
 
@@ -117,13 +115,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     await getInputHandler(mockNodeInstance)(message, jest.fn(), done);
 
     expect(processMessageSpy).toHaveBeenCalledWith("homie/device-1/$state", "ready");
-    expect(mockNodeInstance.send).toHaveBeenLastCalledWith([
-      null,
-      null,
-      null,
-      null,
-      message,
-    ]);
+    expect(mockNodeInstance.send).toHaveBeenLastCalledWith([null, null, null, null, message]);
     expect(done).toHaveBeenCalledWith();
   });
 
@@ -143,11 +135,11 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
         payload,
       },
       jest.fn(),
-      done
+      done,
     );
 
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Decoded MsgPack payload from topic: LSH/device-1/misc"
+      "Decoded MsgPack payload from topic: LSH/device-1/misc",
     );
     expect(processMessageSpy).toHaveBeenCalledWith("LSH/device-1/misc", {
       p: 6,
@@ -169,60 +161,48 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
         payload: Buffer.from([0xc1]),
       },
       jest.fn(),
-      done
+      done,
     );
 
     expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to decode payload on topic LSH/device-1/misc:")
+      expect.stringContaining("Failed to decode payload on topic LSH/device-1/misc:"),
     );
     expect(done.mock.calls[0][0]).toBeInstanceOf(Error);
     expect(mockNodeInstance.send).not.toHaveBeenCalled();
   });
 
   it("should handle errors from the service during message processing", async () => {
-    jest
-      .spyOn(LshLogicService.prototype, "processMessage")
-      .mockImplementation(() => {
-        throw new Error("Service layer explosion!");
-      });
+    jest.spyOn(LshLogicService.prototype, "processMessage").mockImplementation(() => {
+      throw new Error("Service layer explosion!");
+    });
 
     await initializeNode();
     mockNodeInstance.send.mockClear();
 
     const done = jest.fn();
 
-    await getInputHandler(mockNodeInstance)(
-      { topic: "t", payload: "p" },
-      jest.fn(),
-      done
-    );
+    await getInputHandler(mockNodeInstance)({ topic: "t", payload: "p" }, jest.fn(), done);
 
     expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      "Error processing message: Service layer explosion!"
+      "Error processing message: Service layer explosion!",
     );
     expect(done).toHaveBeenCalledWith(new Error("Service layer explosion!"));
     expect(mockNodeInstance.send).not.toHaveBeenCalled();
   });
 
   it("should handle non-Error exceptions during message processing", async () => {
-    jest
-      .spyOn(LshLogicService.prototype, "processMessage")
-      .mockImplementation(() => {
-        throw "A simple string error";
-      });
+    jest.spyOn(LshLogicService.prototype, "processMessage").mockImplementation(() => {
+      throw "A simple string error";
+    });
 
     await initializeNode();
 
     const done = jest.fn();
 
-    await getInputHandler(mockNodeInstance)(
-      { topic: "t", payload: "p" },
-      jest.fn(),
-      done
-    );
+    await getInputHandler(mockNodeInstance)({ topic: "t", payload: "p" }, jest.fn(), done);
 
     expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      "Error processing message: A simple string error"
+      "Error processing message: A simple string error",
     );
     expect(done).toHaveBeenCalledWith(new Error("A simple string error"));
   });
@@ -236,11 +216,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
     const done = jest.fn();
 
-    await getInputHandler(mockNodeInstance)(
-      { payload: "some_payload" },
-      jest.fn(),
-      done
-    );
+    await getInputHandler(mockNodeInstance)({ payload: "some_payload" }, jest.fn(), done);
 
     expect(processMessageSpy).toHaveBeenCalledWith("", "some_payload");
     expect(done).toHaveBeenCalledWith();
@@ -263,23 +239,17 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
         systemConfig: expect.objectContaining({
           devices: [{ name: "test-device" }],
         }),
-      })
+      }),
     );
     expect(mockNodeInstance.__context.flow.set).toHaveBeenCalledWith(
       "lsh_topics",
       expect.objectContaining({
         lsh: ["LSH/test-device/conf", "LSH/test-device/state", "LSH/test-device/misc"],
         homie: ["homie/test-device/$state"],
-      })
+      }),
     );
 
-    expect(mockNodeInstance.send).toHaveBeenCalledWith([
-      null,
-      null,
-      null,
-      expect.any(Array),
-      null,
-    ]);
+    expect(mockNodeInstance.send).toHaveBeenCalledWith([null, null, null, expect.any(Array), null]);
   });
 
   it("should export only the unsubscribe message when no devices are configured", async () => {
@@ -305,7 +275,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
         lsh: [],
         homie: [],
         all: [],
-      })
+      }),
     );
   });
 
@@ -316,23 +286,17 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
     nodeRedModule(mockRED);
 
-    expect(mockRED.nodes.registerType).toHaveBeenCalledWith(
-      "lsh-logic",
-      expect.any(Function)
-    );
+    expect(mockRED.nodes.registerType).toHaveBeenCalledWith("lsh-logic", expect.any(Function));
 
     const wrapper = (mockRED.nodes.registerType as jest.Mock).mock.calls[0][1] as (
       this: MockNodeInstance,
-      config: typeof defaultNodeConfig
+      config: typeof defaultNodeConfig,
     ) => void;
 
     wrapper.call(mockNodeInstance, defaultNodeConfig);
     await waitForInitialization();
 
-    expect(mockRED.nodes.createNode).toHaveBeenCalledWith(
-      mockNodeInstance,
-      defaultNodeConfig
-    );
+    expect(mockRED.nodes.createNode).toHaveBeenCalledWith(mockNodeInstance, defaultNodeConfig);
     expect(mockNodeInstance.on).toHaveBeenCalledWith("input", expect.any(Function));
     expect(mockNodeInstance.on).toHaveBeenCalledWith("close", expect.any(Function));
 

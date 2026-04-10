@@ -1,13 +1,12 @@
-import { ErrorObject, ValidateFunction } from "ajv";
-import { NodeMessage } from "node-red";
+import type { ErrorObject, ValidateFunction } from "ajv";
+import type { NodeMessage } from "node-red";
 import { LshLogicService } from "../../LshLogicService";
-import {
+import { LSH_WIRE_PROTOCOL_MAJOR, LshProtocol, Output } from "../../types";
+import type {
   AlertPayload,
   AnyMiscTopicPayload,
   DeviceDetailsPayload,
-  LshProtocol,
   OtherActorsCommandPayload,
-  Output,
   ServiceResult,
   SystemConfig,
 } from "../../types";
@@ -26,11 +25,24 @@ export const createMockValidators = () => ({
   validateAnyMiscTopic: createMockValidator(),
 });
 
-export const defaultServiceConfig = {
+type ServiceConfig = {
+  lshBasePath: string;
+  homieBasePath: string;
+  serviceTopic: string;
+  protocol: "json" | "msgpack";
+  otherDevicesPrefix: string;
+  clickTimeout: number;
+  interrogateThreshold: number;
+  pingTimeout: number;
+  haDiscovery: boolean;
+  haDiscoveryPrefix: string;
+};
+
+export const defaultServiceConfig: ServiceConfig = {
   lshBasePath: "LSH/",
   homieBasePath: "homie/",
   serviceTopic: "LSH/Node-RED/SRV",
-  protocol: "json" as const,
+  protocol: "json",
   otherDevicesPrefix: "other_devices",
   clickTimeout: 5,
   interrogateThreshold: 3,
@@ -40,15 +52,11 @@ export const defaultServiceConfig = {
 };
 
 export const defaultSystemConfig: SystemConfig = {
-  devices: [
-    { name: "device-sender" },
-    { name: "actor1" },
-    { name: "device-silent" },
-  ],
+  devices: [{ name: "device-sender" }, { name: "actor1" }, { name: "device-silent" }],
 };
 
 export type ServiceHarnessOptions = {
-  config?: Partial<typeof defaultServiceConfig>;
+  config?: Partial<ServiceConfig>;
   systemConfig?: SystemConfig;
 };
 
@@ -63,17 +71,20 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
   const config = { ...defaultServiceConfig, ...options.config };
   const service = new LshLogicService(config, contextReader, validators);
 
-  const loadConfig = (systemConfig: SystemConfig = options.systemConfig ?? defaultSystemConfig): SystemConfig => {
+  const loadConfig = (
+    systemConfig: SystemConfig = options.systemConfig ?? defaultSystemConfig,
+  ): SystemConfig => {
     service.updateSystemConfig(systemConfig);
     return systemConfig;
   };
 
   const sendDeviceDetails = (
     deviceName: string,
-    details: Partial<Omit<DeviceDetailsPayload, "p" | "n">> = {}
+    details: Partial<Omit<DeviceDetailsPayload, "p" | "n">> = {},
   ): ServiceResult =>
     service.processMessage(`${config.lshBasePath}${deviceName}/conf`, {
       p: LshProtocol.DEVICE_DETAILS,
+      v: details.v ?? LSH_WIRE_PROTOCOL_MAJOR,
       n: deviceName,
       a: details.a ?? [1],
       b: details.b ?? [],
@@ -84,7 +95,7 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
 
   const setDeviceOnline = (
     deviceName: string,
-    details: Partial<Omit<DeviceDetailsPayload, "p" | "n">> = {}
+    details: Partial<Omit<DeviceDetailsPayload, "p" | "n">> = {},
   ): void => {
     sendDeviceDetails(deviceName, details);
     sendHomieState(deviceName, "ready");
@@ -133,37 +144,34 @@ export function createAjvError(message: string): ErrorObject {
 
 export function getOutputMessages(
   result: Pick<ServiceResult, "messages">,
-  output: Output
+  output: Output,
 ): NodeMessage[] {
   const message = result.messages[output];
   if (!message) {
     throw new Error(`Expected output ${output} to contain at least one message.`);
   }
-  return Array.isArray(message) ? message : [message];
+  return (Array.isArray(message) ? message : [message]) as NodeMessage[];
 }
 
 export function getSingleOutputMessage<TPayload = unknown>(
   result: Pick<ServiceResult, "messages">,
-  output: Output
+  output: Output,
 ): NodeMessage & { payload: TPayload } {
   const messages = getOutputMessages(result, output);
   if (messages.length !== 1) {
-    throw new Error(`Expected output ${output} to contain exactly one message, got ${messages.length}.`);
+    throw new Error(
+      `Expected output ${output} to contain exactly one message, got ${messages.length}.`,
+    );
   }
   return messages[0] as NodeMessage & { payload: TPayload };
 }
 
-export function getAlertPayload(
-  result: Pick<ServiceResult, "messages">
-): AlertPayload {
+export function getAlertPayload(result: Pick<ServiceResult, "messages">): AlertPayload {
   return getSingleOutputMessage<AlertPayload>(result, Output.Alerts).payload;
 }
 
 export function getOtherActorsPayload(
-  result: Pick<ServiceResult, "messages">
+  result: Pick<ServiceResult, "messages">,
 ): OtherActorsCommandPayload {
-  return getSingleOutputMessage<OtherActorsCommandPayload>(
-    result,
-    Output.OtherActors
-  ).payload;
+  return getSingleOutputMessage<OtherActorsCommandPayload>(result, Output.OtherActors).payload;
 }

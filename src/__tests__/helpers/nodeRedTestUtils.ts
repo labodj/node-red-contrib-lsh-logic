@@ -1,5 +1,5 @@
-import { Node, NodeAPI } from "node-red";
-import { LshLogicNodeDef } from "../../types";
+import type { Node, NodeAPI } from "node-red";
+import type { LshLogicNodeDef } from "../../types";
 
 type MockContextStore = {
   get: jest.Mock;
@@ -76,7 +76,7 @@ export function createMockRed(userDir = process.cwd()): NodeAPI {
 
 export function getRegisteredHandler<THandler>(
   node: MockNodeInstance,
-  eventName: string
+  eventName: string,
 ): THandler {
   const registration = node.on.mock.calls.find(([event]) => event === eventName);
   if (!registration) {

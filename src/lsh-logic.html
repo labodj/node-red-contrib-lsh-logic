@@ -67,13 +67,7 @@
       return this.name || "LSH Logic";
     },
     inputLabels: "MQTT Messages",
-    outputLabels: [
-      "LSH Commands",
-      "Other Actor Commands",
-      "Alerts",
-      "Configuration",
-      "Debug",
-    ],
+    outputLabels: ["LSH Commands", "Other Actor Commands", "Alerts", "Configuration", "Debug"],
   });
 </script>
 
@@ -113,32 +107,18 @@
     </div>
     <div class="form-row">
       <label for="node-input-homieBasePath">Homie Base Path</label>
-      <input
-        type="text"
-        id="node-input-homieBasePath"
-        placeholder="e.g., homie/"
-      />
-      <span class="form-tip"
-        >Base path for Homie device state topics. Must end with a '/'.</span
-      >
+      <input type="text" id="node-input-homieBasePath" placeholder="e.g., homie/" />
+      <span class="form-tip">Base path for Homie device state topics. Must end with a '/'.</span>
     </div>
     <div class="form-row">
       <label for="node-input-lshBasePath">LSH Base Path</label>
       <input type="text" id="node-input-lshBasePath" placeholder="e.g., LSH/" />
-      <span class="form-tip"
-        >Base path for LSH device topics. Must end with a '/'.</span
-      >
+      <span class="form-tip">Base path for LSH device topics. Must end with a '/'.</span>
     </div>
     <div class="form-row">
       <label for="node-input-serviceTopic">Service Topic</label>
-      <input
-        type="text"
-        id="node-input-serviceTopic"
-        placeholder="e.g., LSH/Node-RED/SRV"
-      />
-      <span class="form-tip"
-        >Broadcast topic for global commands (e.g., ping).</span
-      >
+      <input type="text" id="node-input-serviceTopic" placeholder="e.g., LSH/Node-RED/SRV" />
+      <span class="form-tip">Broadcast topic for global commands (e.g., ping).</span>
     </div>
 
     <div class="form-row">
@@ -147,16 +127,12 @@
         <option value="json">JSON</option>
         <option value="msgpack">MsgPack</option>
       </select>
-      <span class="form-tip">
-        Payload format for commands sent to LSH devices.
-      </span>
+      <span class="form-tip"> Payload format for commands sent to LSH devices. </span>
     </div>
   </div>
 
   <div class="lsh-config-section">
-    <div class="lsh-config-section-title">
-      <i class="fa fa-file-text-o"></i> Configuration File
-    </div>
+    <div class="lsh-config-section-title"><i class="fa fa-file-text-o"></i> Configuration File</div>
     <div class="form-row">
       <label for="node-input-systemConfigPath">System Config</label>
       <input
@@ -165,74 +141,45 @@
         placeholder="configs/system-config.json"
       />
       <span class="form-tip"
-        >Path to the main JSON config, relative to your Node-RED user
-        directory.</span
+        >Path to the main JSON config, relative to your Node-RED user directory.</span
       >
     </div>
   </div>
 
   <div class="lsh-config-section">
-    <div class="lsh-config-section-title">
-      <i class="fa fa-clock-o"></i> Timing Settings
-    </div>
+    <div class="lsh-config-section-title"><i class="fa fa-clock-o"></i> Timing Settings</div>
     <div class="form-row">
       <label for="node-input-clickTimeout">Click Ack Timeout (s)</label>
       <input type="number" id="node-input-clickTimeout" style="width: 80px;" />
-      <span class="form-tip"
-        >Seconds to wait for a network click confirmation.</span
-      >
+      <span class="form-tip">Seconds to wait for a network click confirmation.</span>
     </div>
     <div class="form-row">
       <label for="node-input-clickCleanupInterval">Click Cleanup (s)</label>
-      <input
-        type="number"
-        id="node-input-clickCleanupInterval"
-        style="width: 80px;"
-      />
-      <span class="form-tip"
-        >How often to remove expired, unconfirmed clicks.</span
-      >
+      <input type="number" id="node-input-clickCleanupInterval" style="width: 80px;" />
+      <span class="form-tip">How often to remove expired, unconfirmed clicks.</span>
     </div>
     <div class="form-row">
       <label for="node-input-watchdogInterval">Watchdog Interval (s)</label>
-      <input
-        type="number"
-        id="node-input-watchdogInterval"
-        style="width: 80px;"
-      />
+      <input type="number" id="node-input-watchdogInterval" style="width: 80px;" />
       <span class="form-tip">Frequency of periodic device health checks.</span>
     </div>
     <div class="form-row">
       <label for="node-input-interrogateThreshold">Ping Threshold (s)</label>
-      <input
-        type="number"
-        id="node-input-interrogateThreshold"
-        style="width: 80px;"
-      />
-      <span class="form-tip"
-        >Seconds of device silence before sending a check-up ping.</span
-      >
+      <input type="number" id="node-input-interrogateThreshold" style="width: 80px;" />
+      <span class="form-tip">Seconds of device silence before sending a check-up ping.</span>
     </div>
     <div class="form-row">
-      <label for="node-input-initialStateTimeout"
-        >Initial Check Delay (s)</label
-      >
-      <input
-        type="number"
-        id="node-input-initialStateTimeout"
-        style="width: 80px;"
-      />
+      <label for="node-input-initialStateTimeout">Initial Check Delay (s)</label>
+      <input type="number" id="node-input-initialStateTimeout" style="width: 80px;" />
       <span class="form-tip"
-        >Seconds to wait after config load before actively checking for missing
-        devices.</span
+        >Seconds to wait after config load before actively checking for missing devices.</span
       >
     </div>
     <div class="form-row">
       <label for="node-input-pingTimeout">Ping Timeout (s)</label>
       <input type="number" id="node-input-pingTimeout" style="width: 80px;" />
       <span class="form-tip"
-        >Seconds to wait for a ping response before marking a device as
-        'stale'.</span
+        >Seconds to wait for a ping response before marking a device as 'stale'.</span
       >
     </div>
   </div>
@@ -243,21 +190,24 @@
     </div>
     <div class="form-row">
       <label for="node-input-haDiscovery" style="width: 70%;">Enable Auto-Discovery</label>
-      <input type="checkbox" id="node-input-haDiscovery" style="display: inline-block; width: auto; vertical-align: top;">
+      <input
+        type="checkbox"
+        id="node-input-haDiscovery"
+        style="display: inline-block; width: auto; vertical-align: top;"
+      />
       <div class="form-tip" style="margin-top: 5px;">
-        Automatically generate Home Assistant configuration for all Homie devices found under the configured base path.
+        Automatically generate Home Assistant configuration for all Homie devices found under the
+        configured base path.
       </div>
     </div>
     <div class="form-row">
       <label for="node-input-haDiscoveryPrefix">Discovery Prefix</label>
-      <input type="text" id="node-input-haDiscoveryPrefix" placeholder="homeassistant">
+      <input type="text" id="node-input-haDiscoveryPrefix" placeholder="homeassistant" />
     </div>
   </div>
 
   <div class="lsh-config-section">
-    <div class="lsh-config-section-title">
-      <i class="fa fa-exchange"></i> Context Interaction
-    </div>
+    <div class="lsh-config-section-title"><i class="fa fa-exchange"></i> Context Interaction</div>
     <div style="padding-left: 10px;">
       <h4>Export Internal State</h4>
       <div class="form-row">
@@ -284,11 +234,7 @@
       </div>
       <div class="form-row">
         <label for="node-input-exportTopicsKey">With key</label>
-        <input
-          type="text"
-          id="node-input-exportTopicsKey"
-          style="width: 70%;"
-        />
+        <input type="text" id="node-input-exportTopicsKey" style="width: 70%;" />
       </div>
       <hr />
       <h4>Read External Actor State</h4>
@@ -301,11 +247,7 @@
       </div>
       <div class="form-row">
         <label for="node-input-otherDevicesPrefix">External State Prefix</label>
-        <input
-          type="text"
-          id="node-input-otherDevicesPrefix"
-          placeholder="e.g., other_devices"
-        />
+        <input type="text" id="node-input-otherDevicesPrefix" placeholder="e.g., other_devices" />
         <span class="form-tip">Prefix for reading external actor states.</span>
       </div>
     </div>
@@ -314,48 +256,41 @@
 <!-- The Help tab documentation for the node -->
 <script type="text/html" data-help-name="lsh-logic">
   <p>
-    A powerful, all-in-one node that encapsulates the entire automation logic
-    for an LSH (Labo Smart Home) style system. It replaces a complex flow of
-    function nodes with a single, robust, and maintainable component built with
-    TypeScript.
+    A powerful, all-in-one node that encapsulates the entire automation logic for an LSH (Labo Smart
+    Home) style system. It replaces a complex flow of function nodes with a single, robust, and
+    maintainable component built with TypeScript.
   </p>
 
   <h3>Core Features</h3>
   <ul>
     <li>
-      <strong>Declarative System Configuration:</strong> Define all your
-      system's devices in a single, clear <code>system-config.json</code> file.
-      The node automatically hot-reloads the configuration when the file is
-      modified.
+      <strong>Declarative System Configuration:</strong> Define all your system's devices in a
+      single, clear <code>system-config.json</code> file. The node automatically hot-reloads the
+      configuration when the file is modified.
     </li>
     <li>
-      <strong>Centralized State Management:</strong> Maintains an in-memory
-      registry of all device states, health status (connected, healthy, stale),
-      and configurations. This state can be exposed to the context for easy
-      debugging and dashboarding.
+      <strong>Centralized State Management:</strong> Maintains an in-memory registry of all device
+      states, health status (connected, healthy, stale), and configurations. This state can be
+      exposed to the context for easy debugging and dashboarding.
     </li>
     <li>
-      <strong>Advanced Click Logic:</strong> Implements "long-click" (smart
-      toggle) and "super-long-click" (turn all off) actions for devices that
-      have buttons configured.
+      <strong>Advanced Click Logic:</strong> Implements "long-click" (smart toggle) and
+      "super-long-click" (turn all off) actions for devices that have buttons configured.
     </li>
     <li>
-      <strong>Reliable Network Protocol:</strong> Uses a two-phase commit
-      protocol for network-based button clicks to ensure commands are not lost,
-      even on unreliable networks.
+      <strong>Reliable Network Protocol:</strong> Uses a two-phase commit protocol for network-based
+      button clicks to ensure commands are not lost, even on unreliable networks.
     </li>
     <li>
-      <strong>Intelligent Watchdog:</strong> Actively monitors device health
-      using a combination of passive (Homie <code>$state</code>) and active (LSH ping)
-      checks. It uses a smart initial verification process to quickly and
-      accurately detect offline devices at startup, preventing false alarms and
-      alert spam.
+      <strong>Intelligent Watchdog:</strong> Actively monitors device health using a combination of
+      passive (Homie <code>$state</code>) and active (LSH ping) checks. It uses a smart initial
+      verification process to quickly and accurately detect offline devices at startup, preventing
+      false alarms and alert spam.
     </li>
     <li>
-      <strong>Dynamic Topic Management:</strong> Emits messages on a dedicated
-      output to dynamically configure an <code>mqtt-in</code> node,
-      automatically managing topic subscriptions and unsubscriptions as your
-      system configuration changes.
+      <strong>Dynamic Topic Management:</strong> Emits messages on a dedicated output to dynamically
+      configure an <code>mqtt-in</code> node, automatically managing topic subscriptions and
+      unsubscriptions as your system configuration changes.
     </li>
   </ul>
 
@@ -363,43 +298,38 @@
   <dl class="message-properties">
     <dt>MQTT Messages</dt>
     <dd>
-      The node determines which topics to listen to based on your configuration.
-      You do not need to manually subscribe. Instead, connect the node's
-      <strong>Configuration</strong> output to an <code>mqtt-in</code> node to
-      complete the setup.
+      The node determines which topics to listen to based on your configuration. You do not need to
+      manually subscribe. Instead, connect the node's
+      <strong>Configuration</strong> output to an <code>mqtt-in</code> node to complete the setup.
     </dd>
   </dl>
 
   <h3>Outputs</h3>
   <ol style="margin-bottom: 20px;">
     <li>
-      <b>LSH Commands:</b> Outputs MQTT messages for devices using the LSH
-      protocol. This includes actuator state commands
-      (<code>SET_STATE</code>, <code>SET_SINGLE_ACTUATOR</code>), network click
-      acknowledgements (<code>NETWORK_CLICK_ACK</code>), failovers
-      (<code>FAILOVER</code>, <code>GENERAL_FAILOVER</code>), and watchdog
-      pings (<code>PING</code>).
+      <b>LSH Commands:</b> Outputs MQTT messages for devices using the LSH protocol. This includes
+      actuator state commands (<code>SET_STATE</code>, <code>SET_SINGLE_ACTUATOR</code>), network
+      click acknowledgements (<code>NETWORK_CLICK_ACK</code>), failovers (<code>FAILOVER</code>,
+      <code>FAILOVER_CLICK</code>), and watchdog pings (<code>PING</code>).
     </li>
     <li>
-      <b>Other Actor Commands:</b> Outputs generic commands intended for
-      external, non-LSH devices (e.g., Tasmota, Zigbee2MQTT). The message
-      payload is an object containing the target actor names and the desired
-      boolean state (<code>true</code>/<code>false</code>).
+      <b>Other Actor Commands:</b> Outputs generic commands intended for external, non-LSH devices
+      (e.g., Tasmota, Zigbee2MQTT). The message payload is an object containing the target actor
+      names and the desired boolean state (<code>true</code>/<code>false</code>).
     </li>
     <li>
-      <b>Alerts:</b> Outputs formatted, human-readable alert messages when a
-      device's health status changes (e.g., goes offline or comes back online).
-      Alerts for "back online" are suppressed during the initial startup period
-      to avoid notification noise.
+      <b>Alerts:</b> Outputs formatted, human-readable alert messages when a device's health status
+      changes (e.g., goes offline or comes back online). Alerts for "back online" are suppressed
+      during the initial startup period to avoid notification noise.
     </li>
     <li>
-      <b>Configuration:</b> Outputs specially crafted messages to dynamically
-      control the subscriptions of an <code>mqtt-in</code> node. This is the key
-      to a fully automated and self-configuring system.
+      <b>Configuration:</b> Outputs specially crafted messages to dynamically control the
+      subscriptions of an <code>mqtt-in</code> node. This is the key to a fully automated and
+      self-configuring system.
     </li>
     <li>
-      <b>Debug:</b> Forwards the original, unprocessed input message for logging
-      and debugging purposes.
+      <b>Debug:</b> Forwards the original, unprocessed input message for logging and debugging
+      purposes.
     </li>
   </ol>
 
@@ -407,42 +337,39 @@
   <dl class="message-properties">
     <dt>MQTT Path Settings</dt>
     <dd>
-      Defines the base MQTT paths for all topics the node interacts with. These
-      must match your system's topic structure (e.g., <code>homie/</code>,
-      <code>LSH/</code>).
+      Defines the base MQTT paths for all topics the node interacts with. These must match your
+      system's topic structure (e.g., <code>homie/</code>, <code>LSH/</code>).
     </dd>
 
     <dt>System Config</dt>
     <dd>
-      Specifies the path to your <code>system-config.json</code> file, relative
-      to your Node-RED user directory (e.g., <code>~/.node-red/configs/</code>).
-      This file is the single source of truth for all devices managed by the
-      node.
+      Specifies the path to your <code>system-config.json</code> file, relative to your Node-RED
+      user directory (e.g., <code>~/.node-red/configs/</code>). This file is the single source of
+      truth for all devices managed by the node.
     </dd>
 
     <dt>Context Interaction</dt>
     <dd>
-      Allows the node to share its internal state (device registry) and
-      configuration with the rest of the flow via flow or global context
-      variables. This is useful for building dashboards or for advanced
-      debugging.
+      Allows the node to share its internal state (device registry) and configuration with the rest
+      of the flow via flow or global context variables. This is useful for building dashboards or
+      for advanced debugging.
     </dd>
 
     <dt>Timing Settings</dt>
     <dd>
       Allows you to fine-tune all system timeouts and intervals. The
-      <code>Initial Check Delay</code> is particularly important: it defines a
-      "grace period" after deployment for devices to report their online status
-      via Homie, before the node actively pings any that are missing.
+      <code>Initial Check Delay</code> is particularly important: it defines a "grace period" after
+      deployment for devices to report their online status via Homie, before the node actively pings
+      any that are missing.
     </dd>
   </dl>
 
   <h3>Best Practices</h3>
   <h4>Dynamic MQTT Subscriptions</h4>
   <p>
-    The most powerful way to use this node is to let it manage your MQTT
-    subscriptions automatically. This creates a "zero-maintenance" flow that
-    adapts as you add or remove devices from your `system-config.json`.
+    The most powerful way to use this node is to let it manage your MQTT subscriptions
+    automatically. This creates a "zero-maintenance" flow that adapts as you add or remove devices
+    from your `system-config.json`.
   </p>
   <p>
     <strong
@@ -451,69 +378,63 @@
     >
   </p>
   <p>
-    When the flow is deployed or when the configuration file changes, the
-    `lsh-logic` node will send a sequence of messages to the `mqtt-in` node to
-    first <strong>unsubscribe from all</strong> previous topics and then
-    <strong>subscribe to the new, correct list of topics</strong>. This ensures
-    your system is always listening to exactly the right channels without any
-    manual intervention.
+    When the flow is deployed or when the configuration file changes, the `lsh-logic` node will send
+    a sequence of messages to the `mqtt-in` node to first
+    <strong>unsubscribe from all</strong> previous topics and then
+    <strong>subscribe to the new, correct list of topics</strong>. This ensures your system is
+    always listening to exactly the right channels without any manual intervention.
   </p>
 
   <h4>Configuration File Management</h4>
   <ul>
     <li>
       <strong>User Directory:</strong> It is highly recommended to place your
-      <code>system-config.json</code> file within a sub-directory of your
-      Node-RED user directory (e.g., <code>~/.node-red/configs/</code>). This
-      ensures your configuration is portable and included in standard backups of
-      your Node-RED environment.
+      <code>system-config.json</code> file within a sub-directory of your Node-RED user directory
+      (e.g., <code>~/.node-red/configs/</code>). This ensures your configuration is portable and
+      included in standard backups of your Node-RED environment.
     </li>
     <li>
-      <strong>Device Definitions:</strong> Every device that the system should
-      be aware of, even if it's just a simple light (an "actor"), must have an
-      entry with its <code>name</code> in the `system-config.json` file. The
-      button-related properties (<code>longClickButtons</code>, etc.) are
-      entirely optional.
+      <strong>Device Definitions:</strong> Every device that the system should be aware of, even if
+      it's just a simple light (an "actor"), must have an entry with its <code>name</code> in the
+      `system-config.json` file. The button-related properties (<code>longClickButtons</code>, etc.)
+      are entirely optional.
     </li>
   </ul>
 
   <h4>Debugging</h4>
   <ul>
     <li>
-      Use the "Export Internal State" option to expose the live device registry
-      to a flow or global context variable. You can then connect a
-      <code>inject</code> node to a <code>debug</code> node to inspect the full
-      system state at any time.
+      Use the "Export Internal State" option to expose the live device registry to a flow or global
+      context variable. You can then connect a
+      <code>inject</code> node to a <code>debug</code> node to inspect the full system state at any
+      time.
     </li>
     <li>
-      The "Debug" output of this node will pass through any message it receives,
-      allowing you to see the raw data before it's processed.
+      The "Debug" output of this node will pass through any message it receives, allowing you to see
+      the raw data before it's processed.
     </li>
   </ul>
 
   <h4>Advanced Usage: Using MsgPack</h4>
   <p>
-    This node supports both JSON (default) and MsgPack for payload encoding and
-    decoding, which can significantly reduce network traffic.
+    This node supports both JSON (default) and MsgPack for payload encoding and decoding, which can
+    significantly reduce network traffic.
   </p>
   <p><b>Sending Commands (Output):</b></p>
   <p>
-    In the node's configuration panel, you can set the <b>LSH Protocol</b> to
-    "MsgPack". When this is selected, all commands sent from the
-    <b>LSH Commands</b> output will have their payloads automatically encoded as
-    MsgPack. Your LSH devices must be programmed to decode MsgPack payloads on
-    their `.../IN` topic.
+    In the node's configuration panel, you can set the <b>LSH Protocol</b> to "MsgPack". When this
+    is selected, all commands sent from the <b>LSH Commands</b> output will have their payloads
+    automatically encoded as MsgPack. Your LSH devices must be programmed to decode MsgPack payloads
+    on their `.../IN` topic.
   </p>
   <p><b>Receiving Messages (Input):</b></p>
   <p>
-    The node automatically detects and decodes incoming MsgPack payloads. To
-    make this work, you must configure the <code>mqtt-in</code> node that feeds
-    messages into this node:
+    The node automatically detects and decodes incoming MsgPack payloads. To make this work, you
+    must configure the <code>mqtt-in</code> node that feeds messages into this node:
   </p>
   <ul>
     <li>
-      In the <code>mqtt-in</code> node settings, set the "Output" option to
-      <b>"a Buffer"</b>.
+      In the <code>mqtt-in</code> node settings, set the "Output" option to <b>"a Buffer"</b>.
     </li>
   </ul>
 </script>

@@ -131,15 +131,13 @@ describe("LshLogicService - Watchdog & Health", () => {
     service.runWatchdogCheck();
 
     nowSpy.mockReturnValue(
-      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000
+      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
     );
     const result = service.runWatchdogCheck();
 
     expect(getAlertPayload(result).message).toContain("No response to ping");
-    expect(
-      getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p
-    ).toBe(
-      LshProtocol.PING
+    expect(getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p).toBe(
+      LshProtocol.PING,
     );
   });
 
@@ -200,9 +198,7 @@ describe("LshLogicService - Watchdog & Health", () => {
 
     expect(result.stateChanged).toBe(true);
     expect(result.logs).toContain("Device 'dev1' is now responsive.");
-    expect(result.logs).toContain(
-      "Device 'dev1' is healthy again after ping response."
-    );
+    expect(result.logs).toContain("Device 'dev1' is healthy again after ping response.");
     expect(getAlertPayload(result).status).toBe("healthy");
     expect(service.getDeviceRegistry().dev1.isHealthy).toBe(true);
   });

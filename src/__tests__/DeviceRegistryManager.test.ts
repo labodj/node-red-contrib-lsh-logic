@@ -3,13 +3,9 @@
  * These tests verify the state management logic for all devices.
  */
 import { DeviceRegistryManager } from "../DeviceRegistryManager";
-import {
-  DeviceDetailsPayload,
-  Actor,
-  LshProtocol,
-  DeviceState,
-} from "../types";
-import { WatchdogResult } from "../Watchdog";
+import type { DeviceDetailsPayload, Actor, DeviceState } from "../types";
+import { LSH_WIRE_PROTOCOL_MAJOR, LshProtocol } from "../types";
+import type { WatchdogResult } from "../Watchdog";
 
 describe("DeviceRegistryManager", () => {
   /** The instance of the DeviceRegistryManager class under test. */
@@ -36,6 +32,7 @@ describe("DeviceRegistryManager", () => {
   it("should store device details and initialize actuator states and indexes", () => {
     const details: DeviceDetailsPayload = {
       p: LshProtocol.DEVICE_DETAILS,
+      v: LSH_WIRE_PROTOCOL_MAJOR,
       n: "new-device",
       a: [1, 2],
       b: [1],
@@ -53,6 +50,7 @@ describe("DeviceRegistryManager", () => {
   it("should throw an error if actuator state length mismatches config", () => {
     manager.registerDeviceDetails("device-1", {
       p: LshProtocol.DEVICE_DETAILS,
+      v: LSH_WIRE_PROTOCOL_MAJOR,
       n: "device-1",
       a: [1],
       b: [],
@@ -65,6 +63,7 @@ describe("DeviceRegistryManager", () => {
   it("should prune a device from the registry", () => {
     manager.registerDeviceDetails("device-to-prune", {
       p: LshProtocol.DEVICE_DETAILS,
+      v: LSH_WIRE_PROTOCOL_MAJOR,
       n: "d",
       a: [],
       b: [],
@@ -116,7 +115,13 @@ describe("DeviceRegistryManager", () => {
 
   describe("updateHealthFromResult (Watchdog)", () => {
     beforeEach(() => {
-      manager.registerDeviceDetails("health-test-dev", { p: LshProtocol.DEVICE_DETAILS, n: "d", a: [], b: [] });
+      manager.registerDeviceDetails("health-test-dev", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "d",
+        a: [],
+        b: [],
+      });
     });
 
     it("should update health to OK and clear stale flag", () => {
@@ -176,23 +181,24 @@ describe("DeviceRegistryManager", () => {
     });
 
     it("should return { stateChanged: false } for a non-existent device", () => {
-
       const nonExistentDevice = "ghost-device";
       const anyWatchdogResult: WatchdogResult = { status: "ok" };
 
-      const result = manager.updateHealthFromResult(
-        nonExistentDevice,
-        anyWatchdogResult
-      );
+      const result = manager.updateHealthFromResult(nonExistentDevice, anyWatchdogResult);
       expect(result.stateChanged).toBe(false);
       expect(manager.getDevice(nonExistentDevice)).toBeUndefined();
     });
-
   });
 
   describe("getSmartToggleState", () => {
     beforeEach(() => {
-      manager.registerDeviceDetails("light-group", { p: LshProtocol.DEVICE_DETAILS, n: "lg", a: [1, 2, 3, 4], b: [] });
+      manager.registerDeviceDetails("light-group", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "lg",
+        a: [1, 2, 3, 4],
+        b: [],
+      });
     });
 
     it("should return true when less than 50% of actuators are on", () => {
@@ -226,8 +232,8 @@ describe("DeviceRegistryManager", () => {
       manager.registerActuatorStates("light-group", [false, false, false, false]);
 
       mockContextReader.get
-        .mockReturnValueOnce(true)    // external-on is ON
-        .mockReturnValueOnce(false);   // external-off is OFF
+        .mockReturnValueOnce(true) // external-on is ON
+        .mockReturnValueOnce(false); // external-off is OFF
 
       const actors: Actor[] = [{ name: "light-group", allActuators: true, actuators: [] }];
       const otherActors = ["external-on", "external-off"];

@@ -4,7 +4,7 @@
  * responsible for creating, updating, and querying it. It is decoupled from
  * Node-RED and does not perform I/O (like logging or sending messages).
  */
-import {
+import type {
   DeviceRegistry,
   DeviceState,
   DeviceDetailsPayload,
@@ -12,7 +12,7 @@ import {
   ActuatorIndexMap,
 } from "./types";
 import { areSameArray } from "./utils";
-import { WatchdogResult } from "./Watchdog";
+import type { WatchdogResult } from "./Watchdog";
 
 /**
  * An interface describing an object that can read values from a context store.
@@ -72,13 +72,22 @@ export class DeviceRegistryManager {
   }
 
   /**
-     * Returns a deep copy of the entire device registry.
-     * This prevents external code from accidentally modifying the internal state.
-     * Uses the modern, robust `structuredClone` function.
-     * @returns A deep copy of the current device registry object.
-     */
+   * Returns a deep copy of the entire device registry.
+   * This prevents external code from accidentally modifying the internal state.
+   * Uses the modern, robust `structuredClone` function.
+   * @returns A deep copy of the current device registry object.
+   */
   public getRegistry(): DeviceRegistry {
     return structuredClone(this.registry);
+  }
+
+  /**
+   * Returns the names of the devices currently present in the registry.
+   * This avoids cloning the full registry when only iteration over keys is needed.
+   * @returns An array of registered device names.
+   */
+  public getRegisteredDeviceNames(): string[] {
+    return Object.keys(this.registry);
   }
 
   /**
@@ -100,15 +109,15 @@ export class DeviceRegistryManager {
   }
 
   /**
-     * Updates the registry with configuration details from a device's 'conf' message.
-     * Now uses the new protocol with keys 'n', 'a', 'b'.
-     * @param deviceName - The name of the device.
-     * @param details - The validated payload from the 'conf' topic.
-     * @returns An object indicating if the device details have changed.
-     */
+   * Updates the registry with configuration details from a device's 'conf' message.
+   * Now uses the new protocol with keys 'n', 'a', 'b'.
+   * @param deviceName - The name of the device.
+   * @param details - The validated payload from the 'conf' topic.
+   * @returns An object indicating if the device details have changed.
+   */
   public registerDeviceDetails(
     deviceName: string,
-    details: DeviceDetailsPayload
+    details: DeviceDetailsPayload,
   ): { changed: boolean } {
     const device = this._ensureDeviceExists(deviceName);
 
@@ -121,13 +130,10 @@ export class DeviceRegistryManager {
       changed = true;
     }
 
-    const actuatorIndexes: ActuatorIndexMap = details.a.reduce(
-      (acc, id, index) => {
-        acc[id] = index;
-        return acc;
-      },
-      {} as ActuatorIndexMap
-    );
+    const actuatorIndexes: ActuatorIndexMap = details.a.reduce((acc, id, index) => {
+      acc[id] = index;
+      return acc;
+    }, {} as ActuatorIndexMap);
 
     // Merge new details into the existing device state
     const now = Date.now();
@@ -157,7 +163,7 @@ export class DeviceRegistryManager {
    */
   public registerActuatorStates(
     deviceName: string,
-    newStates: boolean[]
+    newStates: boolean[],
   ): { isNew: boolean; changed: boolean; configIsMissing: boolean } {
     const isNew = !this.registry[deviceName];
     const device = this._ensureDeviceExists(deviceName);
@@ -166,7 +172,7 @@ export class DeviceRegistryManager {
 
     if (!configIsMissing && device.actuatorsIDs.length !== newStates.length) {
       throw new Error(
-        `State mismatch for ${deviceName}: expected ${device.actuatorsIDs.length} states, received ${newStates.length}.`
+        `State mismatch for ${deviceName}: expected ${device.actuatorsIDs.length} states, received ${newStates.length}.`,
       );
     }
 
@@ -188,11 +194,11 @@ export class DeviceRegistryManager {
    */
   public updateConnectionState(
     deviceName: string,
-    homieState: string
+    homieState: string,
   ): { stateChanged: boolean; wasConnected: boolean; isConnected: boolean } {
     const device = this._ensureDeviceExists(deviceName);
     const wasConnected = device.connected;
-    const isConnected = homieState === 'ready';
+    const isConnected = homieState === "ready";
 
     if (wasConnected === isConnected) {
       // If the state is the same, return that nothing changed.
@@ -234,28 +240,28 @@ export class DeviceRegistryManager {
   }
 
   /**
-    * Records a ping response from a device, marking it as healthy.
-    * A ping response is a strong indicator of LSH-level health.
-    * @param deviceName - The name of the device that responded.
-    * @returns An object indicating if the internal state was changed.
-    */
-  public recordPingResponse(deviceName: string): { stateChanged: boolean } {
+   * Records a ping response from a device, marking it as healthy.
+   * A ping response is a strong indicator of LSH-level health.
+   * @param deviceName - The name of the device that responded.
+   * @returns An object indicating if the internal state was changed.
+   */
+  public recordPingResponse(deviceName: string): { stateChanged: boolean; becameHealthy: boolean } {
     const device = this._ensureDeviceExists(deviceName);
 
     const wasHealthy = device.isHealthy;
     const wasStale = device.isStale;
 
-    const stateChanged = !wasHealthy || wasStale;
+    const becameHealthy = !wasHealthy || wasStale;
 
     device.lastSeenTime = Date.now();
 
-    if (stateChanged) {
+    if (becameHealthy) {
       device.isHealthy = true;
       device.isStale = false;
       device.alertSent = false;
     }
 
-    return { stateChanged };
+    return { stateChanged: becameHealthy, becameHealthy };
   }
 
   /**
@@ -268,7 +274,7 @@ export class DeviceRegistryManager {
    */
   public updateHealthFromResult(
     deviceName: string,
-    result: WatchdogResult
+    result: WatchdogResult,
   ): { stateChanged: boolean } {
     const device = this.getDevice(deviceName);
     if (!device) {
@@ -337,7 +343,7 @@ export class DeviceRegistryManager {
    */
   public getSmartToggleState(
     actors: Actor[],
-    otherActors: string[]
+    otherActors: string[],
   ): { stateToSet: boolean; active: number; total: number; warning?: string } {
     const lshCounts = actors.reduce(
       (acc, actor) => {
@@ -350,10 +356,7 @@ export class DeviceRegistryManager {
         } else {
           for (const actuatorId of actor.actuators) {
             const index = device.actuatorIndexes[actuatorId];
-            if (
-              index !== undefined &&
-              device.actuatorStates[index] !== undefined
-            ) {
+            if (index !== undefined && device.actuatorStates[index] !== undefined) {
               acc.total++;
               if (device.actuatorStates[index]) {
                 acc.active++;
@@ -363,26 +366,22 @@ export class DeviceRegistryManager {
         }
         return acc;
       },
-      { active: 0, total: 0 }
+      { active: 0, total: 0 },
     );
 
     const prefix = this.otherDevicesPrefix;
     const otherCounts = otherActors.reduce(
       (acc, actorName) => {
-        const state = this.otherActorsContext.get(
-          `${prefix}.${actorName}.state`
-        );
+        const state = this.otherActorsContext.get(`${prefix}.${actorName}.state`);
         if (typeof state === "boolean") {
           acc.total++;
           if (state === true) acc.active++;
         } else {
-          acc.warnings.push(
-            `State for otherActor '${actorName}' not found or not a boolean.`
-          );
+          acc.warnings.push(`State for otherActor '${actorName}' not found or not a boolean.`);
         }
         return acc;
       },
-      { active: 0, total: 0, warnings: [] as string[] }
+      { active: 0, total: 0, warnings: [] as string[] },
     );
 
     const warning = otherCounts.warnings.join(" ");
@@ -394,9 +393,7 @@ export class DeviceRegistryManager {
         stateToSet: false, // Default to OFF if no valid actuators are found.
         active: 0,
         total: 0,
-        warning: warning
-          ? warning
-          : "Smart Toggle: No valid actuators found to calculate state.",
+        warning: warning ? warning : "Smart Toggle: No valid actuators found to calculate state.",
       };
     }
 

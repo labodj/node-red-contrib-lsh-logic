@@ -1,16 +1,16 @@
 import * as chokidar from "chokidar";
 import * as fs from "fs/promises";
-import { ValidateFunction } from "ajv";
-import { Node, NodeAPI, NodeMessage } from "node-red";
+import type { ValidateFunction } from "ajv";
+import type { Node, NodeAPI, NodeMessage } from "node-red";
 import { LshLogicNode } from "../../lsh-logic";
-import { LshLogicNodeDef, ServiceResult } from "../../types";
+import type { LshLogicNodeDef, ServiceResult } from "../../types";
+import type { MockNodeInstance } from "./nodeRedTestUtils";
 import {
   createMockNode,
   createMockRed,
   defaultNodeConfig,
   flushMicrotasks,
   getRegisteredHandler,
-  MockNodeInstance,
 } from "./nodeRedTestUtils";
 import { createMockValidator } from "./serviceTestUtils";
 
@@ -30,7 +30,7 @@ export type AdapterHarness = {
 export type InputHandler = (
   msg: NodeMessage,
   send: (msg: NodeMessage) => void,
-  done: (err?: Error) => void
+  done: (err?: Error) => void,
 ) => unknown;
 
 export type CloseHandler = (done: () => void) => unknown;
@@ -52,9 +52,9 @@ export const createMockWatcher = (): MockWatcher => ({
 
 export const createAdapterHarness = (): AdapterHarness => {
   const mockWatcher = createMockWatcher();
-  jest.mocked(chokidar.watch).mockReturnValue(
-    mockWatcher as unknown as ReturnType<typeof chokidar.watch>
-  );
+  jest
+    .mocked(chokidar.watch)
+    .mockReturnValue(mockWatcher as unknown as ReturnType<typeof chokidar.watch>);
 
   jest.mocked(fs.readFile).mockResolvedValue(MOCK_CONFIG_CONTENT);
 
@@ -67,11 +67,7 @@ export const createAdapterHarness = (): AdapterHarness => {
     mockRED,
     mockWatcher,
     initializeNode: async (config = defaultNodeConfig, red = mockRED) => {
-      nodeInstance = new LshLogicNode(
-        mockNodeInstance as unknown as Node,
-        config,
-        red
-      );
+      nodeInstance = new LshLogicNode(mockNodeInstance as unknown as Node, config, red);
       await waitForInitialization();
       return nodeInstance;
     },
@@ -83,17 +79,13 @@ export const createAdapterHarness = (): AdapterHarness => {
   };
 };
 
-export const createValidator = (
-  isValid = true
-): jest.Mock & ValidateFunction => {
+export const createValidator = (isValid = true): jest.Mock & ValidateFunction => {
   const validator = createMockValidator() as jest.Mock & ValidateFunction;
   validator.mockReturnValue(isValid);
   return validator;
 };
 
-export const createServiceResult = (
-  overrides: Partial<ServiceResult> = {}
-): ServiceResult => ({
+export const createServiceResult = (overrides: Partial<ServiceResult> = {}): ServiceResult => ({
   messages: {},
   logs: [],
   warnings: [],
@@ -106,10 +98,8 @@ export const waitForInitialization = async (): Promise<void> => {
   await flushMicrotasks(6);
 };
 
-export const getInputHandler = (
-  node: MockNodeInstance
-): InputHandler => getRegisteredHandler<InputHandler>(node, "input");
+export const getInputHandler = (node: MockNodeInstance): InputHandler =>
+  getRegisteredHandler<InputHandler>(node, "input");
 
-export const getCloseHandler = (
-  node: MockNodeInstance
-): CloseHandler => getRegisteredHandler<CloseHandler>(node, "close");
+export const getCloseHandler = (node: MockNodeInstance): CloseHandler =>
+  getRegisteredHandler<CloseHandler>(node, "close");
