@@ -21,6 +21,12 @@ const uint8IntegerSchema = {
   maximum: 255,
 } as const;
 
+const positiveUint8IntegerSchema = {
+  type: "integer",
+  minimum: 1,
+  maximum: 255,
+} as const;
+
 const nonEmptyStringSchema = {
   type: "string",
   minLength: 1,
@@ -65,7 +71,7 @@ const actorSchema = {
     actuators: {
       type: "array",
       description: "A list of specific actuator IDs to control (if allActuators is false).",
-      items: uint8IntegerSchema,
+      items: positiveUint8IntegerSchema,
       uniqueItems: true,
     },
   },
@@ -77,12 +83,17 @@ const actorSchema = {
   then: {
     required: ["actuators"],
     properties: {
-      actuators: { type: "array", minItems: 1, items: uint8IntegerSchema, uniqueItems: true },
+      actuators: {
+        type: "array",
+        minItems: 1,
+        items: positiveUint8IntegerSchema,
+        uniqueItems: true,
+      },
     },
   },
   else: {
     properties: {
-      actuators: { type: "array", maxItems: 0, items: uint8IntegerSchema },
+      actuators: { type: "array", maxItems: 0, items: positiveUint8IntegerSchema },
     },
   },
 } as const;
@@ -95,7 +106,7 @@ const buttonActionSchema = {
   type: "object",
   properties: {
     id: {
-      ...uint8IntegerSchema,
+      ...positiveUint8IntegerSchema,
       description: "The unique identifier for the button (e.g., '7').",
     },
     actors: {
@@ -173,13 +184,13 @@ export const deviceDetailsPayloadSchema = {
     n: { ...nonEmptyStringSchema, description: "Device Name." },
     a: {
       type: "array",
-      items: uint8IntegerSchema,
+      items: positiveUint8IntegerSchema,
       uniqueItems: true,
       description: "Array of Actuator IDs.",
     },
     b: {
       type: "array",
-      items: uint8IntegerSchema,
+      items: positiveUint8IntegerSchema,
       uniqueItems: true,
       description: "Array of Button IDs.",
     },
@@ -201,7 +212,7 @@ export const deviceActuatorsStatePayloadSchema = {
     s: {
       type: "array",
       items: { type: "integer", minimum: 0, maximum: 255 },
-      minItems: 1,
+      minItems: 0,
       description: "Array of bitpacked bytes (each byte = 8 actuator states).",
     },
   },
@@ -214,8 +225,8 @@ const networkClickRequestPayloadSchema = {
   type: "object",
   properties: {
     p: { const: LshProtocol.NETWORK_CLICK_REQUEST },
-    c: { ...uint8IntegerSchema, description: "Click correlation ID." },
-    i: { ...uint8IntegerSchema, description: "Button ID that was pressed." },
+    c: { ...positiveUint8IntegerSchema, description: "Click correlation ID." },
+    i: { ...positiveUint8IntegerSchema, description: "Button ID that was pressed." },
     t: { enum: clickTypeEnum, description: "Click Type ID." },
   },
   required: ["p", "c", "i", "t"],
@@ -227,8 +238,8 @@ const networkClickConfirmPayloadSchema = {
   type: "object",
   properties: {
     p: { const: LshProtocol.NETWORK_CLICK_CONFIRM },
-    c: { ...uint8IntegerSchema, description: "Click correlation ID." },
-    i: { ...uint8IntegerSchema, description: "Button ID that was pressed." },
+    c: { ...positiveUint8IntegerSchema, description: "Click correlation ID." },
+    i: { ...positiveUint8IntegerSchema, description: "Button ID that was pressed." },
     t: { enum: clickTypeEnum, description: "Click Type ID." },
   },
   required: ["p", "c", "i", "t"],

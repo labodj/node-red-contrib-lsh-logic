@@ -111,6 +111,27 @@ describe("DeviceRegistryManager", () => {
       expect(device?.isHealthy).toBe(true);
       expect(device?.lastBootTime).toBeGreaterThan(0);
     });
+
+    it("should invalidate cached details and states on boot", () => {
+      manager.registerDeviceDetails("boot-device", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "boot-device",
+        a: [1, 2],
+        b: [7],
+      });
+      manager.registerActuatorStates("boot-device", [true, false]);
+
+      const { stateChanged } = manager.recordBoot("boot-device");
+      const device = manager.getDevice("boot-device");
+
+      expect(stateChanged).toBe(true);
+      expect(device?.lastDetailsTime).toBe(0);
+      expect(device?.actuatorsIDs).toEqual([]);
+      expect(device?.buttonsIDs).toEqual([]);
+      expect(device?.actuatorStates).toEqual([]);
+      expect(device?.actuatorIndexes).toEqual({});
+    });
   });
 
   describe("updateHealthFromResult (Watchdog)", () => {

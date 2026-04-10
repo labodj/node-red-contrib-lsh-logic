@@ -247,6 +247,21 @@ describe("LshLogicService - Core & Config", () => {
       expect(getOutputMessages(result, Output.Lsh)[0].topic).toBe("LSH/unknown-dev/IN");
     });
 
+    it("should request details when a known device shell sends state before details", () => {
+      service.processMessage("homie/actor1/$state", "ready");
+
+      const result = service.processMessage("LSH/actor1/state", {
+        p: LshProtocol.ACTUATORS_STATE,
+        s: [0],
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.warnings).toContain(
+        "Device 'actor1' sent state but its configuration is unknown. Requesting details.",
+      );
+      expect(getOutputMessages(result, Output.Lsh)[0].topic).toBe("LSH/actor1/IN");
+    });
+
     it("should return a no-op when receiving the same Homie ready state twice", () => {
       setDeviceOnline("actor1");
 
