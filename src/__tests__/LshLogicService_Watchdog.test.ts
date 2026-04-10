@@ -1,5 +1,6 @@
 import { LshProtocol, Output } from "../types";
 import {
+  createAjvError,
   createLoadedServiceHarness,
   createSystemConfig,
   getAlertPayload,
@@ -184,6 +185,7 @@ describe("LshLogicService - Watchdog & Health", () => {
 
     expect(result.logs).toContain("Received ping response from 'device-sender'.");
     expect(result.messages[Output.Alerts]).toBeUndefined();
+    expect(result.messages[Output.Lsh]).toBeUndefined();
   });
 
   it("should emit a recovery alert when an unseen device answers a ping", () => {
@@ -199,38 +201,48 @@ describe("LshLogicService - Watchdog & Health", () => {
     expect(result.stateChanged).toBe(true);
     expect(result.logs).toContain("Device 'dev1' is now responsive.");
     expect(result.logs).toContain("Device 'dev1' is healthy again after ping response.");
+    expect(result.logs).toContain(
+      "Device 'dev1' is missing details and state. Requesting a full authoritative snapshot.",
+    );
     expect(getAlertPayload(result).status).toBe("healthy");
     expect(service.getDeviceRegistry().dev1.isHealthy).toBe(true);
-  });
-
-  it("should handle a device boot notification", () => {
-    const { sendMisc } = createLoadedServiceHarness();
-
-    const result = sendMisc("actor1", { p: LshProtocol.BOOT_NOTIFICATION });
-
-    expect(result.logs).toContain("Device 'actor1' reported a boot event.");
-    expect(result.logs).toContain(
-      "Device 'actor1' boot invalidated cached details. Requesting full resync.",
-    );
-    expect(result.stateChanged).toBe(true);
     expect(getOutputMessages(result, Output.Lsh).map((message) => message.payload)).toEqual([
       { p: LshProtocol.REQUEST_DETAILS },
       { p: LshProtocol.REQUEST_STATE },
     ]);
   });
 
-  it("should treat repeated boot notifications as activity without a new state change", () => {
-    const nowSpy = mockNow();
-    nowSpy.mockReturnValue(START_TIME);
+  it("should request only state when a ping response arrives after details but before state", () => {
+    const { sendDeviceDetails, sendMisc } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1"),
+    });
+    sendDeviceDetails("dev1", { a: [1, 2] });
 
-    const { sendMisc } = createLoadedServiceHarness();
-    sendMisc("actor1", { p: LshProtocol.BOOT_NOTIFICATION });
+    const result = sendMisc("dev1", { p: LshProtocol.PING });
 
-    nowSpy.mockReturnValue(START_TIME + 1000);
-    const result = sendMisc("actor1", { p: LshProtocol.BOOT_NOTIFICATION });
+    expect(result.logs).toContain(
+      "Device 'dev1' is missing an authoritative state snapshot. Requesting state refresh.",
+    );
+    expect(getOutputMessages(result, Output.Lsh).map((message) => message.payload)).toEqual([
+      { p: LshProtocol.REQUEST_STATE },
+    ]);
+  });
 
+  it("should reject a boot payload on the misc topic", () => {
+    const { config, service, validators } = createLoadedServiceHarness();
+    const invalidBootPayload: unknown = {
+      p: LshProtocol.BOOT_NOTIFICATION,
+    };
+    validators.validateAnyMiscTopic.mockReturnValue(false);
+    validators.validateAnyMiscTopic.errors = [
+      createAjvError("must match exactly one schema in oneOf"),
+    ];
+
+    const result = service.processMessage(`${config.lshBasePath}actor1/misc`, invalidBootPayload);
+
+    expect(result.warnings[0]).toContain("Invalid 'misc' payload from actor1:");
+    expect(result.warnings[0]).toContain("must match exactly one schema in oneOf");
     expect(result.stateChanged).toBe(false);
-    expect(result.logs).toContain("Device 'actor1' reported a boot event.");
     expect(result.messages).toEqual({});
   });
 });

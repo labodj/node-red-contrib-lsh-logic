@@ -168,11 +168,6 @@ export interface NetworkClickRequestPayload {
   c: number;
 }
 
-/** Payload: Boot. Sent by a device upon startup, via the 'misc' topic. */
-export interface DeviceBootPayload {
-  p: LshProtocol.BOOT_NOTIFICATION;
-}
-
 /** Payload: Ping. A ping message for health checks, sent via the 'misc' topic. */
 export interface PingPayload {
   p: LshProtocol.PING;
@@ -196,7 +191,6 @@ export interface OtherActorsCommandPayload {
 export type AnyMiscTopicPayload =
   | NetworkClickRequestPayload
   | NetworkClickConfirmPayload
-  | DeviceBootPayload
   | PingPayload;
 
 // --------------------------------------------------------------------------
@@ -331,7 +325,7 @@ export interface ActuatorIndexMap {
 export interface DeviceState {
   /** The unique name of the device, used as the primary key. */
   name: string;
-  /** The last known bridge connectivity state. Homie `$state` is the primary source, and a boot event also proves the device is currently reachable on MQTT. */
+  /** The last known bridge connectivity state from Homie `$state`. */
   connected: boolean;
   /** Overall LSH-level health status (`false` if unresponsive or never seen). Managed by ping/pong and other LSH messages. */
   isHealthy: boolean;
@@ -339,8 +333,6 @@ export interface DeviceState {
   isStale: boolean;
   /** Timestamp of the last message of any kind received from the device. */
   lastSeenTime: number;
-  /** Timestamp of the last boot event ('d_b') from the device. */
-  lastBootTime: number;
   /** Timestamp of the last 'conf' message from the device. */
   lastDetailsTime: number;
   /** Timestamp of the last authoritative 'state' message from the device. `0` means the current topology has no confirmed state snapshot yet. */
@@ -366,8 +358,6 @@ export interface DeviceRegistry {
 export interface PendingClickTransaction {
   /** Slot key that uniquely identifies the logical click source (device + button + type). */
   slotKey: string;
-  /** Source device that opened the click transaction. */
-  sourceDeviceName: string;
   /** The primary actors (LSH devices) targeted by the click. */
   actors: Actor[];
   /** The secondary actors (external devices) targeted by the click. */

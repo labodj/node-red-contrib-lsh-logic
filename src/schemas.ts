@@ -246,16 +246,6 @@ const networkClickConfirmPayloadSchema = {
   additionalProperties: false,
 } as const;
 
-/** Schema for a Device Boot payload. */
-const deviceBootPayloadSchema = {
-  type: "object",
-  properties: {
-    p: { const: LshProtocol.BOOT_NOTIFICATION },
-  },
-  required: ["p"],
-  additionalProperties: false,
-} as const;
-
 /** Schema for a Ping payload. */
 const pingPayloadSchema = {
   type: "object",
@@ -275,12 +265,7 @@ export const anyMiscTopicPayloadSchema = {
   $id: "AnyMiscTopicPayload",
   description: "Schema for any valid 'misc' topic payload.",
   type: "object",
-  oneOf: [
-    networkClickRequestPayloadSchema,
-    networkClickConfirmPayloadSchema,
-    deviceBootPayloadSchema,
-    pingPayloadSchema,
-  ],
+  oneOf: [networkClickRequestPayloadSchema, networkClickConfirmPayloadSchema, pingPayloadSchema],
   required: ["p"],
 };
 
