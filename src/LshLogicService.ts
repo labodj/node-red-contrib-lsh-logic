@@ -987,7 +987,7 @@ export class LshLogicService {
           }
         }
 
-        // Pack boolean states into bytes (Protocol v2.0 optimized)
+        // Pack boolean states into the current bitpacked LSH wire format.
         const BIT_MASK_8 = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] as const;
         const numBytes = Math.ceil(booleanStates.length / 8);
         const packedBytes = new Array<number>(numBytes).fill(0);
