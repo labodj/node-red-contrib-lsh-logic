@@ -174,7 +174,9 @@ export class LshLogicNode {
 
     try {
       // The service always receives a standard JavaScript object, regardless of original format.
-      const result = this.service.processMessage(msg.topic || "", processedPayload);
+      const result = this.service.processMessage(msg.topic || "", processedPayload, {
+        retained: (msg as { retain?: unknown }).retain === true,
+      });
       await this.processServiceResult(result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

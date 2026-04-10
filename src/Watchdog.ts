@@ -44,8 +44,9 @@ export class Watchdog {
   /**
    * Checks the health of a single device based on its state and the current time.
    * This method implements a multi-stage check:
-   * 1. It first trusts the Homie `connected` state. If Homie reports a device as disconnected, the watchdog takes no further action.
-   * 2. If the device is connected but has been silent beyond `interrogateThreshold`, it initiates a ping.
+   * 1. It first checks whether the device is currently known to be reachable at the MQTT/bridge layer.
+   *    Reachability can be proven either by Homie `$state=ready` or by live LSH traffic from the device.
+   * 2. If the device is reachable but has been silent beyond `interrogateThreshold`, it initiates a ping.
    * 3. If a ping has been sent but no response is received within `pingTimeout`, it marks the device as 'stale'.
    * 4. If the device has never been seen, it is immediately marked 'unhealthy'.
    * @param deviceState - The current state of the device to check, or `undefined` if never seen.

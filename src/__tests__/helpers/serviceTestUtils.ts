@@ -60,6 +60,10 @@ export type ServiceHarnessOptions = {
   systemConfig?: SystemConfig;
 };
 
+type MessageOptions = {
+  retained?: boolean;
+};
+
 export const createSystemConfig = (...deviceNames: string[]): SystemConfig => ({
   devices: deviceNames.map((name) => ({ name })),
 });
@@ -81,14 +85,19 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
   const sendDeviceDetails = (
     deviceName: string,
     details: Partial<Omit<DeviceDetailsPayload, "p" | "n">> = {},
+    options: MessageOptions = {},
   ): ServiceResult =>
-    service.processMessage(`${config.lshBasePath}${deviceName}/conf`, {
-      p: LshProtocol.DEVICE_DETAILS,
-      v: details.v ?? LSH_WIRE_PROTOCOL_MAJOR,
-      n: deviceName,
-      a: details.a ?? [1],
-      b: details.b ?? [],
-    });
+    service.processMessage(
+      `${config.lshBasePath}${deviceName}/conf`,
+      {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: details.v ?? LSH_WIRE_PROTOCOL_MAJOR,
+        n: deviceName,
+        a: details.a ?? [1],
+        b: details.b ?? [],
+      },
+      options,
+    );
 
   const sendHomieState = (deviceName: string, state: string): ServiceResult =>
     service.processMessage(`${config.homieBasePath}${deviceName}/$state`, state);
@@ -103,14 +112,26 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
     sendHomieState(deviceName, "ready");
   };
 
-  const sendLshState = (deviceName: string, packedState: number[]): ServiceResult =>
-    service.processMessage(`${config.lshBasePath}${deviceName}/state`, {
-      p: LshProtocol.ACTUATORS_STATE,
-      s: packedState,
-    });
+  const sendLshState = (
+    deviceName: string,
+    packedState: number[],
+    options: MessageOptions = {},
+  ): ServiceResult =>
+    service.processMessage(
+      `${config.lshBasePath}${deviceName}/state`,
+      {
+        p: LshProtocol.ACTUATORS_STATE,
+        s: packedState,
+      },
+      options,
+    );
 
-  const sendMisc = (deviceName: string, payload: AnyMiscTopicPayload): ServiceResult =>
-    service.processMessage(`${config.lshBasePath}${deviceName}/misc`, payload);
+  const sendMisc = (
+    deviceName: string,
+    payload: AnyMiscTopicPayload,
+    options: MessageOptions = {},
+  ): ServiceResult =>
+    service.processMessage(`${config.lshBasePath}${deviceName}/misc`, payload, options);
 
   return {
     service,

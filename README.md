@@ -16,8 +16,8 @@ This node replaces complex Node-RED flows with a single, robust, and stateful co
 
 - **Shared LSH Protocol Support**: Uses the generated contract vendored from `lsh-protocol`, keeping command IDs, compact keys and examples aligned with the firmware repositories.
 - **Robust Health Monitoring**: Features a multi-stage intelligent Watchdog that detects stale or offline devices without generating false positives during startup or temporary network glitches.
-- **Robust Cold Recovery**: If Node-RED restarts and retained MQTT state is incomplete, the node actively pings silent devices and requests the missing `details`/`state` snapshot needed to rebuild an authoritative registry.
-- **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when all target devices are ready and online.
+- **Robust Cold Recovery**: If Node-RED restarts and retained MQTT state is incomplete, the node actively pings silent devices and requests the missing `details`/`state` snapshot needed to rebuild an authoritative registry before startup recovery is considered complete.
+- **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when all target devices are reachable and have an authoritative snapshot.
 - **Homie & HA Discovery**: Fully compliant with the [Homie Convention](https://homieiot.github.io/) for state tracking and automatically generates Home Assistant Auto-Discovery payloads for seamless integration.
 - **High Performance**: Optimized message routing using direct string parsing and efficient internal state management.
 - **Declarative Configuration**: Define your entire system in a single `system-config.json` file. The node automatically hot-reloads configuration changes.
@@ -36,7 +36,7 @@ This node acts as the central orchestrator for your custom smart home devices. I
 
 The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
 
-At startup the node prefers retained Homie/LSH topics, but it does not depend on them exclusively: silent devices are pinged during initial verification, and a ping response from a device that is still missing `conf` or `state` automatically triggers the minimum `REQUEST_DETAILS` / `REQUEST_STATE` recovery sequence.
+At startup the node prefers retained Homie/LSH topics, but it does not depend on them exclusively: silent devices are pinged during initial verification, and a ping response from a device that is still missing `conf` or `state` automatically triggers the minimum `REQUEST_DETAILS` / `REQUEST_STATE` recovery sequence. Startup recovery only succeeds once that authoritative snapshot is complete.
 
 The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
 
@@ -86,22 +86,22 @@ This file defines the topology of your smart home. It should be placed in your N
 {
   "devices": [
     {
-      "name": "living-room-switch",
+      "name": "c1",
       "longClickButtons": [
         {
           "id": 1,
-          "actors": [{ "name": "living-room-light", "allActuators": true }],
+          "actors": [{ "name": "j1", "allActuators": true }],
           "otherActors": ["tasmota_shelf_lamp"]
         }
       ]
     },
-    { "name": "living-room-light" },
-    { "name": "kitchen-light" }
+    { "name": "j1" },
+    { "name": "k1" }
   ]
 }
 ```
 
-- **`name`**: Must match the device ID used in MQTT topics.
+- **`name`**: Must match the exact device ID used in MQTT topics. With the current ESP bridge defaults this is typically a short ID such as `c1`, `j1`, `k1`; the default bridge build allocates 4 characters unless `CONFIG_MAX_NAME_LENGTH` is raised.
 - **`id`**: Button ID (numeric, e.g., `1` for Button 1).
 - **`actors`**: Target LSH devices.
 - **`otherActors`**: Target external devices (strings).

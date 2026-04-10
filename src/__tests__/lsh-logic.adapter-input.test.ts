@@ -114,7 +114,9 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
     await getInputHandler(mockNodeInstance)(message, jest.fn(), done);
 
-    expect(processMessageSpy).toHaveBeenCalledWith("homie/device-1/$state", "ready");
+    expect(processMessageSpy).toHaveBeenCalledWith("homie/device-1/$state", "ready", {
+      retained: false,
+    });
     expect(mockNodeInstance.send).toHaveBeenLastCalledWith([null, null, null, null, message]);
     expect(done).toHaveBeenCalledWith();
   });
@@ -141,11 +143,15 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
       "Decoded MsgPack payload from topic: LSH/device-1/misc",
     );
-    expect(processMessageSpy).toHaveBeenCalledWith("LSH/device-1/misc", {
-      p: 6,
-      i: 1,
-      t: 1,
-    });
+    expect(processMessageSpy).toHaveBeenCalledWith(
+      "LSH/device-1/misc",
+      {
+        p: 6,
+        i: 1,
+        t: 1,
+      },
+      { retained: false },
+    );
     expect(done).toHaveBeenCalledWith();
   });
 
@@ -218,7 +224,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
     await getInputHandler(mockNodeInstance)({ payload: "some_payload" }, jest.fn(), done);
 
-    expect(processMessageSpy).toHaveBeenCalledWith("", "some_payload");
+    expect(processMessageSpy).toHaveBeenCalledWith("", "some_payload", { retained: false });
     expect(done).toHaveBeenCalledWith();
   });
 
