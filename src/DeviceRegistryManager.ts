@@ -220,7 +220,8 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Records a boot event from a device, marking it as connected and healthy.
+   * Records a boot event from a device, marking it as healthy and invalidating
+   * any cached topology/state that must be refreshed after reboot.
    * @param deviceName - The name of the device that booted.
    * @returns An object indicating if the state was changed.
    */

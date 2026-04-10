@@ -94,6 +94,46 @@ describe("LshLogicService - Core & Config", () => {
       expect(logMessage).toContain("Pruned stale devices from registry");
     });
 
+    it("should discard pending click transactions when config is updated", () => {
+      loadConfig({
+        devices: [
+          {
+            name: "device-sender",
+            longClickButtons: [
+              {
+                id: 1,
+                actors: [{ name: "actor1", allActuators: true, actuators: [] }],
+                otherActors: [],
+              },
+            ],
+          },
+          { name: "actor1" },
+        ],
+      });
+      setDeviceOnline("device-sender");
+      setDeviceOnline("actor1");
+
+      service.processMessage("LSH/device-sender/misc", {
+        p: LshProtocol.NETWORK_CLICK_REQUEST,
+        c: 9,
+        i: 1,
+        t: 1,
+      });
+
+      const logMessage = service.updateSystemConfig(createSystemConfig("actor1"));
+      const confirmResult = service.processMessage("LSH/device-sender/misc", {
+        p: LshProtocol.NETWORK_CLICK_CONFIRM,
+        c: 9,
+        i: 1,
+        t: 1,
+      });
+
+      expect(logMessage).toContain("Cleared 1 pending click transaction(s).");
+      expect(confirmResult.warnings).toContain(
+        "Received confirmation for an expired or unknown click: device-sender.1.1.9.",
+      );
+    });
+
     it("should clear the loaded system config", () => {
       loadConfig();
 
