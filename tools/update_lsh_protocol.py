@@ -13,33 +13,30 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGET_NAME = "node-red"
 TARGET_ROOT_FLAG = "--node-red-root"
+VENDORED_PROTOCOL_ROOT = (REPO_ROOT / "vendor" / "lsh-protocol").resolve()
 
 
-def candidate_protocol_roots() -> list[Path]:
-    candidates: list[Path] = []
-    env_root = os.environ.get("LSH_PROTOCOL_ROOT")
-    if env_root:
-        candidates.append(Path(env_root).expanduser().resolve())
-
-    candidates.append((REPO_ROOT / "vendor" / "lsh-protocol").resolve())
-    candidates.append((REPO_ROOT.parent / "lsh-protocol").resolve())
-    return candidates
+def validate_protocol_root(root: Path, source: str) -> Path:
+    if not (root / "tools" / "generate_lsh_protocol.py").is_file():
+        raise SystemExit(f"Invalid {source}: generator not found in {root}")
+    return root
 
 
 def resolve_protocol_root(cli_root: Path | None) -> Path:
     if cli_root is not None:
-        root = cli_root.expanduser().resolve()
-        if not (root / "tools" / "generate_lsh_protocol.py").is_file():
-            raise SystemExit(f"Invalid --protocol-root: generator not found in {root}")
-        return root
+        return validate_protocol_root(cli_root.expanduser().resolve(), "--protocol-root")
 
-    for root in candidate_protocol_roots():
-        if (root / "tools" / "generate_lsh_protocol.py").is_file():
-            return root
+    env_root = os.environ.get("LSH_PROTOCOL_ROOT")
+    if env_root:
+        return validate_protocol_root(Path(env_root).expanduser().resolve(), "LSH_PROTOCOL_ROOT")
+
+    if (VENDORED_PROTOCOL_ROOT / "tools" / "generate_lsh_protocol.py").is_file():
+        return VENDORED_PROTOCOL_ROOT
 
     raise SystemExit(
-        "Unable to locate lsh-protocol. Use --protocol-root, set LSH_PROTOCOL_ROOT, "
-        "or vendor the repo at vendor/lsh-protocol.",
+        "Vendored lsh-protocol not found at vendor/lsh-protocol. "
+        "Run the documented git subtree workflow or override explicitly with "
+        "--protocol-root / LSH_PROTOCOL_ROOT.",
     )
 
 

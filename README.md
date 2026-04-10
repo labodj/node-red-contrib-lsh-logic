@@ -33,7 +33,26 @@ npm install node-red-contrib-lsh-logic
 
 This node acts as the central orchestrator for your custom smart home devices. It subscribes to MQTT topics, processes incoming telemetry and events, updates its internal state registry, and dispatches commands.
 
-The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [../shared/lsh_protocol.md](../shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
+The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
+
+### Shared Protocol Workflow
+
+This repository vendors the shared wire-protocol source of truth at [vendor/lsh-protocol](vendor/lsh-protocol).
+
+Refresh the vendored copy:
+
+```bash
+git remote add lsh-protocol git@github.com:labodj/lsh-protocol.git || git remote set-url lsh-protocol git@github.com:labodj/lsh-protocol.git
+git fetch lsh-protocol
+git subtree pull --prefix=vendor/lsh-protocol lsh-protocol main --squash
+```
+
+Regenerate or verify the Node-RED generated files:
+
+```bash
+python3 tools/update_lsh_protocol.py
+python3 tools/update_lsh_protocol.py --check
+```
 
 ### Inputs
 
