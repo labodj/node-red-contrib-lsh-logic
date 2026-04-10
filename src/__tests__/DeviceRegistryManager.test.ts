@@ -29,7 +29,7 @@ describe("DeviceRegistryManager", () => {
     expect(registry["new-device"].connected).toBe(false);
   });
 
-  it("should store device details and initialize actuator states and indexes", () => {
+  it("should store device details, initialize indexes, and leave state unauthoritative until a state frame arrives", () => {
     const details: DeviceDetailsPayload = {
       p: LshProtocol.DEVICE_DETAILS,
       v: LSH_WIRE_PROTOCOL_MAJOR,
@@ -42,8 +42,8 @@ describe("DeviceRegistryManager", () => {
 
     expect(deviceState).toBeDefined();
     expect(deviceState?.actuatorsIDs).toEqual([1, 2]);
-    // Actuator states should be initialized to false for the correct length.
-    expect(deviceState?.actuatorStates).toEqual([false, false]);
+    expect(deviceState?.actuatorStates).toEqual([]);
+    expect(deviceState?.lastStateTime).toBe(0);
     expect(deviceState?.actuatorIndexes).toEqual({ 1: 0, 2: 1 });
   });
 

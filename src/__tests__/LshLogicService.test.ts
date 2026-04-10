@@ -134,6 +134,48 @@ describe("LshLogicService - Core & Config", () => {
       );
     });
 
+    it("should preserve pending click transactions when the config reload is identical", () => {
+      const initialConfig = {
+        devices: [
+          {
+            name: "device-sender",
+            longClickButtons: [
+              {
+                id: 1,
+                actors: [{ name: "actor1", allActuators: true, actuators: [] }],
+                otherActors: [],
+              },
+            ],
+          },
+          { name: "actor1" },
+        ],
+      };
+
+      loadConfig(initialConfig);
+      setDeviceOnline("device-sender");
+      setDeviceOnline("actor1");
+
+      service.processMessage("LSH/device-sender/misc", {
+        p: LshProtocol.NETWORK_CLICK_REQUEST,
+        c: 9,
+        i: 1,
+        t: 1,
+      });
+
+      const logMessage = service.updateSystemConfig(structuredClone(initialConfig));
+      const confirmResult = service.processMessage("LSH/device-sender/misc", {
+        p: LshProtocol.NETWORK_CLICK_CONFIRM,
+        c: 9,
+        i: 1,
+        t: 1,
+      });
+
+      expect(logMessage).not.toContain("Cleared 1 pending click transaction(s).");
+      expect(confirmResult.logs).toContain(
+        "Click confirmed for device-sender.1.1.9. Executing logic.",
+      );
+    });
+
     it("should clear the loaded system config", () => {
       loadConfig();
 
@@ -331,6 +373,29 @@ describe("LshLogicService - Core & Config", () => {
       expect(first.stateChanged).toBe(true);
       expect(second.stateChanged).toBe(false);
       expect(second.logs).toEqual([]);
+    });
+
+    it("should invalidate authoritative state and request a fresh snapshot when actuator IDs change", () => {
+      setDeviceOnline("actor1", { a: [1, 2] });
+      sendLshState("actor1", [0b01]);
+
+      const result = service.processMessage("LSH/actor1/conf", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "actor1",
+        a: [3, 4],
+        b: [],
+      });
+
+      expect(result.logs).toContain("Stored/Updated details for device 'actor1'.");
+      expect(result.logs).toContain(
+        "Device 'actor1' details changed the actuator mapping. Requesting a fresh authoritative state snapshot.",
+      );
+      expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+        p: LshProtocol.REQUEST_STATE,
+      });
+      expect(service.getDeviceRegistry().actor1.lastStateTime).toBe(0);
+      expect(service.getDeviceRegistry().actor1.actuatorStates).toEqual([]);
     });
 
     it("should not report a state change when the actuator state is unchanged", () => {

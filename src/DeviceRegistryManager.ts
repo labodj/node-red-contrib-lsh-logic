@@ -62,6 +62,7 @@ export class DeviceRegistryManager {
         lastSeenTime: 0,
         lastBootTime: 0,
         lastDetailsTime: 0,
+        lastStateTime: 0,
         actuatorsIDs: [],
         buttonsIDs: [],
         actuatorStates: [],
@@ -118,15 +119,18 @@ export class DeviceRegistryManager {
   public registerDeviceDetails(
     deviceName: string,
     details: DeviceDetailsPayload,
-  ): { changed: boolean } {
+  ): { changed: boolean; stateInvalidated: boolean } {
     const device = this._ensureDeviceExists(deviceName);
 
     const oldActuatorIDs = [...device.actuatorsIDs];
     const oldButtonIDs = [...device.buttonsIDs];
+    const hadAuthoritativeState = device.lastStateTime !== 0;
+    const actuatorIdsChanged = !areSameArray(oldActuatorIDs, details.a);
+    const buttonIdsChanged = !areSameArray(oldButtonIDs, details.b);
     let changed = false;
 
     // Use the new keys 'a' and 'b' from the details object
-    if (!areSameArray(oldActuatorIDs, details.a) || !areSameArray(oldButtonIDs, details.b)) {
+    if (actuatorIdsChanged || buttonIdsChanged) {
       changed = true;
     }
 
@@ -145,13 +149,12 @@ export class DeviceRegistryManager {
       actuatorIndexes,
     });
 
-    // If the number of actuators has changed, the old state array is invalid.
-    if (device.actuatorStates.length !== details.a.length) {
-      device.actuatorStates = new Array<boolean>(details.a.length).fill(false);
-      changed = true;
+    if (actuatorIdsChanged) {
+      device.lastStateTime = 0;
+      device.actuatorStates = [];
     }
 
-    return { changed };
+    return { changed, stateInvalidated: actuatorIdsChanged && hadAuthoritativeState };
   }
 
   /**
@@ -181,7 +184,9 @@ export class DeviceRegistryManager {
     if (hasChanged) {
       device.actuatorStates = newStates;
     }
-    device.lastSeenTime = Date.now();
+    const now = Date.now();
+    device.lastSeenTime = now;
+    device.lastStateTime = now;
     return { isNew, changed: hasChanged, configIsMissing };
   }
 
@@ -244,6 +249,7 @@ export class DeviceRegistryManager {
     device.lastSeenTime = now;
     device.lastBootTime = now;
     device.lastDetailsTime = 0;
+    device.lastStateTime = 0;
     device.connected = true;
     device.isHealthy = true;
     device.isStale = false;
@@ -362,10 +368,17 @@ export class DeviceRegistryManager {
     actors: Actor[],
     otherActors: string[],
   ): { stateToSet: boolean; active: number; total: number; warning?: string } {
+    const lshWarnings: string[] = [];
     const lshCounts = actors.reduce(
       (acc, actor) => {
         const device = this.registry[actor.name];
         if (!device) return acc;
+        if (device.lastStateTime === 0) {
+          lshWarnings.push(
+            `State for device '${actor.name}' is not authoritative yet; ignoring it for smart toggle.`,
+          );
+          return acc;
+        }
 
         if (actor.allActuators) {
           acc.total += device.actuatorStates.length;
@@ -401,7 +414,7 @@ export class DeviceRegistryManager {
       { active: 0, total: 0, warnings: [] as string[] },
     );
 
-    const warning = otherCounts.warnings.join(" ");
+    const warning = [...lshWarnings, ...otherCounts.warnings].join(" ");
     const totalCount = lshCounts.total + otherCounts.total;
     const activeCount = lshCounts.active + otherCounts.active;
 

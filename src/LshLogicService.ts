@@ -258,9 +258,11 @@ export class LshLogicService {
    * @returns A log message indicating the result of the update.
    */
   public updateSystemConfig(newConfig: SystemConfig): string {
+    const configChanged =
+      this.systemConfig === null || JSON.stringify(this.systemConfig) !== JSON.stringify(newConfig);
     this.systemConfig = newConfig;
     this.deviceConfigMap.clear();
-    const clearedPendingClicks = this.clickManager.clearAll();
+    const clearedPendingClicks = configChanged ? this.clickManager.clearAll() : 0;
 
     const newDeviceNames = new Set(this.systemConfig.devices.map((d) => d.name));
     for (const device of this.systemConfig.devices) {
@@ -602,10 +604,23 @@ export class LshLogicService {
       );
       return result;
     }
-    const { changed } = this.deviceManager.registerDeviceDetails(deviceName, detailsPayload);
+    const { changed, stateInvalidated } = this.deviceManager.registerDeviceDetails(
+      deviceName,
+      detailsPayload,
+    );
     if (changed) {
       result.logs.push(`Stored/Updated details for device '${deviceName}'.`);
       result.stateChanged = true;
+    }
+    if (stateInvalidated) {
+      result.logs.push(
+        `Device '${deviceName}' details changed the actuator mapping. Requesting a fresh authoritative state snapshot.`,
+      );
+      result.messages[Output.Lsh] = this._createLshCommand(
+        `${this.lshBasePath}${deviceName}/IN`,
+        { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
+        1,
+      );
     }
     return result;
   }
@@ -703,7 +718,7 @@ export class LshLogicService {
       case LshProtocol.BOOT_NOTIFICATION:
         result.logs.push(`Device '${deviceName}' reported a boot event.`);
         {
-          const clearedPendingClicks = this.clickManager.clearAll();
+          const clearedPendingClicks = this.clickManager.clearForDevice(deviceName);
           if (clearedPendingClicks > 0) {
             result.logs.push(
               `Cleared ${clearedPendingClicks} pending click transaction(s) because a device reboot invalidated in-flight assumptions.`,
@@ -774,7 +789,7 @@ export class LshLogicService {
 
     try {
       const { actors, otherActors } = this._validateClickRequest(deviceName, buttonId, clickType);
-      this.clickManager.startTransaction(slotKey, transactionKey, actors, otherActors);
+      this.clickManager.startTransaction(slotKey, transactionKey, deviceName, actors, otherActors);
 
       result.messages[Output.Lsh] = this._createLshCommand(
         commandTopic,
@@ -958,6 +973,16 @@ export class LshLogicService {
         } active. Decision: ${toggleResult.stateToSet ? "ON" : "OFF"}`,
       );
       stateToSet = toggleResult.stateToSet;
+
+      if (toggleResult.total === 0) {
+        if (!toggleResult.warning) {
+          result.warnings.push("Smart Toggle aborted because no authoritative state is available.");
+        }
+        result.logs.push(
+          "Skipping click execution because no authoritative actor state is available.",
+        );
+        return result;
+      }
     }
 
     const { commands: lshCommands, warnings: commandWarnings } = this.buildStateCommands(
@@ -1017,10 +1042,18 @@ export class LshLogicService {
           ),
         );
       } else {
-        const booleanStates = device.actuatorStates.slice();
+        let booleanStates: boolean[];
         if (actor.allActuators) {
-          booleanStates.fill(stateToSet);
+          booleanStates = new Array<boolean>(device.actuatorsIDs.length).fill(stateToSet);
         } else {
+          if (device.lastStateTime === 0) {
+            warnings.push(
+              `Skipping actor '${actor.name}' because its actuator state is not authoritative yet.`,
+            );
+            continue;
+          }
+
+          booleanStates = device.actuatorStates.slice();
           for (const actuatorId of actor.actuators) {
             const index = device.actuatorIndexes[actuatorId];
             if (index !== undefined) booleanStates[index] = stateToSet;

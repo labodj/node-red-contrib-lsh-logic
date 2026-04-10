@@ -27,6 +27,7 @@ export class ClickTransactionManager {
   public startTransaction(
     slotKey: string,
     correlationKey: string,
+    sourceDeviceName: string,
     actors: Actor[],
     otherActors: string[],
   ): void {
@@ -38,6 +39,7 @@ export class ClickTransactionManager {
     this.activeSlots.set(slotKey, correlationKey);
     this.pendingClicks.set(correlationKey, {
       slotKey,
+      sourceDeviceName,
       actors,
       otherActors,
       timestamp: Date.now(),
@@ -100,6 +102,34 @@ export class ClickTransactionManager {
     const clearedCount = this.pendingClicks.size;
     this.pendingClicks.clear();
     this.activeSlots.clear();
+    return clearedCount;
+  }
+
+  /**
+   * Clears only the transactions that depend on a specific device.
+   * A rebooted device invalidates clicks it originated and clicks that target it.
+   * @param deviceName - The device whose reboot/config change invalidated transactions.
+   * @returns The number of discarded transactions.
+   */
+  public clearForDevice(deviceName: string): number {
+    let clearedCount = 0;
+
+    for (const [correlationKey, transaction] of this.pendingClicks) {
+      const targetsDevice =
+        transaction.sourceDeviceName === deviceName ||
+        transaction.actors.some((actor) => actor.name === deviceName);
+
+      if (!targetsDevice) {
+        continue;
+      }
+
+      this.pendingClicks.delete(correlationKey);
+      if (this.activeSlots.get(transaction.slotKey) === correlationKey) {
+        this.activeSlots.delete(transaction.slotKey);
+      }
+      clearedCount++;
+    }
+
     return clearedCount;
   }
 

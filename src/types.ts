@@ -343,6 +343,8 @@ export interface DeviceState {
   lastBootTime: number;
   /** Timestamp of the last 'conf' message from the device. */
   lastDetailsTime: number;
+  /** Timestamp of the last authoritative 'state' message from the device. `0` means the current topology has no confirmed state snapshot yet. */
+  lastStateTime: number;
   /** An ordered array of actuator IDs (e.g., ['A1', 'A2']). */
   actuatorsIDs: number[];
   /** An array of button IDs, if any (e.g., ['B1', 'B2']). */
@@ -364,6 +366,8 @@ export interface DeviceRegistry {
 export interface PendingClickTransaction {
   /** Slot key that uniquely identifies the logical click source (device + button + type). */
   slotKey: string;
+  /** Source device that opened the click transaction. */
+  sourceDeviceName: string;
   /** The primary actors (LSH devices) targeted by the click. */
   actors: Actor[];
   /** The secondary actors (external devices) targeted by the click. */
