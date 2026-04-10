@@ -21,16 +21,16 @@ export const sleep = (ms: number): Promise<void> =>
  */
 export const formatAlertMessage = (
   devices: { name: string; reason: string }[],
-  status: 'unhealthy' | 'healthy',
-  details?: unknown
+  status: "unhealthy" | "healthy",
+  details?: unknown,
 ): string => {
-  let message = '';
-  if (status === 'unhealthy') {
-    message = '‼️ *System Health Alert* ‼️\n\n';
-    message += 'The following event occurred:\n';
+  let message = "";
+  if (status === "unhealthy") {
+    message = "‼️ *System Health Alert* ‼️\n\n";
+    message += "The following event occurred:\n";
   } else {
-    message = '✅ *System Health Recovery* ✅\n\n';
-    message += 'The following devices are now back online:\n';
+    message = "✅ *System Health Recovery* ✅\n\n";
+    message += "The following devices are now back online:\n";
   }
 
   devices.forEach((device) => {
@@ -39,19 +39,40 @@ export const formatAlertMessage = (
 
   // Check if details exist and are of a type we can stringify meaningfully.
   if (details !== undefined && details !== null) {
-    message += '\n*Details:*\n';
-    if (typeof details === 'object') {
-      message += JSON.stringify(details, null, 2);
-    } else {
-      message += String(details);
-    }
-    message += '\n';
+    message += "\n*Details:*\n";
+    message += formatAlertDetails(details);
+    message += "\n";
   }
 
-  if (status === 'unhealthy') {
-    message += '\nPlease check power and network connections where applicable.';
+  if (status === "unhealthy") {
+    message += "\nPlease check power and network connections where applicable.";
   }
   return message;
+};
+
+const formatAlertDetails = (details: unknown): string => {
+  if (details instanceof Error) {
+    return details.stack ?? details.message;
+  }
+
+  if (typeof details === "object") {
+    return JSON.stringify(details, null, 2);
+  }
+
+  if (
+    typeof details === "string" ||
+    typeof details === "number" ||
+    typeof details === "boolean" ||
+    typeof details === "bigint"
+  ) {
+    return String(details);
+  }
+
+  if (typeof details === "symbol") {
+    return details.toString();
+  }
+
+  return "";
 };
 
 /**

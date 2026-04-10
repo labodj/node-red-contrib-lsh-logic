@@ -1,19 +1,16 @@
 import * as utils from "../utils";
 import { LshLogicService } from "../LshLogicService";
-import { LshLogicNode } from "../lsh-logic";
-import { AlertPayload, Output } from "../types";
+import type { LshLogicNode } from "../lsh-logic";
+import { Output } from "../types";
+import type { AlertPayload, DeviceState } from "../types";
+import type { MockNodeInstance } from "./helpers/nodeRedTestUtils";
+import { defaultNodeConfig, flushMicrotasks } from "./helpers/nodeRedTestUtils";
+import type { AdapterHarness, MockWatcher } from "./helpers/lshLogicAdapterTestUtils";
 import {
-  defaultNodeConfig,
-  flushMicrotasks,
-  MockNodeInstance,
-} from "./helpers/nodeRedTestUtils";
-import {
-  AdapterHarness,
   createAdapterHarness,
   createServiceResult,
   createValidator,
   getCloseHandler,
-  MockWatcher,
   warmupNodeConfig,
 } from "./helpers/lshLogicAdapterTestUtils";
 import { createAjvError } from "./helpers/serviceTestUtils";
@@ -29,9 +26,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
   let nodeInstance: LshLogicNode;
   let mockWatcher: MockWatcher;
 
-  const initializeNode = async (
-    config = defaultNodeConfig
-  ): Promise<LshLogicNode> => {
+  const initializeNode = async (config = defaultNodeConfig): Promise<LshLogicNode> => {
     nodeInstance = await adapterHarness.initializeNode(config);
     return nodeInstance;
   };
@@ -66,12 +61,12 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
             } as AlertPayload,
           },
         },
-      })
+      }),
     );
 
     expect(mockNodeInstance.send).not.toHaveBeenCalled();
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Suppressing 'device recovered' alert during warm-up period."
+      "Suppressing 'device recovered' alert during warm-up period.",
     );
   });
 
@@ -86,12 +81,12 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
             payload: "✅ Device recovered",
           },
         },
-      })
+      }),
     );
 
     expect(mockNodeInstance.send).not.toHaveBeenCalled();
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Suppressing 'device recovered' alert during warm-up period."
+      "Suppressing 'device recovered' alert during warm-up period.",
     );
   });
 
@@ -106,18 +101,12 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
             payload: 123,
           },
         },
-      })
+      }),
     );
 
-    expect(mockNodeInstance.send).toHaveBeenCalledWith([
-      null,
-      null,
-      { payload: 123 },
-      null,
-      null,
-    ]);
+    expect(mockNodeInstance.send).toHaveBeenCalledWith([null, null, { payload: 123 }, null, null]);
     expect(mockNodeInstance.log).not.toHaveBeenCalledWith(
-      "Suppressing 'device recovered' alert during warm-up period."
+      "Suppressing 'device recovered' alert during warm-up period.",
     );
   });
 
@@ -138,37 +127,34 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
           [Output.OtherActors]: otherMsg,
         },
         staggerLshMessages: true,
-      })
+      }),
     );
 
     expect(mockNodeInstance.send).toHaveBeenCalledTimes(3);
-    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(1, [
-      lshMsg1,
-      null,
-      null,
-      null,
-      null,
-    ]);
-    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(2, [
-      lshMsg2,
-      null,
-      null,
-      null,
-      null,
-    ]);
-    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(3, [
-      null,
-      otherMsg,
-      null,
-      null,
-      null,
-    ]);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(1, [lshMsg1, null, null, null, null]);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(2, [lshMsg2, null, null, null, null]);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(3, [null, otherMsg, null, null, null]);
   });
 
   it("should update the exposed state in context when state changes", async () => {
+    const deviceState: DeviceState = {
+      name: "device-1",
+      connected: true,
+      isHealthy: true,
+      isStale: false,
+      lastSeenTime: 1,
+      lastBootTime: 0,
+      lastDetailsTime: 1,
+      actuatorsIDs: [],
+      buttonsIDs: [],
+      actuatorStates: [],
+      actuatorIndexes: {},
+      alertSent: false,
+    };
+
     jest
       .spyOn(LshLogicService.prototype, "getDeviceRegistry")
-      .mockReturnValue({ "device-1": { name: "device-1" } });
+      .mockReturnValue({ "device-1": deviceState });
 
     await initializeNode({
       ...defaultNodeConfig,
@@ -177,15 +163,13 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     });
 
     mockNodeInstance.__context.flow.set.mockClear();
-    await nodeInstance.processServiceResult(
-      createServiceResult({ stateChanged: true })
-    );
+    await nodeInstance.processServiceResult(createServiceResult({ stateChanged: true }));
 
     expect(mockNodeInstance.__context.flow.set).toHaveBeenCalledWith(
       "my_state",
       expect.objectContaining({
-        devices: { "device-1": { name: "device-1" } },
-      })
+        devices: { "device-1": deviceState },
+      }),
     );
   });
 
@@ -234,7 +218,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
       text: "Ready",
     });
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Configuration successfully reloaded from /tmp/new-config.json."
+      "Configuration successfully reloaded from /tmp/new-config.json.",
     );
   });
 
@@ -247,7 +231,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     await nodeInstance.handleConfigFileChange("/tmp/bad-config.json", validateFn);
 
     expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      "Error reloading /tmp/bad-config.json: Invalid system-config.json: invalid config"
+      "Error reloading /tmp/bad-config.json: Invalid system-config.json: invalid config",
     );
     expect(mockNodeInstance.status).toHaveBeenCalledWith({
       fill: "red",
@@ -262,18 +246,15 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     const reloadSpy = jest
       .spyOn(nodeInstance, "handleConfigFileChange")
       .mockResolvedValue(undefined);
-    const changeHandler = mockWatcher.on.mock.calls.find(
-      ([event]) => event === "change"
-    )?.[1] as ((path: string) => void) | undefined;
+    const changeHandler = mockWatcher.on.mock.calls.find(([event]) => event === "change")?.[1] as
+      | ((path: string) => void)
+      | undefined;
 
     expect(changeHandler).toBeDefined();
     changeHandler?.("/tmp/changed-config.json");
     await flushMicrotasks();
 
-    expect(reloadSpy).toHaveBeenCalledWith(
-      "/tmp/changed-config.json",
-      expect.any(Function)
-    );
+    expect(reloadSpy).toHaveBeenCalledWith("/tmp/changed-config.json", expect.any(Function));
   });
 
   it("should run initial and final verification timers using the configured LSH base path", async () => {
@@ -287,7 +268,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
               { topic: "custom/device-b/OUT", payload: {} },
             ],
           },
-        })
+        }),
       );
     const finalSpy = jest
       .spyOn(LshLogicService.prototype, "runFinalVerification")
@@ -306,19 +287,17 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     expect(verifySpy).toHaveBeenCalled();
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Running initial device state verification: pinging silent devices..."
+      "Running initial device state verification: pinging silent devices...",
     );
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Scheduling final check for 1 pinged devices in 3s."
+      "Scheduling final check for 1 pinged devices in 3s.",
     );
 
     jest.advanceTimersByTime(3000);
     await flushMicrotasks(6);
 
     expect(finalSpy).toHaveBeenCalledWith(["device-a"]);
-    expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Running final check on pinged devices..."
-    );
+    expect(mockNodeInstance.log).toHaveBeenCalledWith("Running final check on pinged devices...");
   });
 
   it("should finish warm-up without scheduling final verification when no devices are pinged", async () => {
@@ -341,7 +320,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     expect(verifySpy).toHaveBeenCalled();
     expect(finalSpy).not.toHaveBeenCalled();
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Warm-up period finished. Node is now fully operational."
+      "Warm-up period finished. Node is now fully operational.",
     );
   });
 
@@ -370,7 +349,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     await flushMicrotasks(6);
 
     expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      "Error during node close: Error: cleanup boom"
+      "Error during node close: Error: cleanup boom",
     );
     expect(done).toHaveBeenCalled();
     cleanupSpy.mockRestore();

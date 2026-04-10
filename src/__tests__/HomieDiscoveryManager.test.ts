@@ -3,7 +3,7 @@
  */
 import { HomieDiscoveryManager } from "../HomieDiscoveryManager";
 import { Output } from "../types";
-import { NodeMessage } from "node-red";
+import type { NodeMessage } from "node-red";
 
 type DiscoveryPayload = {
   unique_id: string;
@@ -16,10 +16,14 @@ type DiscoveryPayload = {
   };
 };
 
-const getDiscoveryMessages = (messages: NodeMessage[] | NodeMessage | undefined): Array<NodeMessage & {
-  topic: string;
-  payload: DiscoveryPayload;
-}> => {
+const getDiscoveryMessages = (
+  messages: NodeMessage[] | NodeMessage | undefined,
+): Array<
+  NodeMessage & {
+    topic: string;
+    payload: DiscoveryPayload;
+  }
+> => {
   if (!messages) {
     throw new Error("Expected discovery messages to be defined.");
   }
@@ -40,31 +44,23 @@ describe("HomieDiscoveryManager", () => {
     const deviceId = "device01";
 
     expect(
-      manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF")
-        .messages[Output.Lsh]
+      manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF").messages[Output.Lsh],
     ).toBeUndefined();
     expect(
-      manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0")
-        .messages[Output.Lsh]
+      manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0").messages[Output.Lsh],
     ).toBeUndefined();
 
-    const result = manager.processDiscoveryMessage(
-      deviceId,
-      "/$nodes",
-      "light1,light2"
-    );
+    const result = manager.processDiscoveryMessage(deviceId, "/$nodes", "light1,light2");
     const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
 
     const lightConfig = messages.find((message) =>
-      message.topic.includes("/light/lsh_device01_light1/config")
+      message.topic.includes("/light/lsh_device01_light1/config"),
     );
-    expect(lightConfig?.payload.default_entity_id).toBe(
-      "light.lsh_device01_light1"
-    );
+    expect(lightConfig?.payload.default_entity_id).toBe("light.lsh_device01_light1");
     expect(lightConfig?.payload.origin).toBeDefined();
 
     const sensorConfig = messages.find((message) =>
-      message.topic.includes("/sensor/lsh_device01_mac_address/config")
+      message.topic.includes("/sensor/lsh_device01_mac_address/config"),
     );
     expect(sensorConfig?.payload.entity_category).toBe("diagnostic");
   });
@@ -76,17 +72,11 @@ describe("HomieDiscoveryManager", () => {
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
 
     expect(
-      manager.processDiscoveryMessage(deviceId, "/$nodes", "led").messages[
-        Output.Lsh
-      ]
+      manager.processDiscoveryMessage(deviceId, "/$nodes", "led").messages[Output.Lsh],
     ).toBeDefined();
 
     const repeatedNodes = manager.processDiscoveryMessage(deviceId, "/$nodes", "led");
-    const repeatedMac = manager.processDiscoveryMessage(
-      deviceId,
-      "/$mac",
-      "AA:BB:CC:DD:EE:FF"
-    );
+    const repeatedMac = manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
 
     expect(repeatedNodes.messages[Output.Lsh]).toBeUndefined();
     expect(repeatedMac.messages[Output.Lsh]).toBeUndefined();
@@ -112,15 +102,11 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
-    const result = manager.processDiscoveryMessage(
-      deviceId,
-      "/$nodes",
-      "KitchenLight"
-    );
+    const result = manager.processDiscoveryMessage(deviceId, "/$nodes", "KitchenLight");
 
     const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
     const configMessage = messages.find((message) =>
-      message.topic.includes("lsh_mydevice_kitchenlight")
+      message.topic.includes("lsh_mydevice_kitchenlight"),
     );
 
     expect(configMessage?.payload.unique_id).toBe("lsh_mydevice_kitchenlight");
@@ -133,11 +119,7 @@ describe("HomieDiscoveryManager", () => {
 
     defaultPrefixManager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     defaultPrefixManager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
-    const result = defaultPrefixManager.processDiscoveryMessage(
-      deviceId,
-      "/$nodes",
-      "light1,"
-    );
+    const result = defaultPrefixManager.processDiscoveryMessage(deviceId, "/$nodes", "light1,");
 
     const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
     const lightTopics = messages.filter((message) => message.topic.includes("/light/"));
@@ -166,7 +148,7 @@ describe("HomieDiscoveryManager", () => {
         expect.objectContaining({
           topic: expect.stringContaining("/light/lsh_device05_relay/config"),
         }),
-      ])
+      ]),
     );
   });
 });

@@ -1,8 +1,10 @@
-import { PendingClickTransaction, Actor } from "./types";
+import type { PendingClickTransaction, Actor } from "./types";
 
 export class ClickTransactionManager {
   /** A registry of all ongoing click transactions, keyed by a unique identifier. */
   private pendingClicks: Map<string, PendingClickTransaction> = new Map();
+  /** Tracks the active correlation key for each logical click slot (device + button + type). */
+  private activeSlots: Map<string, string> = new Map();
   /** The configured timeout for click transactions, in milliseconds. */
   private readonly clickTimeoutMs: number;
 
@@ -17,16 +19,25 @@ export class ClickTransactionManager {
   /**
    * Starts a new click transaction, storing the associated actors and a timestamp.
    * This is the first phase of the two-phase commit protocol.
-   * @param transactionKey - A unique key for the transaction (e.g., 'deviceName.B1.lc').
+   * @param slotKey - A stable key for the logical click slot (e.g., 'deviceName.7.1').
+   * @param correlationKey - The unique correlation key for this specific click attempt.
    * @param actors - The primary LSH actors to be controlled.
    * @param otherActors - The secondary external actors to be controlled.
    */
   public startTransaction(
-    transactionKey: string,
+    slotKey: string,
+    correlationKey: string,
     actors: Actor[],
-    otherActors: string[]
+    otherActors: string[],
   ): void {
-    this.pendingClicks.set(transactionKey, {
+    const previousCorrelationKey = this.activeSlots.get(slotKey);
+    if (previousCorrelationKey) {
+      this.pendingClicks.delete(previousCorrelationKey);
+    }
+
+    this.activeSlots.set(slotKey, correlationKey);
+    this.pendingClicks.set(correlationKey, {
+      slotKey,
       actors,
       otherActors,
       timestamp: Date.now(),
@@ -37,18 +48,21 @@ export class ClickTransactionManager {
    * Confirms and consumes a transaction, retrieving its details for execution.
    * If the transaction exists, it is removed from the pending registry to prevent re-execution.
    * This is the second phase of the two-phase commit protocol.
-   * @param transactionKey - The unique key for the transaction to consume.
+   * @param correlationKey - The unique correlation key for the transaction to consume.
    * @returns The transaction details if it was pending, otherwise `null`.
    */
   public consumeTransaction(
-    transactionKey: string
+    correlationKey: string,
   ): { actors: Actor[]; otherActors: string[] } | null {
-    const transaction = this.pendingClicks.get(transactionKey);
+    const transaction = this.pendingClicks.get(correlationKey);
     if (!transaction) {
       return null;
     }
     // The transaction is confirmed, so remove it from the pending list.
-    this.pendingClicks.delete(transactionKey);
+    this.pendingClicks.delete(correlationKey);
+    if (this.activeSlots.get(transaction.slotKey) === correlationKey) {
+      this.activeSlots.delete(transaction.slotKey);
+    }
     return {
       actors: transaction.actors,
       otherActors: transaction.otherActors,
@@ -64,9 +78,12 @@ export class ClickTransactionManager {
   public cleanupExpired(): number {
     const now = Date.now();
     let cleanedCount = 0;
-    for (const [key, transaction] of this.pendingClicks) {
+    for (const [correlationKey, transaction] of this.pendingClicks) {
       if (now - transaction.timestamp > this.clickTimeoutMs) {
-        this.pendingClicks.delete(key);
+        this.pendingClicks.delete(correlationKey);
+        if (this.activeSlots.get(transaction.slotKey) === correlationKey) {
+          this.activeSlots.delete(transaction.slotKey);
+        }
         cleanedCount++;
       }
     }

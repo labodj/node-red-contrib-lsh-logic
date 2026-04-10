@@ -1,12 +1,15 @@
 import { ClickTransactionManager } from "../ClickTransactionManager";
-import { ClickType, LshProtocol, Output, SystemConfig } from "../types";
+import { ClickValidationError } from "../LshLogicService";
+import type { SystemConfig } from "../types";
+import { ClickType, LshProtocol, Output } from "../types";
+import type { ServiceHarness } from "./helpers/serviceTestUtils";
 import {
   createLoadedServiceHarness,
   createServiceHarness,
+  getAlertPayload,
   getOtherActorsPayload,
   getOutputMessages,
   getSingleOutputMessage,
-  ServiceHarness,
 } from "./helpers/serviceTestUtils";
 
 const defaultClickSystemConfig: SystemConfig = {
@@ -32,18 +35,19 @@ const defaultClickSystemConfig: SystemConfig = {
   ],
 };
 
-const createClickHarness = (
-  systemConfig: SystemConfig = defaultClickSystemConfig
-) => createLoadedServiceHarness({ systemConfig });
+const createClickHarness = (systemConfig: SystemConfig = defaultClickSystemConfig) =>
+  createLoadedServiceHarness({ systemConfig });
 
 const startClick = (
   sendMisc: ServiceHarness["sendMisc"],
   deviceName: string,
   clickType: ClickType = ClickType.Long,
-  buttonId = 1
+  buttonId = 1,
+  correlationId = 1,
 ) =>
   sendMisc(deviceName, {
     p: LshProtocol.NETWORK_CLICK_REQUEST,
+    c: correlationId,
     i: buttonId,
     t: clickType,
   });
@@ -52,10 +56,12 @@ const confirmClick = (
   sendMisc: ServiceHarness["sendMisc"],
   deviceName: string,
   clickType: ClickType = ClickType.Long,
-  buttonId = 1
+  buttonId = 1,
+  correlationId = 1,
 ) =>
   sendMisc(deviceName, {
     p: LshProtocol.NETWORK_CLICK_CONFIRM,
+    c: correlationId,
     i: buttonId,
     t: clickType,
   });
@@ -73,17 +79,21 @@ describe("LshLogicService - Network Click Logic", () => {
     const requestResult = startClick(sendMisc, "device-sender");
 
     expect(
-      getSingleOutputMessage<{ p: number }>(requestResult, Output.Lsh).payload.p
-    ).toBe(LshProtocol.NETWORK_CLICK_ACK);
+      getSingleOutputMessage<{ c: number; i: number; p: number; t: number }>(
+        requestResult,
+        Output.Lsh,
+      ).payload,
+    ).toEqual({
+      p: LshProtocol.NETWORK_CLICK_ACK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
 
     const confirmResult = confirmClick(sendMisc, "device-sender");
 
-    expect(confirmResult.logs).toContain(
-      "Click confirmed for device-sender.1.1. Executing logic."
-    );
-    expect(getOutputMessages(confirmResult, Output.Lsh)[0].topic).toBe(
-      "LSH/actor1/IN"
-    );
+    expect(confirmResult.logs).toContain("Click confirmed for device-sender.1.1.1. Executing logic.");
+    expect(getOutputMessages(confirmResult, Output.Lsh)[0].topic).toBe("LSH/actor1/IN");
   });
 
   it("should reject confirmations for unknown or expired clicks", () => {
@@ -93,7 +103,7 @@ describe("LshLogicService - Network Click Logic", () => {
     const result = confirmClick(sendMisc, "device-sender", ClickType.Long, 99);
 
     expect(result.warnings).toContain(
-      "Received confirmation for an expired or unknown click: device-sender.99.1."
+      "Received confirmation for an expired or unknown click: device-sender.99.1.1.",
     );
   });
 
@@ -129,8 +139,7 @@ describe("LshLogicService - Network Click Logic", () => {
       ],
     };
 
-    const { setDeviceOnline, sendLshState, sendMisc } =
-      createClickHarness(systemConfig);
+    const { setDeviceOnline, sendLshState, sendMisc } = createClickHarness(systemConfig);
     setDeviceOnline("sender");
     setDeviceOnline("actor1", { a: [1, 2, 3, 4] });
     sendLshState("actor1", [0]);
@@ -153,9 +162,7 @@ describe("LshLogicService - Network Click Logic", () => {
           longClickButtons: [
             {
               id: 1,
-              actors: [
-                { name: "actor1", allActuators: false, actuators: [2] },
-              ],
+              actors: [{ name: "actor1", allActuators: false, actuators: [2] }],
               otherActors: [],
             },
           ],
@@ -182,8 +189,7 @@ describe("LshLogicService - Network Click Logic", () => {
   });
 
   it("should correctly unpack bitpacked actuator states", () => {
-    const { loadConfig, sendDeviceDetails, sendLshState, service } =
-      createServiceHarness();
+    const { loadConfig, sendDeviceDetails, sendLshState, service } = createServiceHarness();
     loadConfig();
     sendDeviceDetails("actor1", { a: [1, 2, 3, 4, 5, 6, 7, 8, 9] });
 
@@ -201,15 +207,12 @@ describe("LshLogicService - Network Click Logic", () => {
       devices: [
         {
           name: "sender-other",
-          longClickButtons: [
-            { id: 1, actors: [], otherActors: ["zigbee-bulb"] },
-          ],
+          longClickButtons: [{ id: 1, actors: [], otherActors: ["zigbee-bulb"] }],
         },
       ],
     };
 
-    const { setDeviceOnline, sendMisc, contextReader } =
-      createClickHarness(systemConfig);
+    const { setDeviceOnline, sendMisc, contextReader } = createClickHarness(systemConfig);
     setDeviceOnline("sender-other");
     contextReader.get.mockReturnValue(false);
 
@@ -227,15 +230,12 @@ describe("LshLogicService - Network Click Logic", () => {
       devices: [
         {
           name: "sender-other",
-          longClickButtons: [
-            { id: 1, actors: [], otherActors: ["zigbee-bulb"] },
-          ],
+          longClickButtons: [{ id: 1, actors: [], otherActors: ["zigbee-bulb"] }],
         },
       ],
     };
 
-    const { setDeviceOnline, sendMisc, contextReader } =
-      createClickHarness(systemConfig);
+    const { setDeviceOnline, sendMisc, contextReader } = createClickHarness(systemConfig);
     setDeviceOnline("sender-other");
     contextReader.get.mockReturnValue("unknown");
 
@@ -243,7 +243,7 @@ describe("LshLogicService - Network Click Logic", () => {
     const result = confirmClick(sendMisc, "sender-other");
 
     expect(result.warnings).toContain(
-      "State for otherActor 'zigbee-bulb' not found or not a boolean."
+      "State for otherActor 'zigbee-bulb' not found or not a boolean.",
     );
     expect(getOtherActorsPayload(result)).toEqual({
       otherActors: ["zigbee-bulb"],
@@ -268,8 +268,7 @@ describe("LshLogicService - Network Click Logic", () => {
       ],
     };
 
-    const { setDeviceOnline, sendLshState, sendMisc } =
-      createClickHarness(systemConfig);
+    const { setDeviceOnline, sendLshState, sendMisc } = createClickHarness(systemConfig);
     setDeviceOnline("sender");
     setDeviceOnline("actor1", { a: [1, 2] });
     sendLshState("actor1", [0b11]);
@@ -282,7 +281,7 @@ describe("LshLogicService - Network Click Logic", () => {
       expect.objectContaining({
         topic: "LSH/actor1/IN",
         payload: { p: LshProtocol.SET_STATE, s: [0] },
-      })
+      }),
     );
   });
 
@@ -303,17 +302,54 @@ describe("LshLogicService - Network Click Logic", () => {
       ],
     };
 
+    const { setDeviceOnline, sendMisc, sendHomieState } = createClickHarness(systemConfig);
+    setDeviceOnline("sender");
+    sendHomieState("offline_act", "lost");
+
+    const result = startClick(sendMisc, "sender");
+
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER_CLICK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+    expect(getAlertPayload(result).message).toContain("Target actor 'offline_act' is offline.");
+  });
+
+  it("should send click-specific failover when target actor is unknown to the registry", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "ghost", allActuators: true, actuators: [] }],
+              otherActors: [],
+            },
+          ],
+        },
+      ],
+    };
+
     const { setDeviceOnline, sendMisc } = createClickHarness(systemConfig);
     setDeviceOnline("sender");
 
     const result = startClick(sendMisc, "sender");
 
-    expect(
-      getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p
-    ).toBe(LshProtocol.FAILOVER);
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER_CLICK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+    expect(getAlertPayload(result).message).toContain(
+      "Target actor 'ghost' is unknown to the registry.",
+    );
   });
 
-  it("should send failover when no action is configured for a button", () => {
+  it("should send click-specific failover when no action is configured for a button", () => {
     const systemConfig: SystemConfig = {
       devices: [{ name: "sender", longClickButtons: [] }],
     };
@@ -323,12 +359,15 @@ describe("LshLogicService - Network Click Logic", () => {
 
     const result = startClick(sendMisc, "sender", ClickType.Long, 99);
 
-    expect(
-      getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p
-    ).toBe(LshProtocol.FAILOVER);
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER_CLICK,
+      c: 1,
+      i: 99,
+      t: ClickType.Long,
+    });
   });
 
-  it("should send failover when an action has no targets", () => {
+  it("should send click-specific failover when an action has no targets", () => {
     const systemConfig: SystemConfig = {
       devices: [
         {
@@ -343,17 +382,100 @@ describe("LshLogicService - Network Click Logic", () => {
 
     const result = startClick(sendMisc, "sender");
 
-    expect(
-      getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p
-    ).toBe(LshProtocol.FAILOVER);
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER_CLICK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+  });
+
+  it("should send click-specific failover when target details are unknown", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "actor1", allActuators: true, actuators: [] }],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "actor1" },
+      ],
+    };
+
+    const { setDeviceOnline, sendMisc, sendHomieState } = createClickHarness(systemConfig);
+    setDeviceOnline("sender");
+    sendHomieState("actor1", "ready");
+
+    const result = startClick(sendMisc, "sender");
+
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER_CLICK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+    expect(getAlertPayload(result).message).toContain(
+      "Target actor 'actor1' has unknown device details.",
+    );
+  });
+
+  it("should send click-specific failover when a configured actuator ID is unknown", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "actor1", allActuators: false, actuators: [99] }],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "actor1" },
+      ],
+    };
+
+    const { setDeviceOnline, sendMisc } = createClickHarness(systemConfig);
+    setDeviceOnline("sender");
+    setDeviceOnline("actor1", { a: [1, 2, 3] });
+
+    const result = startClick(sendMisc, "sender");
+
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER_CLICK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+    expect(result.messages[Output.Alerts]).toBeDefined();
+  });
+
+  it("should keep general failover mapped to the protocol general failover command", () => {
+    jest.spyOn(ClickTransactionManager.prototype, "startTransaction").mockImplementation(() => {
+      throw new ClickValidationError("coordinator unavailable", "general");
+    });
+
+    const { setDeviceOnline, sendMisc } = createClickHarness();
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-sender");
+
+    const result = startClick(sendMisc, "device-sender");
+
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER,
+    });
   });
 
   it("should surface unexpected errors while starting a click transaction", () => {
-    jest
-      .spyOn(ClickTransactionManager.prototype, "startTransaction")
-      .mockImplementation(() => {
-        throw new Error("storage unavailable");
-      });
+    jest.spyOn(ClickTransactionManager.prototype, "startTransaction").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
 
     const { setDeviceOnline, sendMisc } = createClickHarness();
     setDeviceOnline("actor1");
@@ -362,7 +484,7 @@ describe("LshLogicService - Network Click Logic", () => {
     const result = startClick(sendMisc, "device-sender");
 
     expect(result.errors).toContain(
-      "Unexpected error during click processing for device-sender.1.1: Error: storage unavailable"
+      "Unexpected error during click processing for device-sender.1.1.1: Error: storage unavailable",
     );
     expect(result.messages).toEqual({});
   });
@@ -379,8 +501,23 @@ describe("LshLogicService - Network Click Logic", () => {
 
     nowSpy.mockReturnValue(1_000 + config.clickTimeout * 1000 + 1);
 
-    expect(service.cleanupPendingClicks()).toBe(
-      "Cleaned up 1 expired click transactions."
+    expect(service.cleanupPendingClicks()).toBe("Cleaned up 1 expired click transactions.");
+  });
+
+  it("should ignore stale confirmations when a newer correlation replaced the same click slot", () => {
+    const { setDeviceOnline, sendMisc } = createClickHarness();
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-sender");
+
+    startClick(sendMisc, "device-sender", ClickType.Long, 1, 7);
+    startClick(sendMisc, "device-sender", ClickType.Long, 1, 8);
+
+    const staleConfirm = confirmClick(sendMisc, "device-sender", ClickType.Long, 1, 7);
+    const freshConfirm = confirmClick(sendMisc, "device-sender", ClickType.Long, 1, 8);
+
+    expect(staleConfirm.warnings).toContain(
+      "Received confirmation for an expired or unknown click: device-sender.1.1.7.",
     );
+    expect(freshConfirm.logs).toContain("Click confirmed for device-sender.1.1.8. Executing logic.");
   });
 });

@@ -11,35 +11,32 @@ import { ClickTransactionManager } from "./ClickTransactionManager";
 import { HomieDiscoveryManager } from "./HomieDiscoveryManager";
 import { LshCodec } from "./LshCodec";
 import { Watchdog } from "./Watchdog";
-import {
-  ClickType,
-  DeviceEntry,
-  SystemConfig,
-  DeviceDetailsPayload,
-  DeviceActuatorsStatePayload,
-  AnyMiscTopicPayload,
-  NetworkClickRequestPayload,
-  NetworkClickConfirmPayload,
-  LshProtocol,
+import { ClickType, LSH_WIRE_PROTOCOL_MAJOR, LshProtocol, Output } from "./types";
+import type {
   Actor,
-  ServiceResult,
-  Output,
+  AlertPayload,
+  AnyMiscTopicPayload,
+  DeviceActuatorsStatePayload,
+  DeviceDetailsPayload,
+  DeviceEntry,
+  FailoverClickPayload,
+  FailoverPayload,
+  NetworkClickAckPayload,
+  NetworkClickConfirmPayload,
+  NetworkClickRequestPayload,
+  OtherActorsCommandPayload,
   OutputMessages,
-  SetSingleActuatorPayload,
-  SetStatePayload,
   PingPayload,
   RequestDetailsPayload,
   RequestStatePayload,
-  NetworkClickAckPayload,
-  OtherActorsCommandPayload,
-  AlertPayload,
-  FailoverPayload,
-  FailoverClickPayload,
+  ServiceResult,
+  SetSingleActuatorPayload,
+  SetStatePayload,
+  SystemConfig,
 } from "./types";
 import { formatAlertMessage } from "./utils";
-import { NodeMessage } from "node-red";
-import { ValidateFunction } from "ajv";
-
+import type { NodeMessage } from "node-red";
+import type { ValidateFunction } from "ajv";
 
 /**
  * Collects actions to be performed at the end of a watchdog cycle.
@@ -51,6 +48,19 @@ type WatchdogActions = {
   stateChanged: boolean;
 };
 
+function buildClickSlotKey(deviceName: string, buttonId: number, clickType: ClickType): string {
+  return `${deviceName}.${buttonId}.${clickType}`;
+}
+
+function buildClickCorrelationKey(
+  deviceName: string,
+  buttonId: number,
+  clickType: ClickType,
+  correlationId: number,
+): string {
+  return `${buildClickSlotKey(deviceName, buttonId, clickType)}.${correlationId}`;
+}
+
 /**
  * Custom error for handling click validation failures gracefully. This allows
  * the service to distinguish between different failure types and provide
@@ -60,7 +70,7 @@ type WatchdogActions = {
 export class ClickValidationError extends Error {
   constructor(
     public readonly reason: string,
-    public readonly failoverType: "general" | "click"
+    public readonly failoverType: "general" | "click",
   ) {
     super(reason);
     this.name = "ClickValidationError";
@@ -121,7 +131,7 @@ export class LshLogicService {
       validateDeviceDetails: ValidateFunction;
       validateActuatorStates: ValidateFunction;
       validateAnyMiscTopic: ValidateFunction;
-    }
+    },
   ) {
     this.lshBasePath = config.lshBasePath;
     this.homieBasePath = config.homieBasePath;
@@ -131,16 +141,13 @@ export class LshLogicService {
 
     this.validators = validators;
 
-    this.deviceManager = new DeviceRegistryManager(
-      config.otherDevicesPrefix,
-      otherActorsContext
+    this.deviceManager = new DeviceRegistryManager(config.otherDevicesPrefix, otherActorsContext);
+    this.discoveryManager = new HomieDiscoveryManager(
+      config.homieBasePath,
+      config.haDiscoveryPrefix,
     );
-    this.discoveryManager = new HomieDiscoveryManager(config.homieBasePath, config.haDiscoveryPrefix);
     this.clickManager = new ClickTransactionManager(config.clickTimeout);
-    this.watchdog = new Watchdog(
-      config.interrogateThreshold,
-      config.pingTimeout
-    );
+    this.watchdog = new Watchdog(config.interrogateThreshold, config.pingTimeout);
     this.codec = new LshCodec();
   }
 
@@ -161,18 +168,15 @@ export class LshLogicService {
   public verifyInitialDeviceStates(): ServiceResult {
     const result = this.createEmptyResult();
     if (!this.systemConfig) {
-      result.warnings.push(
-        "Cannot run initial state verification: config not loaded."
-      );
+      result.warnings.push("Cannot run initial state verification: config not loaded.");
       return result;
     }
 
     const configuredDevices = this.getConfiguredDeviceNames() as string[];
-    const registry = this.deviceManager.getRegistry();
     const silentDevices: string[] = [];
 
     for (const deviceName of configuredDevices) {
-      const deviceState = registry[deviceName];
+      const deviceState = this.deviceManager.getDevice(deviceName);
       // A device is considered silent if it's not in the registry yet, or if it is but isn't connected.
       if (!deviceState || !deviceState.connected) {
         silentDevices.push(deviceName);
@@ -181,7 +185,7 @@ export class LshLogicService {
 
     if (silentDevices.length > 0) {
       result.logs.push(
-        `Initial state verification: ${silentDevices.length} device(s) did not report 'ready' state. Pinging them directly.`
+        `Initial state verification: ${silentDevices.length} device(s) did not report 'ready' state. Pinging them directly.`,
       );
 
       // Generate targeted ping commands for only the silent devices.
@@ -189,15 +193,13 @@ export class LshLogicService {
         this._createLshCommand(
           `${this.lshBasePath}${deviceName}/IN`,
           { p: LshProtocol.PING } as PingPayload,
-          1
-        )
+          1,
+        ),
       );
 
       result.messages[Output.Lsh] = pingCommands;
     } else {
-      result.logs.push(
-        "Initial state verification: all configured devices are connected."
-      );
+      result.logs.push("Initial state verification: all configured devices are connected.");
     }
 
     return result;
@@ -211,11 +213,10 @@ export class LshLogicService {
    */
   public runFinalVerification(pingedDevices: string[]): ServiceResult {
     const result = this.createEmptyResult();
-    const registry = this.deviceManager.getRegistry();
     const unhealthyDevicesForAlert: { name: string; reason: string }[] = [];
 
     for (const deviceName of pingedDevices) {
-      const deviceState = registry[deviceName];
+      const deviceState = this.deviceManager.getDevice(deviceName);
 
       // If the device is still not healthy after being pinged, it's officially unresponsive.
       if (!deviceState || !deviceState.isHealthy) {
@@ -238,17 +239,13 @@ export class LshLogicService {
 
     if (unhealthyDevicesForAlert.length > 0) {
       result.warnings.push(
-        `Final verification failed for: ${unhealthyDevicesForAlert
-          .map((d) => d.name)
-          .join(", ")}`
+        `Final verification failed for: ${unhealthyDevicesForAlert.map((d) => d.name).join(", ")}`,
       );
       result.messages[Output.Alerts] = {
         payload: formatAlertMessage(unhealthyDevicesForAlert, "unhealthy"),
       };
     } else {
-      result.logs.push(
-        "Final verification successful: all pinged devices responded."
-      );
+      result.logs.push("Final verification successful: all pinged devices responded.");
     }
 
     return result;
@@ -264,15 +261,13 @@ export class LshLogicService {
     this.systemConfig = newConfig;
     this.deviceConfigMap.clear();
 
-    const newDeviceNames = new Set(
-      this.systemConfig.devices.map((d) => d.name)
-    );
+    const newDeviceNames = new Set(this.systemConfig.devices.map((d) => d.name));
     for (const device of this.systemConfig.devices) {
       this.deviceConfigMap.set(device.name, device);
     }
 
     const prunedDevices = [];
-    for (const deviceName in this.deviceManager.getRegistry()) {
+    for (const deviceName of this.deviceManager.getRegisteredDeviceNames()) {
       if (!newDeviceNames.has(deviceName)) {
         this.deviceManager.pruneDevice(deviceName);
         prunedDevices.push(deviceName);
@@ -280,9 +275,7 @@ export class LshLogicService {
     }
     let logMessage = "System configuration successfully loaded and validated.";
     if (prunedDevices.length > 0) {
-      logMessage += ` Pruned stale devices from registry: ${prunedDevices.join(
-        ", "
-      )}.`;
+      logMessage += ` Pruned stale devices from registry: ${prunedDevices.join(", ")}.`;
     }
     return logMessage;
   }
@@ -300,9 +293,7 @@ export class LshLogicService {
    * @returns An array of device names or null if the config is not loaded.
    */
   public getConfiguredDeviceNames(): string[] | null {
-    return this.systemConfig
-      ? this.systemConfig.devices.map((d) => d.name)
-      : null;
+    return this.systemConfig ? this.systemConfig.devices.map((d) => d.name) : null;
   }
 
   /**
@@ -313,14 +304,10 @@ export class LshLogicService {
   public getStartupCommands(): ServiceResult {
     const result = this.createEmptyResult();
     if (!this.systemConfig || this.systemConfig.devices.length === 0) {
-      result.warnings.push(
-        "Cannot generate startup commands: config not loaded."
-      );
+      result.warnings.push("Cannot generate startup commands: config not loaded.");
       return result;
     }
-    result.logs.push(
-      "Node started. Passively waiting for device Homie state announcements."
-    );
+    result.logs.push("Node started. Passively waiting for device Homie state announcements.");
     return result;
   }
 
@@ -333,11 +320,7 @@ export class LshLogicService {
    * @param qos - The desired Quality of Service level for the message.
    * @returns A NodeMessage object ready to be sent.
    */
-  private _createLshCommand(
-    topic: string,
-    payload: object,
-    qos: 0 | 1 | 2
-  ): NodeMessage {
+  private _createLshCommand(topic: string, payload: object, qos: 0 | 1 | 2): NodeMessage {
     const encodedPayload = this.codec.encode(payload, this.protocol);
     return { topic, payload: encodedPayload, qos };
   }
@@ -374,7 +357,7 @@ export class LshLogicService {
     // --- HOMIE TOPICS ---
     if (topic.startsWith(this.homieBasePath)) {
       const baseLen = this.homieBasePath.length;
-      const slashIndex = topic.indexOf('/', baseLen);
+      const slashIndex = topic.indexOf("/", baseLen);
 
       if (slashIndex === -1) return this._handleUnhandledTopic(topic);
 
@@ -383,13 +366,13 @@ export class LshLogicService {
       // Homie topics imply activity
       this.watchdog.onDeviceActivity(deviceName);
 
-      if (topic.endsWith('/$state')) {
+      if (topic.endsWith("/$state")) {
         return this._handleHomieState(deviceName, payload);
       }
 
       if (this.haDiscovery) {
         const suffix = topic.substring(slashIndex);
-        if (suffix === '/$mac' || suffix === '/$fw/version' || suffix === '/$nodes') {
+        if (suffix === "/$mac" || suffix === "/$fw/version" || suffix === "/$nodes") {
           return this.discoveryManager.processDiscoveryMessage(deviceName, suffix, String(payload));
         }
       }
@@ -398,7 +381,7 @@ export class LshLogicService {
     // --- LSH TOPICS ---
     else if (topic.startsWith(this.lshBasePath)) {
       const baseLen = this.lshBasePath.length;
-      const slashIndex = topic.indexOf('/', baseLen);
+      const slashIndex = topic.indexOf("/", baseLen);
 
       if (slashIndex === -1) return this._handleUnhandledTopic(topic);
 
@@ -406,11 +389,11 @@ export class LshLogicService {
 
       this.watchdog.onDeviceActivity(deviceName);
 
-      if (topic.endsWith('/state')) {
+      if (topic.endsWith("/state")) {
         return this._handleLshState(deviceName, payload);
-      } else if (topic.endsWith('/misc')) {
+      } else if (topic.endsWith("/misc")) {
         return this._handleLshMisc(deviceName, payload);
-      } else if (topic.endsWith('/conf')) {
+      } else if (topic.endsWith("/conf")) {
         return this._handleLshConf(deviceName, payload);
       }
     }
@@ -420,9 +403,9 @@ export class LshLogicService {
 
   private _handleUnhandledTopic(topic: string): ServiceResult {
     const result = this.createEmptyResult();
-    // Only log if it's not a completely irrelevant topic? 
+    // Only log if it's not a completely irrelevant topic?
     // For now, keep behavior consistent with old regex fallback logic which logged everything unhandled.
-    // However, in a real env, we might receive many messages. 
+    // However, in a real env, we might receive many messages.
     // Old logic: "Message on unhandled topic: ..."
     result.logs.push(`Message on unhandled topic: ${topic}`);
     return result;
@@ -467,10 +450,7 @@ export class LshLogicService {
     }
 
     if (actions.unhealthyDevicesForAlert.length > 0) {
-      const alertResult = this._prepareAlerts(
-        actions.unhealthyDevicesForAlert,
-        "unhealthy"
-      );
+      const alertResult = this._prepareAlerts(actions.unhealthyDevicesForAlert, "unhealthy");
       Object.assign(result.messages, alertResult.messages);
     }
     return result;
@@ -483,7 +463,7 @@ export class LshLogicService {
   private _processWatchdogForDevice(
     deviceName: string,
     now: number,
-    actions: WatchdogActions
+    actions: WatchdogActions,
   ): void {
     const deviceState = this.deviceManager.getDevice(deviceName);
     // Optimization: If a device is already known to be offline and an alert has been sent,
@@ -503,10 +483,7 @@ export class LshLogicService {
       return;
     }
 
-    const { stateChanged } = this.deviceManager.updateHealthFromResult(
-      deviceName,
-      healthResult
-    );
+    const { stateChanged } = this.deviceManager.updateHealthFromResult(deviceName, healthResult);
     if (stateChanged) actions.stateChanged = true;
 
     switch (healthResult.status) {
@@ -525,10 +502,12 @@ export class LshLogicService {
           name: deviceName,
           reason: healthResult.reason,
         });
-        const { stateChanged } = this.deviceManager.recordAlertSent(deviceName);
-        /* istanbul ignore if */
-        if (stateChanged) {
-          actions.stateChanged = true;
+        {
+          const { stateChanged } = this.deviceManager.recordAlertSent(deviceName);
+          /* istanbul ignore if */
+          if (stateChanged) {
+            actions.stateChanged = true;
+          }
         }
         break;
     }
@@ -540,9 +519,7 @@ export class LshLogicService {
    */
   public cleanupPendingClicks(): string | null {
     const cleanedCount = this.clickManager.cleanupExpired();
-    return cleanedCount > 0
-      ? `Cleaned up ${cleanedCount} expired click transactions.`
-      : null;
+    return cleanedCount > 0 ? `Cleaned up ${cleanedCount} expired click transactions.` : null;
   }
 
   /* -------------------------------------------------------------------------- */
@@ -553,17 +530,17 @@ export class LshLogicService {
     const result = this.createEmptyResult();
     const homieState = String(payload);
 
-    const { stateChanged, wasConnected, isConnected } =
-      this.deviceManager.updateConnectionState(deviceName, homieState);
+    const { stateChanged, wasConnected, isConnected } = this.deviceManager.updateConnectionState(
+      deviceName,
+      homieState,
+    );
 
     if (!stateChanged) {
       return result; // No change, nothing more to do.
     }
 
     result.stateChanged = true;
-    result.logs.push(
-      `Device '${deviceName}' connection state changed to '${homieState}'.`
-    );
+    result.logs.push(`Device '${deviceName}' connection state changed to '${homieState}'.`);
 
     const wentOffline = wasConnected && !isConnected;
     const cameOnline = !wasConnected && isConnected;
@@ -575,38 +552,30 @@ export class LshLogicService {
           reason: `Device reported as '${homieState}' by Homie.`,
         },
       ];
-      Object.assign(
-        result.messages,
-        this._prepareAlerts(alertInfo, "unhealthy").messages
-      );
+      Object.assign(result.messages, this._prepareAlerts(alertInfo, "unhealthy").messages);
     } else if (cameOnline) {
-      result.logs.push(
-        `Device '${deviceName}' came back online (Homie state: ready).`
-      );
+      result.logs.push(`Device '${deviceName}' came back online (Homie state: ready).`);
       const alertInfo = [
         {
           name: deviceName,
           reason: "Device is now connected and healthy.",
         },
       ];
-      Object.assign(
-        result.messages,
-        this._prepareAlerts(alertInfo, "healthy").messages
-      );
+      Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
       result.logs.push(
-        `Device '${deviceName}' is online. Requesting full state (details and actuators).`
+        `Device '${deviceName}' is online. Requesting full state (details and actuators).`,
       );
       const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
       result.messages[Output.Lsh] = [
         this._createLshCommand(
           commandTopic,
           { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
-          1
+          1,
         ),
         this._createLshCommand(
           commandTopic,
           { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
-          1
+          1,
         ),
       ];
     }
@@ -617,22 +586,21 @@ export class LshLogicService {
     const result = this.createEmptyResult();
     if (!this.validators.validateDeviceDetails(payload)) {
       const errorText =
-        this.validators.validateDeviceDetails.errors
-          ?.map((e) => e.message)
-          .join(", ") || "unknown validation error";
+        this.validators.validateDeviceDetails.errors?.map((e) => e.message).join(", ") ||
+        "unknown validation error";
+      result.warnings.push(`Invalid 'conf' payload from ${deviceName}: ${errorText}`);
+      return result;
+    }
+    const detailsPayload = payload as DeviceDetailsPayload;
+    if (detailsPayload.v !== LSH_WIRE_PROTOCOL_MAJOR) {
       result.warnings.push(
-        `Invalid 'conf' payload from ${deviceName}: ${errorText}`
+        `Protocol major mismatch for ${deviceName}: received ${detailsPayload.v}, expected ${LSH_WIRE_PROTOCOL_MAJOR}. Ignoring details payload.`,
       );
       return result;
     }
-    const { changed } = this.deviceManager.registerDeviceDetails(
-      deviceName,
-      payload as DeviceDetailsPayload
-    );
+    const { changed } = this.deviceManager.registerDeviceDetails(deviceName, detailsPayload);
     if (changed) {
-      result.logs.push(
-        `Stored/Updated details for device '${deviceName}'.`
-      );
+      result.logs.push(`Stored/Updated details for device '${deviceName}'.`);
       result.stateChanged = true;
     }
     return result;
@@ -642,12 +610,9 @@ export class LshLogicService {
     const result = this.createEmptyResult();
     if (!this.validators.validateActuatorStates(payload)) {
       const errorText =
-        this.validators.validateActuatorStates.errors
-          ?.map((e) => e.message)
-          .join(", ") || "unknown validation error";
-      result.warnings.push(
-        `Invalid 'state' payload from ${deviceName}: ${errorText}`
-      );
+        this.validators.validateActuatorStates.errors?.map((e) => e.message).join(", ") ||
+        "unknown validation error";
+      result.warnings.push(`Invalid 'state' payload from ${deviceName}: ${errorText}`);
       return result;
     }
     try {
@@ -655,13 +620,13 @@ export class LshLogicService {
 
       // Get the device to know how many actuators we expect
       const device = this.deviceManager.getDevice(deviceName);
-      const numActuators = device?.actuatorsIDs.length ?? (packedBytes.length * 8);
+      const numActuators = device?.actuatorsIDs.length ?? packedBytes.length * 8;
 
       // Validate byte array length: each byte covers 8 actuators
       const expectedBytes = Math.ceil(numActuators / 8);
       if (packedBytes.length !== expectedBytes) {
         result.errors.push(
-          `State mismatch for ${deviceName}: expected ${expectedBytes} bytes for ${numActuators} actuators, received ${packedBytes.length}.`
+          `State mismatch for ${deviceName}: expected ${expectedBytes} bytes for ${numActuators} actuators, received ${packedBytes.length}.`,
         );
         return result;
       }
@@ -673,29 +638,31 @@ export class LshLogicService {
       // Unpack using per-byte loop structure (matches C++ implementation)
       // This avoids Math.floor() and % operations on the hot path
       const states: boolean[] = [];
-      for (let byteIndex = 0; byteIndex < packedBytes.length && states.length < numActuators; byteIndex++) {
+      for (
+        let byteIndex = 0;
+        byteIndex < packedBytes.length && states.length < numActuators;
+        byteIndex++
+      ) {
         const packedByte = packedBytes[byteIndex];
         for (let bitIndex = 0; bitIndex < 8 && states.length < numActuators; bitIndex++) {
           states.push((packedByte & BIT_MASK_8[bitIndex]) !== 0);
         }
       }
 
-      const { isNew, changed, configIsMissing } =
-        this.deviceManager.registerActuatorStates(deviceName, states);
+      const { isNew, changed, configIsMissing } = this.deviceManager.registerActuatorStates(
+        deviceName,
+        states,
+      );
       if (isNew)
-        result.logs.push(
-          `Received state for a new device: ${deviceName}. Creating partial entry.`
-        );
+        result.logs.push(`Received state for a new device: ${deviceName}. Creating partial entry.`);
       if (changed) {
-        result.logs.push(
-          `Updated state for '${deviceName}': [${states.join(", ")}]`
-        );
+        result.logs.push(`Updated state for '${deviceName}': [${states.join(", ")}]`);
         result.stateChanged = true;
       }
       // If we receive a state but don't have the device details (IDs), proactively request them.
       if (configIsMissing) {
         result.warnings.push(
-          `Device '${deviceName}' sent state but its configuration is unknown. Requesting details.`
+          `Device '${deviceName}' sent state but its configuration is unknown. Requesting details.`,
         );
         result.messages[Output.Lsh] = this._createLshCommand(
           `${this.lshBasePath}${deviceName}/IN`,
@@ -704,9 +671,7 @@ export class LshLogicService {
         );
       }
     } catch (error) {
-      result.errors.push(
-        error instanceof Error ? error.message : String(error)
-      );
+      result.errors.push(error instanceof Error ? error.message : String(error));
     }
     return result;
   }
@@ -715,12 +680,9 @@ export class LshLogicService {
     if (!this.validators.validateAnyMiscTopic(payload)) {
       const result = this.createEmptyResult();
       const errorText =
-        this.validators.validateAnyMiscTopic.errors
-          ?.map((e) => e.message)
-          .join(", ") || "unknown validation error";
-      result.warnings.push(
-        `Invalid 'misc' payload from ${deviceName}: ${errorText}`
-      );
+        this.validators.validateAnyMiscTopic.errors?.map((e) => e.message).join(", ") ||
+        "unknown validation error";
+      result.warnings.push(`Invalid 'misc' payload from ${deviceName}: ${errorText}`);
       return result;
     }
     const miscPayload = payload as AnyMiscTopicPayload;
@@ -728,10 +690,10 @@ export class LshLogicService {
 
     switch (miscPayload.p) {
       case LshProtocol.NETWORK_CLICK_REQUEST:
-        return this._processNewClickRequest(deviceName, miscPayload as NetworkClickRequestPayload);
+        return this._processNewClickRequest(deviceName, miscPayload);
 
       case LshProtocol.NETWORK_CLICK_CONFIRM:
-        return this._processClickConfirmation(deviceName, miscPayload as NetworkClickConfirmPayload);
+        return this._processClickConfirmation(deviceName, miscPayload);
 
       case LshProtocol.BOOT_NOTIFICATION:
         result.logs.push(`Device '${deviceName}' reported a boot event.`);
@@ -741,47 +703,31 @@ export class LshLogicService {
         break;
 
       case LshProtocol.PING:
-        // Get a deep *copy* of the state *before* the update.
-        // This creates a snapshot, preventing mutation issues with object references.
-        const oldDeviceState = this.deviceManager.getDevice(deviceName)
-          ? structuredClone(this.deviceManager.getDevice(deviceName)!)
-          : undefined;
+        {
+          const { stateChanged, becameHealthy } = this.deviceManager.recordPingResponse(deviceName);
 
-        const { stateChanged } =
-          this.deviceManager.recordPingResponse(deviceName);
+          if (stateChanged) {
+            result.logs.push(`Device '${deviceName}' is now responsive.`);
+            result.stateChanged = true;
 
-        if (stateChanged) {
-          result.logs.push(`Device '${deviceName}' is now responsive.`);
-          result.stateChanged = true;
-
-          // The service now decides if this state change means it came online.
-          const cameOnline =
-            !oldDeviceState?.isHealthy || oldDeviceState?.isStale;
-          if (cameOnline) {
-            result.logs.push(
-              `Device '${deviceName}' is healthy again after ping response.`
-            );
-            const alertInfo = [
-              {
-                name: deviceName,
-                reason: "Device responded to ping and is now healthy.",
-              },
-            ];
-            Object.assign(
-              result.messages,
-              this._prepareAlerts(alertInfo, "healthy").messages
-            );
+            if (becameHealthy) {
+              result.logs.push(`Device '${deviceName}' is healthy again after ping response.`);
+              const alertInfo = [
+                {
+                  name: deviceName,
+                  reason: "Device responded to ping and is now healthy.",
+                },
+              ];
+              Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
+            }
+          } else {
+            result.logs.push(`Received ping response from '${deviceName}'.`);
           }
-        } else {
-          result.logs.push(
-            `Received ping response from '${deviceName}'.`
-          );
         }
         break;
     }
     return result;
   }
-
 
   /**
    * Processes the first phase of a network click: a new request from a device.
@@ -790,57 +736,48 @@ export class LshLogicService {
    */
   private _processNewClickRequest(
     deviceName: string,
-    payload: NetworkClickRequestPayload
+    payload: NetworkClickRequestPayload,
   ): ServiceResult {
     const result = this.createEmptyResult();
-    const { i: buttonId, t: clickType } = payload;
-    const transactionKey = `${deviceName}.${buttonId}.${clickType}`;
+    const { c: correlationId, i: buttonId, t: clickType } = payload;
+    const slotKey = buildClickSlotKey(deviceName, buttonId, clickType);
+    const transactionKey = buildClickCorrelationKey(deviceName, buttonId, clickType, correlationId);
     const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
 
     try {
-      const { actors, otherActors } = this._validateClickRequest(
-        deviceName,
-        buttonId,
-        clickType
-      );
-      this.clickManager.startTransaction(transactionKey, actors, otherActors);
+      const { actors, otherActors } = this._validateClickRequest(deviceName, buttonId, clickType);
+      this.clickManager.startTransaction(slotKey, transactionKey, actors, otherActors);
 
       result.messages[Output.Lsh] = this._createLshCommand(
         commandTopic,
         {
           p: LshProtocol.NETWORK_CLICK_ACK,
+          c: correlationId,
           t: clickType,
           i: buttonId,
         } as NetworkClickAckPayload,
-        2
+        2,
       );
       result.logs.push(`Validation OK for ${transactionKey}. Sending ACK.`);
     } catch (error) {
       if (error instanceof ClickValidationError) {
-        const alertInfo = [
-          { name: deviceName, reason: `Action failed: ${error.reason}` },
-        ];
-        const alertResult = this._prepareAlerts(
-          alertInfo,
-          "unhealthy",
-          payload
-        );
+        const alertInfo = [{ name: deviceName, reason: `Action failed: ${error.reason}` }];
+        const alertResult = this._prepareAlerts(alertInfo, "unhealthy", payload);
         Object.assign(result.messages, alertResult.messages);
 
         if (error.failoverType === "general") {
-          result.errors.push(
-            `System failure on click. Sending General Failover (c_gf).`
-          );
+          result.errors.push(`System failure on click. Sending General Failover (c_gf).`);
           result.messages[Output.Lsh] = this._createLshCommand(
             commandTopic,
-            { p: LshProtocol.GENERAL_FAILOVER } as FailoverPayload,
+            { p: LshProtocol.FAILOVER } as FailoverPayload,
             2,
           );
         } else {
           result.messages[Output.Lsh] = this._createLshCommand(
             commandTopic,
             {
-              p: LshProtocol.FAILOVER,
+              p: LshProtocol.FAILOVER_CLICK,
+              c: correlationId,
               t: clickType,
               i: buttonId,
             } as FailoverClickPayload,
@@ -849,9 +786,7 @@ export class LshLogicService {
         }
       } else {
         result.errors.push(
-          `Unexpected error during click processing for ${transactionKey}: ${String(
-            error
-          )}`
+          `Unexpected error during click processing for ${transactionKey}: ${String(error)}`,
         );
       }
     }
@@ -864,16 +799,16 @@ export class LshLogicService {
    */
   private _processClickConfirmation(
     deviceName: string,
-    payload: NetworkClickConfirmPayload
+    payload: NetworkClickConfirmPayload,
   ): ServiceResult {
     const result = this.createEmptyResult();
-    const { i: buttonId, t: clickType } = payload;
-    const transactionKey = `${deviceName}.${buttonId}.${clickType}`;
+    const { c: correlationId, i: buttonId, t: clickType } = payload;
+    const transactionKey = buildClickCorrelationKey(deviceName, buttonId, clickType, correlationId);
 
     const transaction = this.clickManager.consumeTransaction(transactionKey);
     if (!transaction) {
       result.warnings.push(
-        `Received confirmation for an expired or unknown click: ${transactionKey}.`
+        `Received confirmation for an expired or unknown click: ${transactionKey}.`,
       );
       return result;
     }
@@ -882,7 +817,7 @@ export class LshLogicService {
     const logicResult = this.executeClickLogic(
       transaction.actors,
       transaction.otherActors,
-      clickType
+      clickType,
     );
 
     Object.assign(result.messages, logicResult.messages);
@@ -902,39 +837,62 @@ export class LshLogicService {
   private _validateClickRequest(
     deviceName: string,
     buttonId: number,
-    clickType: ClickType
+    clickType: ClickType,
   ): { actors: Actor[]; otherActors: string[] } {
     const deviceConfig = this.deviceConfigMap.get(deviceName);
     const clickTypeKey =
-      clickType === ClickType.Long
-        ? "longClickButtons"
-        : "superLongClickButtons";
-    const buttonConfig = deviceConfig?.[clickTypeKey]?.find(
-      (btn) => btn.id === buttonId
-    );
+      clickType === ClickType.Long ? "longClickButtons" : "superLongClickButtons";
+    const buttonConfig = deviceConfig?.[clickTypeKey]?.find((btn) => btn.id === buttonId);
 
     if (!buttonConfig)
-      throw new ClickValidationError(
-        "No action configured for this button.",
-        "click"
-      );
+      throw new ClickValidationError("No action configured for this button.", "click");
 
     const { actors = [], otherActors = [] } = buttonConfig;
     if (actors.length === 0 && otherActors.length === 0)
-      throw new ClickValidationError(
-        "Action configured with no targets.",
-        "click"
-      );
+      throw new ClickValidationError("Action configured with no targets.", "click");
 
-    const offlineActors = actors.filter(
-      (actor) => !this.deviceManager.getDevice(actor.name)?.connected
-    );
-    if (offlineActors.length > 0) {
-      const names = offlineActors.map((a) => a.name).join(", ");
-      throw new ClickValidationError(
-        `Target actor(s) are offline: ${names}.`,
-        "click"
-      );
+    for (const actor of actors) {
+      const device = this.deviceManager.getDevice(actor.name);
+      if (!device) {
+        throw new ClickValidationError(
+          `Target actor '${actor.name}' is unknown to the registry.`,
+          "click",
+        );
+      }
+
+      if (!device.connected) {
+        throw new ClickValidationError(`Target actor '${actor.name}' is offline.`, "click");
+      }
+
+      if (device.lastDetailsTime === 0) {
+        throw new ClickValidationError(
+          `Target actor '${actor.name}' has unknown device details.`,
+          "click",
+        );
+      }
+
+      if (device.actuatorsIDs.length === 0) {
+        throw new ClickValidationError(`Target actor '${actor.name}' has no actuators.`, "click");
+      }
+
+      if (!actor.allActuators) {
+        if (actor.actuators.length === 0) {
+          throw new ClickValidationError(
+            `Target actor '${actor.name}' has no actuator IDs configured.`,
+            "click",
+          );
+        }
+
+        const invalidActuatorIds = actor.actuators.filter(
+          (actuatorId) => device.actuatorIndexes[actuatorId] === undefined,
+        );
+        if (invalidActuatorIds.length > 0) {
+          throw new ClickValidationError(
+            `Target actor '${actor.name}' references unknown actuator ID(s): ${invalidActuatorIds.join(", ")}.`,
+            "click",
+          );
+        }
+      }
     }
 
     return { actors, otherActors };
@@ -950,7 +908,7 @@ export class LshLogicService {
   private executeClickLogic(
     actors: Actor[],
     otherActors: string[],
-    clickType: ClickType
+    clickType: ClickType,
   ): Pick<ServiceResult, "messages" | "logs" | "warnings"> {
     const result: Pick<ServiceResult, "messages" | "logs" | "warnings"> = {
       messages: {},
@@ -964,14 +922,12 @@ export class LshLogicService {
       result.logs.push("Executing SLC logic: setting state to OFF.");
     } else {
       // Long-click uses the "smart toggle" logic.
-      const toggleResult = this.deviceManager.getSmartToggleState(
-        actors,
-        otherActors
-      );
+      const toggleResult = this.deviceManager.getSmartToggleState(actors, otherActors);
       if (toggleResult.warning) result.warnings.push(toggleResult.warning);
       result.logs.push(
-        `Smart Toggle: ${toggleResult.active}/${toggleResult.total
-        } active. Decision: ${toggleResult.stateToSet ? "ON" : "OFF"}`
+        `Smart Toggle: ${toggleResult.active}/${
+          toggleResult.total
+        } active. Decision: ${toggleResult.stateToSet ? "ON" : "OFF"}`,
       );
       stateToSet = toggleResult.stateToSet;
     }
@@ -996,10 +952,7 @@ export class LshLogicService {
    * Builds an array of MQTT messages to set the state of LSH actuators.
    * @internal
    */
-  private buildStateCommands(
-    actors: Actor[],
-    stateToSet: boolean
-  ): NodeMessage[] {
+  private buildStateCommands(actors: Actor[], stateToSet: boolean): NodeMessage[] {
     const commands: NodeMessage[] = [];
     const stateValue = stateToSet ? 1 : 0;
     for (const actor of actors) {
@@ -1009,8 +962,7 @@ export class LshLogicService {
 
       const commandTopic = `${this.lshBasePath}${actor.name}/IN`;
       // Optimization: use the more specific 'c_asas' command if only one actuator is targeted.
-      const isSingleSpecificActuator =
-        !actor.allActuators && actor.actuators.length === 1;
+      const isSingleSpecificActuator = !actor.allActuators && actor.actuators.length === 1;
 
       if (isSingleSpecificActuator) {
         commands.push(
@@ -1021,8 +973,8 @@ export class LshLogicService {
               i: actor.actuators[0],
               s: stateValue,
             } as SetSingleActuatorPayload,
-            2
-          )
+            2,
+          ),
         );
       } else {
         const booleanStates = device.actuatorStates.slice();
@@ -1038,12 +990,12 @@ export class LshLogicService {
         // Pack boolean states into bytes (Protocol v2.0 optimized)
         const BIT_MASK_8 = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] as const;
         const numBytes = Math.ceil(booleanStates.length / 8);
-        const packedBytes: number[] = new Array(numBytes).fill(0);
+        const packedBytes = new Array<number>(numBytes).fill(0);
 
         for (let i = 0; i < booleanStates.length; i++) {
           if (booleanStates[i]) {
             const byteIndex = i >> 3; // i / 8
-            const bitIndex = i & 7;   // i % 8
+            const bitIndex = i & 7; // i % 8
             packedBytes[byteIndex] |= BIT_MASK_8[bitIndex];
           }
         }
@@ -1055,8 +1007,8 @@ export class LshLogicService {
               p: LshProtocol.SET_STATE,
               s: packedBytes,
             } as SetStatePayload,
-            2
-          )
+            2,
+          ),
         );
       }
     }
@@ -1081,17 +1033,15 @@ export class LshLogicService {
 
     if (devicesToPing.length === totalConfiguredDevices) {
       logs.push(
-        `All ${totalConfiguredDevices} devices are silent. Preparing a single broadcast ping.`
+        `All ${totalConfiguredDevices} devices are silent. Preparing a single broadcast ping.`,
       );
       messages[Output.Lsh] = this._createLshCommand(
         this.serviceTopic,
         { p: LshProtocol.PING } as PingPayload,
-        1
+        1,
       );
     } else {
-      logs.push(
-        `Preparing staggered pings for ${devicesToPing.length} device(s)...`
-      );
+      logs.push(`Preparing staggered pings for ${devicesToPing.length} device(s)...`);
       if (devicesToPing.length > 1) {
         stagger = true;
       }
@@ -1099,8 +1049,8 @@ export class LshLogicService {
         this._createLshCommand(
           `${this.lshBasePath}${deviceName}/IN`,
           { p: LshProtocol.PING } as PingPayload,
-          1
-        )
+          1,
+        ),
       );
       messages[Output.Lsh] = pingCommands;
     }
@@ -1118,7 +1068,7 @@ export class LshLogicService {
   private _prepareAlerts(
     devices: { name: string; reason: string }[],
     status: "healthy" | "unhealthy",
-    details?: object
+    details?: object,
   ): { messages: OutputMessages } {
     const payload: AlertPayload = {
       message: formatAlertMessage(devices, status, details),

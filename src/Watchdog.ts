@@ -4,7 +4,7 @@
  * timing thresholds. It is a pure, stateful class that does not perform any I/O,
  * making it highly testable.
  */
-import { DeviceState } from "./types";
+import type { DeviceState } from "./types";
 
 /**
  * Defines the possible outcomes of a watchdog health check for a single device.
@@ -42,20 +42,17 @@ export class Watchdog {
   }
 
   /**
-    * Checks the health of a single device based on its state and the current time.
-    * This method implements a multi-stage check:
-    * 1. It first trusts the Homie `connected` state. If Homie reports a device as disconnected, the watchdog takes no further action.
-    * 2. If the device is connected but has been silent beyond `interrogateThreshold`, it initiates a ping.
-    * 3. If a ping has been sent but no response is received within `pingTimeout`, it marks the device as 'stale'.
-    * 4. If the device has never been seen, it is immediately marked 'unhealthy'.
-    * @param deviceState - The current state of the device to check, or `undefined` if never seen.
-    * @param now - The current timestamp (e.g., from `Date.now()`).
-    * @returns A `WatchdogResult` indicating the device's health status.
-    */
-  public checkDeviceHealth(
-    deviceState: DeviceState | undefined,
-    now: number
-  ): WatchdogResult {
+   * Checks the health of a single device based on its state and the current time.
+   * This method implements a multi-stage check:
+   * 1. It first trusts the Homie `connected` state. If Homie reports a device as disconnected, the watchdog takes no further action.
+   * 2. If the device is connected but has been silent beyond `interrogateThreshold`, it initiates a ping.
+   * 3. If a ping has been sent but no response is received within `pingTimeout`, it marks the device as 'stale'.
+   * 4. If the device has never been seen, it is immediately marked 'unhealthy'.
+   * @param deviceState - The current state of the device to check, or `undefined` if never seen.
+   * @param now - The current timestamp (e.g., from `Date.now()`).
+   * @returns A `WatchdogResult` indicating the device's health status.
+   */
+  public checkDeviceHealth(deviceState: DeviceState | undefined, now: number): WatchdogResult {
     // GUARD 1: The device is configured but has never appeared on the network at all.
     if (!deviceState) {
       return { status: "unhealthy", reason: "Never seen on the network." };

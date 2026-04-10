@@ -3,7 +3,7 @@
  * These tests verify the health-checking logic for devices.
  */
 import { Watchdog } from "../Watchdog";
-import { DeviceState } from "../types";
+import type { DeviceState } from "../types";
 
 describe("Watchdog", () => {
   const INTERROGATE_SEC = 3;
@@ -80,10 +80,10 @@ describe("Watchdog", () => {
   it('should return "unhealthy" for a device not in the registry (undefined state)', () => {
     const result = watchdog.checkDeviceHealth(undefined, NOW);
 
-    expect(result.status).toBe("unhealthy");
-    if (result.status === "unhealthy") {
-      expect(result.reason).toContain("Never seen");
-    }
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: expect.stringContaining("Never seen"),
+    });
   });
 
   it("should clear a pending ping on new device activity", () => {
@@ -108,18 +108,14 @@ describe("Watchdog", () => {
       lastSeenTime: NOW - (INTERROGATE_SEC + 10) * 1000,
     };
 
-    expect(watchdog.checkDeviceHealth(staleConnectedDevice, NOW).status).toBe(
-      "needs_ping"
-    );
+    expect(watchdog.checkDeviceHealth(staleConnectedDevice, NOW).status).toBe("needs_ping");
 
     const disconnectedDevice = { ...staleConnectedDevice, connected: false };
-    expect(watchdog.checkDeviceHealth(disconnectedDevice, NOW + 1000).status).toBe(
-      "ok"
-    );
+    expect(watchdog.checkDeviceHealth(disconnectedDevice, NOW + 1000).status).toBe("ok");
 
     const reconnectedStaleDevice = { ...staleConnectedDevice, connected: true };
-    expect(
-      watchdog.checkDeviceHealth(reconnectedStaleDevice, NOW + 1001).status
-    ).toBe("needs_ping");
+    expect(watchdog.checkDeviceHealth(reconnectedStaleDevice, NOW + 1001).status).toBe(
+      "needs_ping",
+    );
   });
 });

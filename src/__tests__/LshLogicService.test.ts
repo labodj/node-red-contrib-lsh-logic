@@ -1,5 +1,6 @@
-import { LshLogicService } from "../LshLogicService";
-import { LshProtocol, Output } from "../types";
+import type { LshLogicService } from "../LshLogicService";
+import { LSH_WIRE_PROTOCOL_MAJOR, LshProtocol, Output } from "../types";
+import type { ServiceHarness } from "./helpers/serviceTestUtils";
 import {
   createAjvError,
   createLoadedServiceHarness,
@@ -9,7 +10,6 @@ import {
   defaultSystemConfig,
   getOutputMessages,
   getSingleOutputMessage,
-  ServiceHarness,
 } from "./helpers/serviceTestUtils";
 
 describe("LshLogicService - Core & Config", () => {
@@ -20,33 +20,28 @@ describe("LshLogicService - Core & Config", () => {
   let sendLshState: ServiceHarness["sendLshState"];
 
   beforeEach(() => {
-    ({ service, validators, loadConfig, setDeviceOnline, sendLshState } =
-      createServiceHarness());
+    ({ service, validators, loadConfig, setDeviceOnline, sendLshState } = createServiceHarness());
   });
 
   describe("General and Configuration", () => {
     it("should ignore messages if config is not loaded", () => {
       const result = service.processMessage("any/topic", {});
 
-      expect(result.warnings).toContain(
-        "Configuration not loaded, ignoring message."
-      );
+      expect(result.warnings).toContain("Configuration not loaded, ignoring message.");
     });
 
     it("should warn if verifyInitialDeviceStates is called without config", () => {
       const result = service.verifyInitialDeviceStates();
 
       expect(result.warnings).toContain(
-        "Cannot run initial state verification: config not loaded."
+        "Cannot run initial state verification: config not loaded.",
       );
     });
 
     it("should warn if getStartupCommands is called without config", () => {
       const result = service.getStartupCommands();
 
-      expect(result.warnings).toContain(
-        "Cannot generate startup commands: config not loaded."
-      );
+      expect(result.warnings).toContain("Cannot generate startup commands: config not loaded.");
     });
 
     it("should return a cloned system configuration", () => {
@@ -124,7 +119,7 @@ describe("LshLogicService - Core & Config", () => {
         "LSH/device-silent/IN",
       ]);
       expect(result.logs).toContain(
-        "Initial state verification: 2 device(s) did not report 'ready' state. Pinging them directly."
+        "Initial state verification: 2 device(s) did not report 'ready' state. Pinging them directly.",
       );
     });
 
@@ -136,7 +131,7 @@ describe("LshLogicService - Core & Config", () => {
       const result = service.verifyInitialDeviceStates();
 
       expect(result.logs).toContain(
-        "Initial state verification: all configured devices are connected."
+        "Initial state verification: all configured devices are connected.",
       );
     });
 
@@ -145,15 +140,9 @@ describe("LshLogicService - Core & Config", () => {
       setDeviceOnline("actor1");
       setDeviceOnline("device-silent");
 
-      const result = service.runFinalVerification([
-        "device-sender",
-        "actor1",
-        "device-silent",
-      ]);
+      const result = service.runFinalVerification(["device-sender", "actor1", "device-silent"]);
 
-      expect(result.logs).toContain(
-        "Final verification successful: all pinged devices responded."
-      );
+      expect(result.logs).toContain("Final verification successful: all pinged devices responded.");
     });
 
     it("should report unhealthy devices that fail final verification", () => {
@@ -166,7 +155,7 @@ describe("LshLogicService - Core & Config", () => {
       expect(result.stateChanged).toBe(true);
       expect(result.warnings).toContain("Final verification failed for: dev1");
       expect(getSingleOutputMessage<string>(result, Output.Alerts).payload).toContain(
-        "Did not respond to initial verification ping."
+        "Did not respond to initial verification ping.",
       );
       expect(service.getDeviceRegistry().dev1.isHealthy).toBe(false);
     });
@@ -175,7 +164,7 @@ describe("LshLogicService - Core & Config", () => {
       const result = service.getStartupCommands();
 
       expect(result.logs).toContain(
-        "Node started. Passively waiting for device Homie state announcements."
+        "Node started. Passively waiting for device Homie state announcements.",
       );
     });
 
@@ -184,9 +173,7 @@ describe("LshLogicService - Core & Config", () => {
 
       const result = service.getStartupCommands();
 
-      expect(result.warnings).toContain(
-        "Cannot generate startup commands: config not loaded."
-      );
+      expect(result.warnings).toContain("Cannot generate startup commands: config not loaded.");
     });
   });
 
@@ -203,9 +190,7 @@ describe("LshLogicService - Core & Config", () => {
         p: LshProtocol.DEVICE_DETAILS,
       });
 
-      expect(result.warnings).toEqual([
-        "Invalid 'conf' payload from device-1: invalid format",
-      ]);
+      expect(result.warnings).toEqual(["Invalid 'conf' payload from device-1: invalid format"]);
     });
 
     it("should carry validation errors for invalid state payloads", () => {
@@ -216,9 +201,7 @@ describe("LshLogicService - Core & Config", () => {
         p: LshProtocol.ACTUATORS_STATE,
       });
 
-      expect(result.warnings).toContain(
-        "Invalid 'state' payload from actor1: mock state error"
-      );
+      expect(result.warnings).toContain("Invalid 'state' payload from actor1: mock state error");
     });
 
     it("should carry validation errors for invalid misc payloads", () => {
@@ -229,9 +212,7 @@ describe("LshLogicService - Core & Config", () => {
         p: LshProtocol.PING,
       });
 
-      expect(result.warnings).toContain(
-        "Invalid 'misc' payload from actor1: mock misc error"
-      );
+      expect(result.warnings).toContain("Invalid 'misc' payload from actor1: mock misc error");
     });
 
     it("should report actuator state length mismatches gracefully", () => {
@@ -240,9 +221,7 @@ describe("LshLogicService - Core & Config", () => {
       const result = sendLshState("actor1", [1, 0]);
 
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]).toContain(
-        "State mismatch for actor1: expected 1 bytes"
-      );
+      expect(result.errors[0]).toContain("State mismatch for actor1: expected 1 bytes");
     });
 
     it("should surface unexpected exceptions raised while handling state payloads", () => {
@@ -260,14 +239,12 @@ describe("LshLogicService - Core & Config", () => {
       });
 
       expect(result.logs).toContain(
-        "Received state for a new device: unknown-dev. Creating partial entry."
+        "Received state for a new device: unknown-dev. Creating partial entry.",
       );
       expect(result.warnings).toContain(
-        "Device 'unknown-dev' sent state but its configuration is unknown. Requesting details."
+        "Device 'unknown-dev' sent state but its configuration is unknown. Requesting details.",
       );
-      expect(getOutputMessages(result, Output.Lsh)[0].topic).toBe(
-        "LSH/unknown-dev/IN"
-      );
+      expect(getOutputMessages(result, Output.Lsh)[0].topic).toBe("LSH/unknown-dev/IN");
     });
 
     it("should return a no-op when receiving the same Homie ready state twice", () => {
@@ -283,12 +260,14 @@ describe("LshLogicService - Core & Config", () => {
     it("should not report a state change when device details are unchanged", () => {
       const first = service.processMessage("LSH/actor1/conf", {
         p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
         n: "actor1",
         a: [1, 2],
         b: [],
       });
       const second = service.processMessage("LSH/actor1/conf", {
         p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
         n: "actor1",
         a: [1, 2],
         b: [],
@@ -302,6 +281,7 @@ describe("LshLogicService - Core & Config", () => {
     it("should not report a state change when the actuator state is unchanged", () => {
       service.processMessage("LSH/actor1/conf", {
         p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
         n: "actor1",
         a: [1, 2],
         b: [],
@@ -324,6 +304,22 @@ describe("LshLogicService - Core & Config", () => {
       expect(result.errors).toEqual([]);
     });
 
+    it("should ignore device details with an incompatible protocol major", () => {
+      const result = service.processMessage("LSH/actor1/conf", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR + 1,
+        n: "actor1",
+        a: [1, 2],
+        b: [],
+      });
+
+      expect(result.stateChanged).toBe(false);
+      expect(result.warnings).toContain(
+        `Protocol major mismatch for actor1: received ${LSH_WIRE_PROTOCOL_MAJOR + 1}, expected ${LSH_WIRE_PROTOCOL_MAJOR}. Ignoring details payload.`,
+      );
+      expect(service.getDeviceRegistry().actor1).toBeUndefined();
+    });
+
     it("should return null when there are no expired click transactions to clean up", () => {
       expect(service.cleanupPendingClicks()).toBeNull();
     });
@@ -343,9 +339,7 @@ describe("LshLogicService - Core & Config", () => {
 
       const messages = getOutputMessages(result, Output.Lsh);
 
-      expect(messages[0].topic).toContain(
-        "homeassistant/light/lsh_new-homie-device_lamp/config"
-      );
+      expect(messages[0].topic).toContain("homeassistant/light/lsh_new-homie-device_lamp/config");
     });
 
     it("should ignore Homie discovery attributes when disabled", () => {
@@ -353,10 +347,7 @@ describe("LshLogicService - Core & Config", () => {
         config: { haDiscovery: false },
       });
 
-      const result = disabledHarness.service.processMessage(
-        "homie/dev1/$nodes",
-        "foo"
-      );
+      const result = disabledHarness.service.processMessage("homie/dev1/$nodes", "foo");
 
       expect(result.messages[Output.Lsh]).toBeUndefined();
     });
@@ -372,9 +363,7 @@ describe("LshLogicService - Core & Config", () => {
       const messages = getOutputMessages(result, Output.Lsh);
 
       expect(messages).toHaveLength(2);
-      expect(messages.every((message) => Buffer.isBuffer(message.payload))).toBe(
-        true
-      );
+      expect(messages.every((message) => Buffer.isBuffer(message.payload))).toBe(true);
     });
 
     it("should preserve the default service topic in the test harness", () => {

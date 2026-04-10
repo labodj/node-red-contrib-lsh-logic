@@ -33,17 +33,19 @@ npm install node-red-contrib-lsh-logic
 
 This node acts as the central orchestrator for your custom smart home devices. It subscribes to MQTT topics, processes incoming telemetry and events, updates its internal state registry, and dispatches commands.
 
+The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [../shared/lsh_protocol.md](../shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
+
 ### Inputs
 
 The node accepts messages from an `mqtt-in` node. It processes:
 
 1.  **LSH Protocol Topics**:
-    *   `<lshBase>/<device>/conf`: Static configuration (actuators `a`, buttons `b`).
-    *   `<lshBase>/<device>/state`: Live actuator states (`s`).
-    *   `<lshBase>/<device>/misc`: Events like Clicks, Boot notifications, Pings.
+    - `<lshBase>/<device>/conf`: Static configuration (actuators `a`, buttons `b`).
+    - `<lshBase>/<device>/state`: Live actuator states (`s`).
+    - `<lshBase>/<device>/misc`: Events like Clicks, Boot notifications, Pings.
 2.  **Homie Topics**:
-    *   `<homieBase>/<device>/$state`: Connectivity status (`ready`, `lost`).
-    *   Homie attributes (`$mac`, `$fw/version`, etc.) for HA Discovery.
+    - `<homieBase>/<device>/$state`: Connectivity status (`ready`, `lost`).
+    - Homie attributes (`$mac`, `$fw/version`, etc.) for HA Discovery.
 
 ### Outputs
 
@@ -59,11 +61,11 @@ The node has five distinct outputs for clear and organized flows:
 
 ### Node Settings
 
-*   **MQTT Paths**: Base topics for Homie and LSH protocols.
-*   **System Config Path**: Location of your `system-config.json` (absolute or relative to Node-RED user dir).
-*   **Protocol**: Choose between `JSON` (human readable) and `MsgPack` (binary, efficient).
-*   **Timings**: Customize Watchdog intervals, Ping timeouts, and Click expiration times.
-*   **Home Assistant**: Enable/Disable auto-discovery generation.
+- **MQTT Paths**: Base topics for Homie and LSH protocols.
+- **System Config Path**: Location of your `system-config.json` (absolute or relative to Node-RED user dir).
+- **Protocol**: Choose between `JSON` (human readable) and `MsgPack` (binary, efficient).
+- **Timings**: Customize Watchdog intervals, Ping timeouts, and Click expiration times.
+- **Home Assistant**: Enable/Disable auto-discovery generation.
 
 ### `system-config.json`
 
@@ -76,10 +78,8 @@ This file defines the topology of your smart home. It should be placed in your N
       "name": "living-room-switch",
       "longClickButtons": [
         {
-          "id": 1, 
-          "actors": [
-            { "name": "living-room-light", "allActuators": true }
-          ],
+          "id": 1,
+          "actors": [{ "name": "living-room-light", "allActuators": true }],
           "otherActors": ["tasmota_shelf_lamp"]
         }
       ]
@@ -90,10 +90,10 @@ This file defines the topology of your smart home. It should be placed in your N
 }
 ```
 
-*   **`name`**: Must match the device ID used in MQTT topics.
-*   **`id`**: Button ID (numeric, e.g., `1` for Button 1).
-*   **`actors`**: Target LSH devices.
-*   **`otherActors`**: Target external devices (strings).
+- **`name`**: Must match the device ID used in MQTT topics.
+- **`id`**: Button ID (numeric, e.g., `1` for Button 1).
+- **`actors`**: Target LSH devices.
+- **`otherActors`**: Target external devices (strings).
 
 ## Best Practices
 
@@ -115,6 +115,7 @@ This ensures your `mqtt-in` node is always listening to exactly the right topics
 ## Advanced: MsgPack Support
 
 To use MsgPack:
+
 1.  Set **LSH Protocol** to `MsgPack` in the node settings.
 2.  Configure your **Input MQTT Node** to return **"a Buffer"** instead of a parsed string.
 3.  Ensure your ESP firmware supports decoding MsgPack payloads.

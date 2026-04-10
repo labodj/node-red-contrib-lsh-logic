@@ -5,7 +5,16 @@
  * leverages TypeScript's static analysis to prevent common bugs.
  */
 
-import { NodeDef, NodeMessage } from "node-red";
+import type { NodeDef, NodeMessage } from "node-red";
+import type { ClickType, LshProtocol } from "./generated/protocol";
+
+export {
+  ClickType,
+  LshProtocol,
+  LSH_PROTOCOL_KEYS,
+  LSH_PROTOCOL_SPEC_REVISION,
+  LSH_WIRE_PROTOCOL_MAJOR,
+} from "./generated/protocol";
 
 // --------------------------------------------------------------------------
 // Node Configuration and Core Types
@@ -83,7 +92,14 @@ export enum Output {
  * allowing messages to be targeted to specific outputs by their enum key.
  */
 export type OutputMessages = {
-  [key in Output]?: NodeMessage | NodeMessage[];
+  [Output.Lsh]?: NodeMessage | NodeMessage[];
+  [Output.OtherActors]?: NodeMessage | NodeMessage[];
+  [Output.Alerts]?: NodeMessage | NodeMessage[];
+  [Output.Configuration]?:
+    | MqttSubscribeMsg
+    | MqttUnsubscribeMsg
+    | Array<MqttSubscribeMsg | MqttUnsubscribeMsg>;
+  [Output.Debug]?: NodeMessage | NodeMessage[];
 };
 
 /**
@@ -112,64 +128,6 @@ export interface ServiceResult {
 // LSH Protocol and Payloads
 // --------------------------------------------------------------------------
 
-/**
- * Defines the types of network clicks for improved type safety and readability.
- */
-export enum ClickType {
-  Long = 1,
-  SuperLong = 2,
-}
-
-/**
- * Defines a type-safe enum for LSH protocol identifiers.
- */
-export enum LshProtocol {
-  // === Controllino → ESP ===
-  /** Client → Node: Reports device details like name, actuators, and buttons.
-   *  Format: {p:1, n:"name", a:[actuatorIds], b:[buttonIds]} */
-  DEVICE_DETAILS = 1,
-  /** Client → Node: Reports the current state of all actuators using bitpacked bytes.
-   *  Format: {p:2, s:[byte0, byte1, ...]} where each byte = 8 actuator states.
-   *  Example: s=[90,15] for 12 actuators (90 = 0b01011010, 15 = 0b00001111) */
-  ACTUATORS_STATE = 2,
-  /** Client → Node: Network click request.
-   *  Format: {p:3, i:buttonId, t:clickType} */
-  NETWORK_CLICK_REQUEST = 3,
-  /** Client → Node: Network click confirmation.
-   *  Format: {p:17, i:buttonId, t:clickType} */
-  NETWORK_CLICK_CONFIRM = 17,
-
-  // === Omnidirectional ===
-  /** Notification that the device has booted up. Format: {p:4} */
-  BOOT_NOTIFICATION = 4,
-  /** Ping message for health checks. Format: {p:5} */
-  PING = 5,
-
-  // === ESP → Controllino (Node-RED → ESP) ===
-  /** Node → Client: Request for the device to send its details. Format: {p:10} */
-  REQUEST_DETAILS = 10,
-  /** Node → Client: Request for the device to send its actuator states. Format: {p:11} */
-  REQUEST_STATE = 11,
-  /** Node → Client: Command to set the state of all actuators using bitpacked bytes.
-   *  Format: {p:12, s:[byte0, byte1, ...]} */
-  SET_STATE = 12,
-  /** Node → Client: Command to set a single actuator. Format: {p:13, i:id, s:0|1} */
-  SET_SINGLE_ACTUATOR = 13,
-  /** Node → Client: Acknowledgment of a network click request.
-   *  Format: {p:14, i:buttonId, t:clickType} */
-  NETWORK_CLICK_ACK = 14,
-  /** Node → Client: General failover signal. Format: {p:15} */
-  FAILOVER = 15,
-  /** Node → Client: Failover for specific click. Format: {p:16, i:buttonId, t:clickType} */
-  GENERAL_FAILOVER = 16,
-
-  // === System Commands (MQTT → ESP) ===
-  /** Node → Client: Command to reboot the ESP device. */
-  REBOOT = 254,
-  /** Node → Client: Command to reset the ESP device. */
-  RESET = 255,
-}
-
 // --------------------------------------------------------------------------
 // Client -> Node Payloads (ESP -> Controllino)
 // These interfaces define the expected structure of messages received from devices.
@@ -178,6 +136,8 @@ export enum LshProtocol {
 /** Payload: Device Details. Sent by a device to report its static configuration via the 'conf' topic. */
 export interface DeviceDetailsPayload {
   p: LshProtocol.DEVICE_DETAILS;
+  /** Handshake-only protocol major used for compatibility checks. */
+  v: number;
   /** The display name of the device (e.g., 'c1'). */
   n: string;
   /** An array of actuator IDs (e.g., ['1', '5']). */
@@ -204,6 +164,8 @@ export interface NetworkClickRequestPayload {
   t: ClickType;
   /** The ID of the button that was pressed (e.g., 7). */
   i: number;
+  /** Correlates request, ACK, failover and confirm across the same click lifecycle. */
+  c: number;
 }
 
 /** Payload: Boot. Sent by a device upon startup, via the 'misc' topic. */
@@ -275,6 +237,8 @@ export interface NetworkClickAckPayload {
   t: ClickType;
   /** The ID of the button whose click is being acknowledged. */
   i: number;
+  /** Correlates request, ACK, failover and confirm across the same click lifecycle. */
+  c: number;
 }
 
 /** Payload: Network Click Confirm. Sent by the device after receiving an ACK to confirm logic execution. */
@@ -284,19 +248,23 @@ export interface NetworkClickConfirmPayload {
   t: ClickType;
   /** The ID of the button whose click is being confirmed. */
   i: number;
+  /** Correlates request, ACK, failover and confirm across the same click lifecycle. */
+  c: number;
 }
 /** Payload: General Failover. Sent to indicate a system-level failure (e.g., config not loaded). */
 export interface FailoverPayload {
-  p: LshProtocol.GENERAL_FAILOVER;
+  p: LshProtocol.FAILOVER;
 }
 
 /** Payload: Failover. Sent to indicate a click-specific action has failed (e.g., target offline). */
 export interface FailoverClickPayload {
-  p: LshProtocol.FAILOVER;
+  p: LshProtocol.FAILOVER_CLICK;
   /** The type of click that failed. */
   t: ClickType;
   /** The ID of the button whose action failed. */
   i: number;
+  /** Correlates request, ACK, failover and confirm across the same click lifecycle. */
+  c: number;
 }
 
 /** Payload: Reboot. Sent to command the device to reboot. */
@@ -394,6 +362,8 @@ export interface DeviceRegistry {
 
 /** Defines the data stored for a pending network click transaction. */
 export interface PendingClickTransaction {
+  /** Slot key that uniquely identifies the logical click source (device + button + type). */
+  slotKey: string;
   /** The primary actors (LSH devices) targeted by the click. */
   actors: Actor[];
   /** The secondary actors (external devices) targeted by the click. */
@@ -401,7 +371,6 @@ export interface PendingClickTransaction {
   /** The timestamp when the transaction was started, used for expiration. */
   timestamp: number;
 }
-
 
 export interface MqttSubscribeMsg {
   topic: string | string[];
@@ -421,7 +390,7 @@ export interface AlertPayload {
   /** The formatted, human-readable alert message. */
   message: string;
   /** The health status that triggered the alert. */
-  status: 'unhealthy' | 'healthy';
+  status: "unhealthy" | "healthy";
   /** The list of devices involved in the alert. */
   devices: { name: string; reason: string }[];
   /** Optional raw details of the event that triggered the alert. */

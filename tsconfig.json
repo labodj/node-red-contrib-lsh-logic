@@ -26,8 +26,8 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
 
-    "isolatedModules": true,
+    "isolatedModules": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "**/*.test.ts", "**/*.spec.ts", "dist"]
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.spec.ts", "**/__tests__/**", "dist"]
 }

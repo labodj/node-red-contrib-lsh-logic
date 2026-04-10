@@ -1,0 +1,85 @@
+import { createAppValidators } from "../schemas";
+import { ClickType, LSH_WIRE_PROTOCOL_MAJOR, LshProtocol } from "../types";
+
+describe("schemas", () => {
+  const validators = createAppValidators();
+
+  it("rejects duplicate device names in system config", () => {
+    const isValid = validators.validateSystemConfig({
+      devices: [{ name: "c1" }, { name: "c1" }],
+    });
+
+    expect(isValid).toBe(false);
+  });
+
+  it("rejects duplicate button IDs inside the same device click config", () => {
+    const isValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "c1",
+          longClickButtons: [
+            { id: 1, actors: [], otherActors: [] },
+            { id: 1, actors: [], otherActors: [] },
+          ],
+        },
+      ],
+    });
+
+    expect(isValid).toBe(false);
+  });
+
+  it("rejects duplicate actuator or button IDs in details payloads", () => {
+    const isValid = validators.validateDeviceDetails({
+      p: LshProtocol.DEVICE_DETAILS,
+      v: LSH_WIRE_PROTOCOL_MAJOR,
+      n: "c1",
+      a: [1, 1],
+      b: [7, 7],
+    });
+
+    expect(isValid).toBe(false);
+  });
+
+  it("rejects additional properties on LSH payloads", () => {
+    const detailsValid = validators.validateDeviceDetails({
+      p: LshProtocol.DEVICE_DETAILS,
+      v: LSH_WIRE_PROTOCOL_MAJOR,
+      n: "c1",
+      a: [1],
+      b: [7],
+      extra: true,
+    });
+
+    const miscValid = validators.validateAnyMiscTopic({
+      p: LshProtocol.NETWORK_CLICK_REQUEST,
+      c: 1,
+      i: 7,
+      t: ClickType.Long,
+      extra: true,
+    });
+
+    expect(detailsValid).toBe(false);
+    expect(miscValid).toBe(false);
+  });
+
+  it("rejects details payloads without the handshake protocol major", () => {
+    const isValid = validators.validateDeviceDetails({
+      p: LshProtocol.DEVICE_DETAILS,
+      n: "c1",
+      a: [1],
+      b: [7],
+    });
+
+    expect(isValid).toBe(false);
+  });
+
+  it("rejects network click payloads without a correlation ID", () => {
+    const isValid = validators.validateAnyMiscTopic({
+      p: LshProtocol.NETWORK_CLICK_REQUEST,
+      i: 7,
+      t: ClickType.Long,
+    });
+
+    expect(isValid).toBe(false);
+  });
+});

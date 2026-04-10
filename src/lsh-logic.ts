@@ -4,16 +4,24 @@
  * connecting the Node-RED runtime to the core `LshLogicService`. This class
  * is responsible for all interactions with the Node-RED environment.
  */
-import { Node, NodeMessage, NodeAPI } from "node-red";
 import * as fs from "fs/promises";
 import * as chokidar from "chokidar";
 import * as path from "path";
-import { ValidateFunction } from "ajv";
+import type { ValidateFunction } from "ajv";
+import type { Node, NodeAPI, NodeMessage } from "node-red";
 
 import { LshLogicService } from "./LshLogicService";
 import { LshCodec } from "./LshCodec";
 import { createAppValidators } from "./schemas";
-import { LshLogicNodeDef, SystemConfig, Output, OutputMessages, ServiceResult, MqttSubscribeMsg, MqttUnsubscribeMsg } from "./types";
+import { Output } from "./types";
+import type {
+  LshLogicNodeDef,
+  MqttSubscribeMsg,
+  MqttUnsubscribeMsg,
+  OutputMessages,
+  ServiceResult,
+  SystemConfig,
+} from "./types";
 import { sleep } from "./utils";
 
 /**
@@ -47,8 +55,6 @@ export class LshLogicNode {
   constructor(node: Node, config: LshLogicNodeDef, RED: NodeAPI) {
     this.node = node;
     this.config = config;
-
-
     this.RED = RED;
     this.codec = new LshCodec();
 
@@ -70,7 +76,7 @@ export class LshLogicNode {
         haDiscoveryPrefix: this.config.haDiscoveryPrefix,
       },
       this.getContext(this.config.otherActorsContext),
-      validators
+      validators,
     );
 
     void this.initialize(validators.validateSystemConfig);
@@ -155,11 +161,13 @@ export class LshLogicNode {
       const payloadProtocol = this.getPayloadProtocol(msg.topic || "");
       processedPayload = this.codec.decode(msg.payload, payloadProtocol);
       if (Buffer.isBuffer(msg.payload) && payloadProtocol === "msgpack") {
-        this.node.log(`Decoded MsgPack payload from topic: ${msg.topic || 'unknown'}`);
+        this.node.log(`Decoded MsgPack payload from topic: ${msg.topic || "unknown"}`);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.node.error(`Failed to decode payload on topic ${msg.topic || 'unknown'}: ${errorMessage}`);
+      this.node.error(
+        `Failed to decode payload on topic ${msg.topic || "unknown"}: ${errorMessage}`,
+      );
       done(error instanceof Error ? error : new Error(errorMessage));
       return;
     }
@@ -212,7 +220,9 @@ export class LshLogicNode {
       // A message array indicates a request for staggered sending.
       // The service layer requests this for bulk actions like pings to avoid overwhelming the network.
       if (result.staggerLshMessages && Array.isArray(lshMessages) && lshMessages.length > 1) {
-        this.node.log(`Sending ${lshMessages.length} messages in a staggered sequence to prevent a thundering herd.`);
+        this.node.log(
+          `Sending ${lshMessages.length} messages in a staggered sequence to prevent a thundering herd.`,
+        );
         for (const msg of lshMessages) {
           this.send({ [Output.Lsh]: msg });
           // Sleep for a short, random interval to avoid a "thundering herd."
@@ -234,8 +244,10 @@ export class LshLogicNode {
     }
     if (payload && typeof payload === "object") {
       const alertPayload = payload as { status?: unknown; message?: unknown };
-      return alertPayload.status === "healthy"
-        || (typeof alertPayload.message === "string" && alertPayload.message.startsWith("✅"));
+      return (
+        alertPayload.status === "healthy" ||
+        (typeof alertPayload.message === "string" && alertPayload.message.startsWith("✅"))
+      );
     }
     return false;
   }
@@ -258,10 +270,11 @@ export class LshLogicNode {
     try {
       this.node.log(`Loading config from: ${filePath}`);
       const fileContent = await fs.readFile(filePath, "utf-8");
-      const parsedConfig = JSON.parse(fileContent);
+      const parsedConfig: unknown = JSON.parse(fileContent);
 
       if (!validateFn(parsedConfig)) {
-        const errorText = validateFn.errors?.map(e => e.message).join(', ') || 'unknown validation error';
+        const errorText =
+          validateFn.errors?.map((e) => e.message).join(", ") || "unknown validation error";
         throw new Error(`Invalid system-config.json: ${errorText}`);
       }
       const logMessage = this.service.updateSystemConfig(parsedConfig as SystemConfig);
@@ -306,14 +319,16 @@ export class LshLogicNode {
       await this.processServiceResult(result);
 
       const pingedDevices = result.messages[Output.Lsh]
-        ? (result.messages[Output.Lsh] as NodeMessage[])
-          .filter((msg): msg is NodeMessage & { topic: string } => typeof msg.topic === 'string')
-          .map(msg => this.getDeviceNameFromLshCommandTopic(msg.topic))
-          .filter((deviceName): deviceName is string => deviceName !== null)
+        ? this.asMessageArray(result.messages[Output.Lsh])
+            .filter((msg): msg is NodeMessage & { topic: string } => typeof msg.topic === "string")
+            .map((msg) => this.getDeviceNameFromLshCommandTopic(msg.topic))
+            .filter((deviceName): deviceName is string => deviceName !== null)
         : [];
 
       if (pingedDevices.length > 0) {
-        this.node.log(`Scheduling final check for ${pingedDevices.length} pinged devices in ${this.config.pingTimeout}s.`);
+        this.node.log(
+          `Scheduling final check for ${pingedDevices.length} pinged devices in ${this.config.pingTimeout}s.`,
+        );
 
         const finalVerification = async () => {
           this.node.log("Running final check on pinged devices...");
@@ -342,14 +357,15 @@ export class LshLogicNode {
     return topic.slice(prefix.length, -suffix.length);
   }
 
-
   /**
    * Sets up a file watcher to enable hot-reloading of the configuration.
    * @param filePath The absolute path to the configuration file to watch.
    * @param validateFn The pre-compiled validation function.
    */
   private setupFileWatcher(filePath: string, validateFn: ValidateFunction): void {
-    if (this.watcher) this.watcher.close();
+    if (this.watcher) {
+      void this.watcher.close();
+    }
     this.watcher = chokidar.watch(filePath);
     this.watcher.on("change", (path) => {
       // Use fire-and-forget on an async function to satisfy no-misused-promises.
@@ -383,8 +399,15 @@ export class LshLogicNode {
    */
   private send(messages: OutputMessages): void {
     // The number of outputs is now correctly determined from the enum's size.
-    const numOutputs = Object.keys(Output).filter(k => !isNaN(Number(k))).length;
-    const outputArray: (NodeMessage | NodeMessage[] | null)[] = new Array(numOutputs).fill(null);
+    const numOutputs = Object.keys(Output).filter((k) => !isNaN(Number(k))).length;
+    const outputArray = Array<
+      | NodeMessage
+      | NodeMessage[]
+      | MqttSubscribeMsg
+      | MqttUnsubscribeMsg
+      | Array<MqttSubscribeMsg | MqttUnsubscribeMsg>
+      | null
+    >(numOutputs).fill(null);
 
     // Directly map the messages to their corresponding output index.
     for (const key in messages) {
@@ -395,8 +418,8 @@ export class LshLogicNode {
     }
 
     // Send only if at least one message is not null to avoid empty sends.
-    if (outputArray.some(msg => msg !== null)) {
-      this.node.send(outputArray);
+    if (outputArray.some((msg) => msg !== null)) {
+      this.node.send(outputArray as unknown as NodeMessage[]);
     }
   }
 
@@ -416,8 +439,8 @@ export class LshLogicNode {
   }
 
   /**
-     * The handler for the Node-RED 'close' event.
-     */
+   * The handler for the Node-RED 'close' event.
+   */
   private async handleClose(): Promise<void> {
     this.node.log("Closing LSH Logic node.");
     await this._cleanupResources();
@@ -427,6 +450,10 @@ export class LshLogicNode {
 
   private getContext(type: "flow" | "global") {
     return type === "flow" ? this.node.context().flow : this.node.context().global;
+  }
+
+  private asMessageArray(message: NodeMessage | NodeMessage[]): NodeMessage[] {
+    return Array.isArray(message) ? message : [message];
   }
 
   private updateExposedState(): void {
@@ -461,9 +488,9 @@ export class LshLogicNode {
     const deviceNames = this.service.getConfiguredDeviceNames() || [];
 
     // Explicitly define the sub-topics to subscribe to for each LSH device, excluding '/IN'.
-    const lshSubTopics = ['conf', 'state', 'misc'];
-    const lshTopics = deviceNames.flatMap(name =>
-      lshSubTopics.map(subTopic => `${lshBasePath}${name}/${subTopic}`)
+    const lshSubTopics = ["conf", "state", "misc"];
+    const lshTopics = deviceNames.flatMap((name) =>
+      lshSubTopics.map((subTopic) => `${lshBasePath}${name}/${subTopic}`),
     ); // These require QoS 2.
 
     const homieTopics = deviceNames.map((name) => `${homieBasePath}${name}/$state`); // These require QoS 1
@@ -475,10 +502,10 @@ export class LshLogicNode {
 
     const unsubscribeAllMessage: MqttUnsubscribeMsg = {
       action: "unsubscribe",
-      topic: true
+      topic: true,
     };
 
-    const outputMessages: NodeMessage[] = [unsubscribeAllMessage as any];
+    const outputMessages: Array<MqttSubscribeMsg | MqttUnsubscribeMsg> = [unsubscribeAllMessage];
     this.node.log("Generated 'unsubscribe all' message.");
 
     // If there are Homie topics, create a specific subscribe message with QoS 1.
@@ -488,7 +515,7 @@ export class LshLogicNode {
         topic: homieTopics,
         qos: 1, // Set QoS to 1 for Homie topics
       };
-      outputMessages.push(subscribeQos1Message as any);
+      outputMessages.push(subscribeQos1Message);
       this.node.log(`Generated 'subscribe' message for ${homieTopics.length} topic(s) with QoS 1.`);
     }
 
@@ -499,23 +526,22 @@ export class LshLogicNode {
         topic: lshTopics,
         qos: 2, // Set QoS to 2 for LSH topics
       };
-      outputMessages.push(subscribeQos2Message as any);
+      outputMessages.push(subscribeQos2Message);
       this.node.log(`Generated 'subscribe' message for ${lshTopics.length} topic(s) with QoS 2.`);
-
     }
 
     if (this.config.haDiscovery) {
       const discoveryTopics = [
         `${homieBasePath}+/$nodes`,
         `${homieBasePath}+/$mac`,
-        `${homieBasePath}+/$fw/version`
+        `${homieBasePath}+/$fw/version`,
       ];
       const subscribeDiscoveryMessage: MqttSubscribeMsg = {
         action: "subscribe",
         topic: discoveryTopics,
-        qos: 1
+        qos: 1,
       };
-      outputMessages.push(subscribeDiscoveryMessage as any);
+      outputMessages.push(subscribeDiscoveryMessage);
       this.node.log(`Generated 'subscribe' message for HA Discovery topics.`);
     }
 
@@ -532,7 +558,9 @@ export class LshLogicNode {
         lastUpdated: Date.now(),
       };
       this.getContext(exportTopics).set(exportTopicsKey, topicsToExport);
-      this.node.log(`Exported ${allTopics.length} MQTT topics to context key '${exportTopicsKey}'.`);
+      this.node.log(
+        `Exported ${allTopics.length} MQTT topics to context key '${exportTopicsKey}'.`,
+      );
     }
   }
 }
