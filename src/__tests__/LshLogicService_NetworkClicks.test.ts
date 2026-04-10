@@ -92,7 +92,9 @@ describe("LshLogicService - Network Click Logic", () => {
 
     const confirmResult = confirmClick(sendMisc, "device-sender");
 
-    expect(confirmResult.logs).toContain("Click confirmed for device-sender.1.1.1. Executing logic.");
+    expect(confirmResult.logs).toContain(
+      "Click confirmed for device-sender.1.1.1. Executing logic.",
+    );
     expect(getOutputMessages(confirmResult, Output.Lsh)[0].topic).toBe("LSH/actor1/IN");
   });
 
@@ -518,6 +520,8 @@ describe("LshLogicService - Network Click Logic", () => {
     expect(staleConfirm.warnings).toContain(
       "Received confirmation for an expired or unknown click: device-sender.1.1.7.",
     );
-    expect(freshConfirm.logs).toContain("Click confirmed for device-sender.1.1.8. Executing logic.");
+    expect(freshConfirm.logs).toContain(
+      "Click confirmed for device-sender.1.1.8. Executing logic.",
+    );
   });
 });
