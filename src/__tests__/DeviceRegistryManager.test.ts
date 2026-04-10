@@ -277,6 +277,7 @@ describe("DeviceRegistryManager", () => {
       const { stateChanged } = manager.recordPingResponse("offline-device");
       const device = manager.getDevice("offline-device")!;
       expect(stateChanged).toBe(true);
+      expect(device.connected).toBe(true);
       expect(device.isHealthy).toBe(true);
     });
 
@@ -289,8 +290,30 @@ describe("DeviceRegistryManager", () => {
       const { stateChanged } = manager.recordPingResponse("stale-device");
 
       expect(stateChanged).toBe(true);
+      expect(device.connected).toBe(true);
       expect(device.isHealthy).toBe(true);
       expect(device.isStale).toBe(false); // Should be cleared
+    });
+
+    it("should mark a device as connected when ping is the first reachability proof", () => {
+      manager.registerDeviceDetails("ping-only-device", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "ping-only-device",
+        a: [1],
+        b: [],
+      });
+      manager.registerActuatorStates("ping-only-device", [false]);
+
+      const { stateChanged, becameConnected, becameHealthy } =
+        manager.recordPingResponse("ping-only-device");
+      const device = manager.getDevice("ping-only-device")!;
+
+      expect(stateChanged).toBe(true);
+      expect(becameConnected).toBe(true);
+      expect(becameHealthy).toBe(true);
+      expect(device.connected).toBe(true);
+      expect(device.isHealthy).toBe(true);
     });
   });
 

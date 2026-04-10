@@ -325,7 +325,7 @@ export interface ActuatorIndexMap {
 export interface DeviceState {
   /** The unique name of the device, used as the primary key. */
   name: string;
-  /** The last known bridge connectivity state from Homie `$state`. */
+  /** The last known MQTT/bridge reachability state, proven by Homie `$state=ready` or a successful LSH ping response. */
   connected: boolean;
   /** Overall LSH-level health status (`false` if unresponsive or never seen). Managed by ping/pong and other LSH messages. */
   isHealthy: boolean;
