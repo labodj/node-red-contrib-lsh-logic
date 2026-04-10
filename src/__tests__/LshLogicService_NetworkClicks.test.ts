@@ -351,6 +351,31 @@ describe("LshLogicService - Network Click Logic", () => {
     );
   });
 
+  it("should accept a target recovered via ping even without a retained Homie ready state", () => {
+    const { setDeviceOnline, sendDeviceDetails, sendLshState, sendMisc, service } =
+      createClickHarness();
+    setDeviceOnline("device-sender");
+    sendDeviceDetails("actor1", { a: [1] });
+    sendLshState("actor1", [0]);
+
+    const recoveryResult = sendMisc("actor1", { p: LshProtocol.PING });
+    const clickResult = startClick(sendMisc, "device-sender");
+
+    expect(service.getDeviceRegistry().actor1.connected).toBe(true);
+    expect(recoveryResult.logs).toContain("Device 'actor1' is now responsive.");
+    expect(
+      getSingleOutputMessage<{ c: number; i: number; p: number; t: number }>(
+        clickResult,
+        Output.Lsh,
+      ).payload,
+    ).toEqual({
+      p: LshProtocol.NETWORK_CLICK_ACK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+  });
+
   it("should send click-specific failover when no action is configured for a button", () => {
     const systemConfig: SystemConfig = {
       devices: [{ name: "sender", longClickButtons: [] }],

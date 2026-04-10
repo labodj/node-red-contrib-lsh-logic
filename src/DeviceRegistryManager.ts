@@ -54,7 +54,7 @@ export class DeviceRegistryManager {
       this.registry[deviceName] = {
         name: deviceName,
         // A new device is assumed to be disconnected and unhealthy until it
-        // proves it's online via a 'ready' message, boot, or ping response.
+        // proves it's reachable via Homie 'ready' or an LSH ping response.
         connected: false,
         isHealthy: false,
         isStale: false,
@@ -229,15 +229,22 @@ export class DeviceRegistryManager {
    * @param deviceName - The name of the device that responded.
    * @returns An object indicating if the internal state was changed.
    */
-  public recordPingResponse(deviceName: string): { stateChanged: boolean; becameHealthy: boolean } {
+  public recordPingResponse(deviceName: string): {
+    stateChanged: boolean;
+    becameHealthy: boolean;
+    becameConnected: boolean;
+  } {
     const device = this._ensureDeviceExists(deviceName);
 
     const wasHealthy = device.isHealthy;
     const wasStale = device.isStale;
+    const wasConnected = device.connected;
 
     const becameHealthy = !wasHealthy || wasStale;
+    const becameConnected = !wasConnected;
 
     device.lastSeenTime = Date.now();
+    device.connected = true;
 
     if (becameHealthy) {
       device.isHealthy = true;
@@ -245,7 +252,11 @@ export class DeviceRegistryManager {
       device.alertSent = false;
     }
 
-    return { stateChanged: becameHealthy, becameHealthy };
+    return {
+      stateChanged: becameHealthy || becameConnected,
+      becameHealthy,
+      becameConnected,
+    };
   }
 
   /**

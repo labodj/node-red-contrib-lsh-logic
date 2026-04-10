@@ -58,10 +58,10 @@ export class Watchdog {
       return { status: "unhealthy", reason: "Never seen on the network." };
     }
 
-    // GUARD 2: The device is explicitly marked as disconnected by the Homie protocol.
-    // Homie is the source of truth for Layer 3 (IP) connectivity. If it says the device
-    // is offline, there's no point in sending an LSH-level ping. We return "ok" to
-    // prevent the watchdog from raising a redundant alert.
+    // GUARD 2: The device is not currently known to be MQTT/bridge-reachable.
+    // A device becomes reachable either via Homie `$state=ready` or a successful
+    // LSH ping response. If neither signal is available, there's no point in
+    // sending another LSH-level ping yet, so we avoid redundant alerts.
     if (!deviceState.connected) {
       this.onDeviceActivity(deviceState.name); // Clear any pending pings for it.
       return { status: "ok" };

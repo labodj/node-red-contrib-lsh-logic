@@ -205,6 +205,7 @@ describe("LshLogicService - Watchdog & Health", () => {
       "Device 'dev1' is missing details and state. Requesting a full authoritative snapshot.",
     );
     expect(getAlertPayload(result).status).toBe("healthy");
+    expect(service.getDeviceRegistry().dev1.connected).toBe(true);
     expect(service.getDeviceRegistry().dev1.isHealthy).toBe(true);
     expect(getOutputMessages(result, Output.Lsh).map((message) => message.payload)).toEqual([
       { p: LshProtocol.REQUEST_DETAILS },
@@ -213,13 +214,14 @@ describe("LshLogicService - Watchdog & Health", () => {
   });
 
   it("should request only state when a ping response arrives after details but before state", () => {
-    const { sendDeviceDetails, sendMisc } = createLoadedServiceHarness({
+    const { sendDeviceDetails, sendMisc, service } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
     sendDeviceDetails("dev1", { a: [1, 2] });
 
     const result = sendMisc("dev1", { p: LshProtocol.PING });
 
+    expect(service.getDeviceRegistry().dev1.connected).toBe(true);
     expect(result.logs).toContain(
       "Device 'dev1' is missing an authoritative state snapshot. Requesting state refresh.",
     );
