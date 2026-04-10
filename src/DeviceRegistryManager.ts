@@ -118,6 +118,7 @@ export class DeviceRegistryManager {
   public registerDeviceDetails(
     deviceName: string,
     details: DeviceDetailsPayload,
+    markSeen = true,
   ): { changed: boolean; stateInvalidated: boolean } {
     const device = this._ensureDeviceExists(deviceName);
 
@@ -140,8 +141,10 @@ export class DeviceRegistryManager {
 
     // Merge new details into the existing device state
     const now = Date.now();
+    if (markSeen) {
+      device.lastSeenTime = now;
+    }
     Object.assign(device, {
-      lastSeenTime: now,
       lastDetailsTime: now,
       actuatorsIDs: details.a,
       buttonsIDs: details.b,
@@ -166,6 +169,7 @@ export class DeviceRegistryManager {
   public registerActuatorStates(
     deviceName: string,
     newStates: boolean[],
+    markSeen = true,
   ): { isNew: boolean; changed: boolean; configIsMissing: boolean } {
     const isNew = !this.registry[deviceName];
     const device = this._ensureDeviceExists(deviceName);
@@ -184,7 +188,9 @@ export class DeviceRegistryManager {
       device.actuatorStates = newStates;
     }
     const now = Date.now();
-    device.lastSeenTime = now;
+    if (markSeen) {
+      device.lastSeenTime = now;
+    }
     device.lastStateTime = now;
     return { isNew, changed: hasChanged, configIsMissing };
   }
@@ -224,12 +230,12 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Records a ping response from a device, marking it as healthy.
-   * A ping response is a strong indicator of LSH-level health.
-   * @param deviceName - The name of the device that responded.
-   * @returns An object indicating if the internal state was changed.
+   * Records live, non-retained traffic from the device itself.
+   * This is strong evidence that the MQTT/LSH path is currently alive.
+   * @param deviceName - The name of the device that emitted live traffic.
+   * @returns Reachability transition details.
    */
-  public recordPingResponse(deviceName: string): {
+  public recordReachableActivity(deviceName: string): {
     stateChanged: boolean;
     becameHealthy: boolean;
     becameConnected: boolean;
@@ -257,6 +263,30 @@ export class DeviceRegistryManager {
       becameHealthy,
       becameConnected,
     };
+  }
+
+  /**
+   * Records a ping response from a device, marking it as healthy.
+   * A ping response is a strong indicator of LSH-level health.
+   * @param deviceName - The name of the device that responded.
+   * @returns An object indicating if the internal state was changed.
+   */
+  public recordPingResponse(deviceName: string): {
+    stateChanged: boolean;
+    becameHealthy: boolean;
+    becameConnected: boolean;
+  } {
+    return this.recordReachableActivity(deviceName);
+  }
+
+  /**
+   * Returns whether the device has both authoritative details and state.
+   * @param deviceName - The name of the device to inspect.
+   * @returns `true` when the registry can be treated as authoritative for that device.
+   */
+  public hasAuthoritativeSnapshot(deviceName: string): boolean {
+    const device = this.getDevice(deviceName);
+    return device !== undefined && device.lastDetailsTime !== 0 && device.lastStateTime !== 0;
   }
 
   /**

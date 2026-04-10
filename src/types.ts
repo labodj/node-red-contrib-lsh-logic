@@ -124,6 +124,16 @@ export interface ServiceResult {
   staggerLshMessages?: boolean;
 }
 
+/**
+ * Optional metadata about the MQTT envelope that carried an incoming payload.
+ * This lets the service distinguish freshly published traffic from retained
+ * broker replays without coupling it to Node-RED internals.
+ */
+export interface ProcessMessageOptions {
+  /** `true` when the MQTT broker marked this delivery as retained. */
+  retained?: boolean;
+}
+
 // --------------------------------------------------------------------------
 // LSH Protocol and Payloads
 // --------------------------------------------------------------------------
@@ -325,9 +335,9 @@ export interface ActuatorIndexMap {
 export interface DeviceState {
   /** The unique name of the device, used as the primary key. */
   name: string;
-  /** The last known MQTT/bridge reachability state, proven by Homie `$state=ready` or a successful LSH ping response. */
+  /** The last known MQTT/bridge reachability state, proven by Homie `$state=ready` or live LSH traffic from the device. */
   connected: boolean;
-  /** Overall LSH-level health status (`false` if unresponsive or never seen). Managed by ping/pong and other LSH messages. */
+  /** Overall LSH-level health status (`false` if unresponsive or never seen). Snapshot authoritativeness is tracked separately via `lastDetailsTime` and `lastStateTime`. */
   isHealthy: boolean;
   /** `true` if a ping was sent but not yet answered within the timeout. A temporary warning state. */
   isStale: boolean;

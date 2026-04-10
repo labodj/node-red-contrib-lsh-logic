@@ -17,6 +17,7 @@ import type {
   AlertPayload,
   AnyMiscTopicPayload,
   DeviceActuatorsStatePayload,
+  DeviceState,
   DeviceDetailsPayload,
   DeviceEntry,
   FailoverClickPayload,
@@ -27,6 +28,7 @@ import type {
   OtherActorsCommandPayload,
   OutputMessages,
   PingPayload,
+  ProcessMessageOptions,
   RequestDetailsPayload,
   RequestStatePayload,
   ServiceResult,
@@ -217,12 +219,18 @@ export class LshLogicService {
 
     for (const deviceName of pingedDevices) {
       const deviceState = this.deviceManager.getDevice(deviceName);
+      const hasAuthoritativeSnapshot = this._hasAuthoritativeSnapshot(deviceState);
 
-      // If the device is still not healthy after being pinged, it's officially unresponsive.
-      if (!deviceState || !deviceState.isHealthy) {
+      // Startup recovery is complete only when the device is reachable again and
+      // has rebuilt an authoritative details + state snapshot.
+      if (!deviceState || !deviceState.isHealthy || !hasAuthoritativeSnapshot) {
+        const reason =
+          !deviceState || !deviceState.isHealthy
+            ? "Did not respond to initial verification ping."
+            : "Responded to ping but did not complete authoritative snapshot recovery.";
         unhealthyDevicesForAlert.push({
           name: deviceName,
-          reason: "Did not respond to initial verification ping.",
+          reason,
         });
 
         // Forcibly update its state in the registry for consistency
@@ -384,14 +392,23 @@ export class LshLogicService {
     return [];
   }
 
+  private _hasAuthoritativeSnapshot(device: DeviceState | undefined): boolean {
+    return device !== undefined && device.lastDetailsTime !== 0 && device.lastStateTime !== 0;
+  }
+
   /**
    * Processes an incoming message by matching its topic against known patterns.
    * This implementation avoids Regex for performance, using efficient string parsing instead.
    * @param topic - The MQTT topic of the message.
    * @param payload - The payload of the message.
+   * @param options - Optional MQTT envelope metadata such as the retained flag.
    * @returns A ServiceResult describing the actions to be taken.
    */
-  public processMessage(topic: string, payload: unknown): ServiceResult {
+  public processMessage(
+    topic: string,
+    payload: unknown,
+    options: ProcessMessageOptions = {},
+  ): ServiceResult {
     if (!this.systemConfig) {
       const result = this.createEmptyResult();
       result.warnings.push("Configuration not loaded, ignoring message.");
@@ -426,19 +443,22 @@ export class LshLogicService {
     else if (topic.startsWith(this.lshBasePath)) {
       const baseLen = this.lshBasePath.length;
       const slashIndex = topic.indexOf("/", baseLen);
+      const isRetained = options.retained === true;
 
       if (slashIndex === -1) return this._handleUnhandledTopic(topic);
 
       const deviceName = topic.substring(baseLen, slashIndex);
 
-      this.watchdog.onDeviceActivity(deviceName);
+      if (!isRetained) {
+        this.watchdog.onDeviceActivity(deviceName);
+      }
 
       if (topic.endsWith("/state")) {
-        return this._handleLshState(deviceName, payload);
+        return this._handleLshState(deviceName, payload, !isRetained);
       } else if (topic.endsWith("/misc")) {
         return this._handleLshMisc(deviceName, payload);
       } else if (topic.endsWith("/conf")) {
-        return this._handleLshConf(deviceName, payload);
+        return this._handleLshConf(deviceName, payload, !isRetained);
       }
     }
 
@@ -626,7 +646,11 @@ export class LshLogicService {
     return result;
   }
 
-  private _handleLshConf(deviceName: string, payload: unknown): ServiceResult {
+  private _handleLshConf(
+    deviceName: string,
+    payload: unknown,
+    isLiveTelemetry: boolean,
+  ): ServiceResult {
     const result = this.createEmptyResult();
     if (!this.validators.validateDeviceDetails(payload)) {
       const errorText =
@@ -645,7 +669,25 @@ export class LshLogicService {
     const { changed, stateInvalidated } = this.deviceManager.registerDeviceDetails(
       deviceName,
       detailsPayload,
+      isLiveTelemetry,
     );
+    if (isLiveTelemetry) {
+      const { stateChanged, becameHealthy } =
+        this.deviceManager.recordReachableActivity(deviceName);
+      if (stateChanged) {
+        result.stateChanged = true;
+        result.logs.push(`Device '${deviceName}' sent live details and is reachable.`);
+        if (becameHealthy) {
+          const alertInfo = [
+            {
+              name: deviceName,
+              reason: "Device sent live details and is now healthy.",
+            },
+          ];
+          Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
+        }
+      }
+    }
     if (changed) {
       result.logs.push(`Stored/Updated details for device '${deviceName}'.`);
       result.stateChanged = true;
@@ -663,7 +705,11 @@ export class LshLogicService {
     return result;
   }
 
-  private _handleLshState(deviceName: string, payload: unknown): ServiceResult {
+  private _handleLshState(
+    deviceName: string,
+    payload: unknown,
+    isLiveTelemetry: boolean,
+  ): ServiceResult {
     const result = this.createEmptyResult();
     if (!this.validators.validateActuatorStates(payload)) {
       const errorText =
@@ -710,7 +756,25 @@ export class LshLogicService {
       const { isNew, changed, configIsMissing } = this.deviceManager.registerActuatorStates(
         deviceName,
         states,
+        isLiveTelemetry,
       );
+      if (isLiveTelemetry) {
+        const { stateChanged, becameHealthy } =
+          this.deviceManager.recordReachableActivity(deviceName);
+        if (stateChanged) {
+          result.stateChanged = true;
+          result.logs.push(`Device '${deviceName}' sent live state and is reachable.`);
+          if (becameHealthy) {
+            const alertInfo = [
+              {
+                name: deviceName,
+                reason: "Device sent live state and is now healthy.",
+              },
+            ];
+            Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
+          }
+        }
+      }
       if (isNew)
         result.logs.push(`Received state for a new device: ${deviceName}. Creating partial entry.`);
       if (changed) {

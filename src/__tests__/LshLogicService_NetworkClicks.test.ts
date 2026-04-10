@@ -362,7 +362,7 @@ describe("LshLogicService - Network Click Logic", () => {
     const clickResult = startClick(sendMisc, "device-sender");
 
     expect(service.getDeviceRegistry().actor1.connected).toBe(true);
-    expect(recoveryResult.logs).toContain("Device 'actor1' is now responsive.");
+    expect(recoveryResult.logs).toContain("Received ping response from 'actor1'.");
     expect(
       getSingleOutputMessage<{ c: number; i: number; p: number; t: number }>(
         clickResult,

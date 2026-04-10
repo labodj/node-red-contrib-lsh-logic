@@ -242,6 +242,20 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry().dev1.isHealthy).toBe(false);
     });
 
+    it("should fail final verification when ping recovery never rebuilds an authoritative snapshot", () => {
+      loadConfig(createSystemConfig("dev1"));
+      service.processMessage("LSH/dev1/misc", { p: LshProtocol.PING });
+
+      const result = service.runFinalVerification(["dev1"]);
+
+      expect(result.stateChanged).toBe(true);
+      expect(result.warnings).toContain("Final verification failed for: dev1");
+      expect(getSingleOutputMessage<string>(result, Output.Alerts).payload).toContain(
+        "Responded to ping but did not complete authoritative snapshot recovery.",
+      );
+      expect(service.getDeviceRegistry().dev1.isHealthy).toBe(false);
+    });
+
     it("should return startup logs after configuration is loaded", () => {
       const result = service.getStartupCommands();
 
@@ -342,6 +356,48 @@ describe("LshLogicService - Core & Config", () => {
         "Device 'actor1' sent state but its configuration is unknown. Requesting details.",
       );
       expect(getOutputMessages(result, Output.Lsh)[0].topic).toBe("LSH/actor1/IN");
+    });
+
+    it("should promote live LSH details and state to connected even without Homie ready", () => {
+      service.processMessage("LSH/actor1/conf", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "actor1",
+        a: [1, 2],
+        b: [],
+      });
+      service.processMessage("LSH/actor1/state", {
+        p: LshProtocol.ACTUATORS_STATE,
+        s: [0],
+      });
+
+      expect(service.getDeviceRegistry().actor1.connected).toBe(true);
+      expect(service.getDeviceRegistry().actor1.isHealthy).toBe(true);
+    });
+
+    it("should not promote retained LSH snapshots to connected without live traffic", () => {
+      service.processMessage(
+        "LSH/actor1/conf",
+        {
+          p: LshProtocol.DEVICE_DETAILS,
+          v: LSH_WIRE_PROTOCOL_MAJOR,
+          n: "actor1",
+          a: [1, 2],
+          b: [],
+        },
+        { retained: true },
+      );
+      service.processMessage(
+        "LSH/actor1/state",
+        {
+          p: LshProtocol.ACTUATORS_STATE,
+          s: [0],
+        },
+        { retained: true },
+      );
+
+      expect(service.getDeviceRegistry().actor1.connected).toBe(false);
+      expect(service.getDeviceRegistry().actor1.isHealthy).toBe(false);
     });
 
     it("should return a no-op when receiving the same Homie ready state twice", () => {
