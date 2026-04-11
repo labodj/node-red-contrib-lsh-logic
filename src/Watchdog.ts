@@ -88,8 +88,10 @@ export class Watchdog {
         this.pingTimestamps.set(deviceState.name, now); // Set a new ping time for the next attempt.
         return { status: "stale" };
       } else {
-        // We are still waiting for a response. No new action is needed.
-        return { status: "ok" };
+        // We are still waiting for a response. Keep a stale device latched as stale
+        // until real activity clears it, otherwise the state would oscillate between
+        // stale and healthy without any actual reply from the device.
+        return deviceState.isStale ? { status: "stale" } : { status: "ok" };
       }
     } else {
       // The device is silent and we haven't sent a ping yet. Time to send one.
@@ -99,8 +101,9 @@ export class Watchdog {
   }
 
   /**
-   * Resets the ping timestamp for a device. This should be called whenever there's
-   * any activity from the device to prevent it from being incorrectly marked as stale.
+   * Resets the ping timestamp for a device after a live reachability signal.
+   * Callers should use this only for non-retained telemetry that proves the
+   * device is currently alive on the network path being monitored.
    * @param deviceName - The name of the active device.
    */
   public onDeviceActivity(deviceName: string): void {

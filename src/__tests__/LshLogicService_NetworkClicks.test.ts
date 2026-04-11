@@ -376,6 +376,54 @@ describe("LshLogicService - Network Click Logic", () => {
     });
   });
 
+  it("should fail fast when a long-click target is reachable but still missing authoritative state", () => {
+    const { setDeviceOnline, sendDeviceDetails, sendMisc } = createClickHarness();
+    setDeviceOnline("device-sender");
+    sendDeviceDetails("actor1", { a: [1] });
+
+    const result = startClick(sendMisc, "device-sender");
+
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER_CLICK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+    expect(getAlertPayload(result).message).toContain(
+      "Target actor 'actor1' has no authoritative actuator state yet.",
+    );
+  });
+
+  it("should send failover when the target actor is stale after a timed-out ping", () => {
+    const nowSpy = jest.spyOn(Date, "now");
+    const START_TIME = 1_000_000;
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, sendMisc, service, config } = createClickHarness();
+    setDeviceOnline("device-sender");
+    setDeviceOnline("actor1");
+
+    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
+    service.runWatchdogCheck();
+
+    nowSpy.mockReturnValue(
+      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
+    );
+    service.runWatchdogCheck();
+
+    const result = startClick(sendMisc, "device-sender");
+
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER_CLICK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+    expect(getAlertPayload(result).message).toContain(
+      "Target actor 'actor1' is stale after a timed-out ping.",
+    );
+  });
+
   it("should send click-specific failover when no action is configured for a button", () => {
     const systemConfig: SystemConfig = {
       devices: [{ name: "sender", longClickButtons: [] }],

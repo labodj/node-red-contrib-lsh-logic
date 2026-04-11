@@ -43,7 +43,6 @@ export class LshLogicNode {
   private watchdogInterval: NodeJS.Timeout | null = null;
   private warmupTimer: NodeJS.Timeout | null = null;
   private initialVerificationTimer: NodeJS.Timeout | null = null;
-  private finalVerificationTimer: NodeJS.Timeout | null = null;
   private isWarmingUp: boolean = false;
 
   /**
@@ -90,7 +89,7 @@ export class LshLogicNode {
       const userDir = this.RED.settings.userDir || process.cwd();
       const configPath = path.resolve(userDir, this.config.systemConfigPath);
 
-      await this.loadSystemConfig(configPath, validateSystemConfig);
+      await this.loadSystemConfig(configPath, validateSystemConfig, true);
       this.setupFileWatcher(configPath, validateSystemConfig);
 
       const startupResult = this.service.getStartupCommands();
@@ -119,6 +118,9 @@ export class LshLogicNode {
     this.watchdogInterval = setInterval(() => {
       // Create an async IIFE and void it to satisfy the no-misused-promises rule for setInterval.
       void (async () => {
+        if (this.isWarmingUp) {
+          return;
+        }
         const result = this.service.runWatchdogCheck();
         await this.processServiceResult(result);
       })();
@@ -256,18 +258,23 @@ export class LshLogicNode {
 
   /**
    * Loads, parses, and validates the `system-config.json` file.
-   * This now also triggers the initial state verification sequence.
+   * Startup verification is only scheduled during bootstrap; runtime reloads stay
+   * intentionally best-effort and do not restart the full warm-up cycle.
    * @param filePath The absolute path to the configuration file.
    * @param validateFn The pre-compiled validation function for the config.
+   * @param scheduleStartupVerification Whether to start the bootstrap verification timers.
    */
-  private async loadSystemConfig(filePath: string, validateFn: ValidateFunction): Promise<void> {
+  private async loadSystemConfig(
+    filePath: string,
+    validateFn: ValidateFunction,
+    scheduleStartupVerification: boolean,
+  ): Promise<void> {
     // Clear any pending verification timers from a previous load.
     if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
-    if (this.finalVerificationTimer) clearTimeout(this.finalVerificationTimer);
     if (this.warmupTimer) clearTimeout(this.warmupTimer);
     this.initialVerificationTimer = null;
-    this.finalVerificationTimer = null;
     this.warmupTimer = null;
+    this.isWarmingUp = false;
 
     try {
       this.node.log(`Loading config from: ${filePath}`);
@@ -282,7 +289,9 @@ export class LshLogicNode {
       const logMessage = this.service.updateSystemConfig(parsedConfig as SystemConfig);
       this.node.log(logMessage);
 
-      this.scheduleInitialVerification();
+      if (scheduleStartupVerification) {
+        this.scheduleInitialVerification();
+      }
     } catch (error) {
       this.service.clearSystemConfig();
       throw error;
@@ -294,11 +303,12 @@ export class LshLogicNode {
   }
 
   /**
-   * Schedules the two-stage active verification process and manages the warm-up state.
+   * Schedules the startup warm-up and a single best-effort verification pass.
    * This smart startup sequence prevents false "device offline" alerts on deployment.
    * 1. A "warm-up" period is started, during which "device recovered" alerts are suppressed.
-   * 2. After an initial delay (`initialStateTimeout`), it pings any devices that have not yet reported their Homie 'ready' state.
-   * 3. After another delay (`pingTimeout`), it runs a final check on the pinged devices and raises alerts for any that are still unresponsive.
+   * 2. After an initial delay (`initialStateTimeout`), it pings any devices that are
+   *    still unreachable.
+   * 3. The watchdog takes over after warm-up; there is intentionally no second startup phase.
    */
   private scheduleInitialVerification(): void {
     const initialStateTimeoutMs = this.config.initialStateTimeout * 1000;
@@ -316,47 +326,14 @@ export class LshLogicNode {
 
     // This pattern avoids a 'no-misused-promises' error for async setTimeout callbacks.
     const initialVerification = async () => {
-      this.node.log("Running initial device state verification: pinging silent devices...");
+      this.node.log("Running initial device state verification: pinging unreachable devices...");
       const result = this.service.verifyInitialDeviceStates();
       await this.processServiceResult(result);
-
-      const pingedDevices = result.messages[Output.Lsh]
-        ? this.asMessageArray(result.messages[Output.Lsh])
-            .filter((msg): msg is NodeMessage & { topic: string } => typeof msg.topic === "string")
-            .map((msg) => this.getDeviceNameFromLshCommandTopic(msg.topic))
-            .filter((deviceName): deviceName is string => deviceName !== null)
-        : [];
-
-      if (pingedDevices.length > 0) {
-        this.node.log(
-          `Scheduling final check for ${pingedDevices.length} pinged devices in ${this.config.pingTimeout}s.`,
-        );
-
-        const finalVerification = async () => {
-          this.node.log("Running final check on pinged devices...");
-          const finalResult = this.service.runFinalVerification(pingedDevices);
-          await this.processServiceResult(finalResult);
-          this.finalVerificationTimer = null;
-        };
-
-        this.finalVerificationTimer = setTimeout(() => {
-          void finalVerification();
-        }, pingTimeoutMs);
-      }
       this.initialVerificationTimer = null;
     };
     this.initialVerificationTimer = setTimeout(() => {
       void initialVerification();
     }, initialStateTimeoutMs);
-  }
-
-  private getDeviceNameFromLshCommandTopic(topic: string): string | null {
-    const prefix = this.config.lshBasePath;
-    const suffix = "/IN";
-    if (!topic.startsWith(prefix) || !topic.endsWith(suffix)) {
-      return null;
-    }
-    return topic.slice(prefix.length, -suffix.length);
   }
 
   /**
@@ -385,7 +362,7 @@ export class LshLogicNode {
     this.node.log(`Configuration file changed: ${path}. Reloading...`);
     this.node.status({ fill: "yellow", shape: "dot", text: "Reloading config..." });
     try {
-      await this.loadSystemConfig(path, validateFn);
+      await this.loadSystemConfig(path, validateFn, false);
       this.node.log(`Configuration successfully reloaded from ${path}.`);
       this.node.status({ fill: "green", shape: "dot", text: "Ready" });
     } catch (err) {
@@ -433,7 +410,6 @@ export class LshLogicNode {
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
     if (this.warmupTimer) clearTimeout(this.warmupTimer);
     if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
-    if (this.finalVerificationTimer) clearTimeout(this.finalVerificationTimer);
     if (this.watcher) {
       await this.watcher.close();
     }
@@ -452,10 +428,6 @@ export class LshLogicNode {
 
   private getContext(type: "flow" | "global") {
     return type === "flow" ? this.node.context().flow : this.node.context().global;
-  }
-
-  private asMessageArray(message: NodeMessage | NodeMessage[]): NodeMessage[] {
-    return Array.isArray(message) ? message : [message];
   }
 
   private updateExposedState(): void {

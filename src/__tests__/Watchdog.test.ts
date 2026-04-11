@@ -58,6 +58,20 @@ describe("Watchdog", () => {
     expect(result.status).toBe("ok");
   });
 
+  it('should keep a stale device marked as "stale" while waiting for the retry ping response', () => {
+    const device = {
+      ...mockDevice,
+      isStale: true,
+      lastSeenTime: NOW - (INTERROGATE_SEC + 1) * 1000,
+    };
+
+    watchdog.checkDeviceHealth(device, NOW);
+
+    const future = NOW + 1000;
+    const result = watchdog.checkDeviceHealth(device, future);
+    expect(result.status).toBe("stale");
+  });
+
   it('should return "stale" if a ping has timed out', () => {
     const device = {
       ...mockDevice,

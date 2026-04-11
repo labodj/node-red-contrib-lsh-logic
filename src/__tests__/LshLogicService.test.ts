@@ -9,7 +9,6 @@ import {
   defaultServiceConfig,
   defaultSystemConfig,
   getOutputMessages,
-  getSingleOutputMessage,
 } from "./helpers/serviceTestUtils";
 
 describe("LshLogicService - Core & Config", () => {
@@ -134,7 +133,7 @@ describe("LshLogicService - Core & Config", () => {
       );
     });
 
-    it("should preserve pending click transactions when the config reload is identical", () => {
+    it("should clear pending click transactions even when the config reload is identical", () => {
       const initialConfig = {
         devices: [
           {
@@ -170,9 +169,9 @@ describe("LshLogicService - Core & Config", () => {
         t: 1,
       });
 
-      expect(logMessage).not.toContain("Cleared 1 pending click transaction(s).");
-      expect(confirmResult.logs).toContain(
-        "Click confirmed for device-sender.1.1.9. Executing logic.",
+      expect(logMessage).toContain("Cleared 1 pending click transaction(s).");
+      expect(confirmResult.warnings).toContain(
+        "Received confirmation for an expired or unknown click: device-sender.1.1.9.",
       );
     });
 
@@ -201,11 +200,20 @@ describe("LshLogicService - Core & Config", () => {
         "LSH/device-silent/IN",
       ]);
       expect(result.logs).toContain(
-        "Initial state verification: 2 device(s) did not report 'ready' state. Pinging them directly.",
+        "Initial state verification: 2 device(s) are still unreachable. Pinging them directly.",
       );
     });
 
-    it("should log success when all configured devices are connected", () => {
+    it("should not ping a device that is already reachable even if its snapshot is incomplete", () => {
+      loadConfig(createSystemConfig("dev1"));
+      service.processMessage("homie/dev1/$state", "ready");
+
+      const result = service.verifyInitialDeviceStates();
+
+      expect(result.messages[Output.Lsh]).toBeUndefined();
+    });
+
+    it("should log success when all configured devices are reachable", () => {
       setDeviceOnline("device-sender");
       setDeviceOnline("actor1");
       setDeviceOnline("device-silent");
@@ -213,47 +221,8 @@ describe("LshLogicService - Core & Config", () => {
       const result = service.verifyInitialDeviceStates();
 
       expect(result.logs).toContain(
-        "Initial state verification: all configured devices are connected.",
+        "Initial state verification: all configured devices are reachable.",
       );
-    });
-
-    it("should log success when final verification is successful", () => {
-      setDeviceOnline("device-sender");
-      setDeviceOnline("actor1");
-      setDeviceOnline("device-silent");
-
-      const result = service.runFinalVerification(["device-sender", "actor1", "device-silent"]);
-
-      expect(result.logs).toContain("Final verification successful: all pinged devices responded.");
-    });
-
-    it("should report unhealthy devices that fail final verification", () => {
-      loadConfig(createSystemConfig("dev1"));
-      setDeviceOnline("dev1");
-      service.processMessage("homie/dev1/$state", "lost");
-
-      const result = service.runFinalVerification(["dev1"]);
-
-      expect(result.stateChanged).toBe(true);
-      expect(result.warnings).toContain("Final verification failed for: dev1");
-      expect(getSingleOutputMessage<string>(result, Output.Alerts).payload).toContain(
-        "Did not respond to initial verification ping.",
-      );
-      expect(service.getDeviceRegistry().dev1.isHealthy).toBe(false);
-    });
-
-    it("should fail final verification when ping recovery never rebuilds an authoritative snapshot", () => {
-      loadConfig(createSystemConfig("dev1"));
-      service.processMessage("LSH/dev1/misc", { p: LshProtocol.PING });
-
-      const result = service.runFinalVerification(["dev1"]);
-
-      expect(result.stateChanged).toBe(true);
-      expect(result.warnings).toContain("Final verification failed for: dev1");
-      expect(getSingleOutputMessage<string>(result, Output.Alerts).payload).toContain(
-        "Responded to ping but did not complete authoritative snapshot recovery.",
-      );
-      expect(service.getDeviceRegistry().dev1.isHealthy).toBe(false);
     });
 
     it("should return startup logs after configuration is loaded", () => {
@@ -431,7 +400,7 @@ describe("LshLogicService - Core & Config", () => {
       expect(second.logs).toEqual([]);
     });
 
-    it("should invalidate authoritative state and request a fresh snapshot when actuator IDs change", () => {
+    it("should invalidate authoritative state when actuator IDs change", () => {
       setDeviceOnline("actor1", { a: [1, 2] });
       sendLshState("actor1", [0b01]);
 
@@ -444,12 +413,7 @@ describe("LshLogicService - Core & Config", () => {
       });
 
       expect(result.logs).toContain("Stored/Updated details for device 'actor1'.");
-      expect(result.logs).toContain(
-        "Device 'actor1' details changed the actuator mapping. Requesting a fresh authoritative state snapshot.",
-      );
-      expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-        p: LshProtocol.REQUEST_STATE,
-      });
+      expect(result.messages[Output.Lsh]).toBeUndefined();
       expect(service.getDeviceRegistry().actor1.lastStateTime).toBe(0);
       expect(service.getDeviceRegistry().actor1.actuatorStates).toEqual([]);
     });

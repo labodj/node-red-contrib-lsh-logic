@@ -119,12 +119,11 @@ export class DeviceRegistryManager {
     deviceName: string,
     details: DeviceDetailsPayload,
     markSeen = true,
-  ): { changed: boolean; stateInvalidated: boolean } {
+  ): { changed: boolean } {
     const device = this._ensureDeviceExists(deviceName);
 
     const oldActuatorIDs = [...device.actuatorsIDs];
     const oldButtonIDs = [...device.buttonsIDs];
-    const hadAuthoritativeState = device.lastStateTime !== 0;
     const actuatorIdsChanged = !areSameArray(oldActuatorIDs, details.a);
     const buttonIdsChanged = !areSameArray(oldButtonIDs, details.b);
     let changed = false;
@@ -156,7 +155,7 @@ export class DeviceRegistryManager {
       device.actuatorStates = [];
     }
 
-    return { changed, stateInvalidated: actuatorIdsChanged && hadAuthoritativeState };
+    return { changed };
   }
 
   /**
@@ -263,30 +262,6 @@ export class DeviceRegistryManager {
       becameHealthy,
       becameConnected,
     };
-  }
-
-  /**
-   * Records a ping response from a device, marking it as healthy.
-   * A ping response is a strong indicator of LSH-level health.
-   * @param deviceName - The name of the device that responded.
-   * @returns An object indicating if the internal state was changed.
-   */
-  public recordPingResponse(deviceName: string): {
-    stateChanged: boolean;
-    becameHealthy: boolean;
-    becameConnected: boolean;
-  } {
-    return this.recordReachableActivity(deviceName);
-  }
-
-  /**
-   * Returns whether the device has both authoritative details and state.
-   * @param deviceName - The name of the device to inspect.
-   * @returns `true` when the registry can be treated as authoritative for that device.
-   */
-  public hasAuthoritativeSnapshot(deviceName: string): boolean {
-    const device = this.getDevice(deviceName);
-    return device !== undefined && device.lastDetailsTime !== 0 && device.lastStateTime !== 0;
   }
 
   /**

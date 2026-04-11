@@ -16,8 +16,8 @@ This node replaces complex Node-RED flows with a single, robust, and stateful co
 
 - **Shared LSH Protocol Support**: Uses the generated contract vendored from `lsh-protocol`, keeping command IDs, compact keys and examples aligned with the firmware repositories.
 - **Robust Health Monitoring**: Features a multi-stage intelligent Watchdog that detects stale or offline devices without generating false positives during startup or temporary network glitches.
-- **Robust Cold Recovery**: If Node-RED restarts and retained MQTT state is incomplete, the node actively pings silent devices and requests the missing `details`/`state` snapshot needed to rebuild an authoritative registry before startup recovery is considered complete.
-- **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when all target devices are reachable and have an authoritative snapshot.
+- **Robust Cold Recovery**: If Node-RED restarts and retained MQTT state is incomplete, the node actively pings any device that is still unreachable. Snapshot recovery stays best-effort and actions fail fast if a required fresh state is still missing.
+- **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when target devices are reachable and currently healthy.
 - **Homie & HA Discovery**: Fully compliant with the [Homie Convention](https://homieiot.github.io/) for state tracking and automatically generates Home Assistant Auto-Discovery payloads for seamless integration.
 - **High Performance**: Optimized message routing using direct string parsing and efficient internal state management.
 - **Declarative Configuration**: Define your entire system in a single `system-config.json` file. The node automatically hot-reloads configuration changes.
@@ -36,9 +36,16 @@ This node acts as the central orchestrator for your custom smart home devices. I
 
 The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
 
-At startup the node prefers retained Homie/LSH topics, but it does not depend on them exclusively: silent devices are pinged during initial verification, and a ping response from a device that is still missing `conf` or `state` automatically triggers the minimum `REQUEST_DETAILS` / `REQUEST_STATE` recovery sequence. Startup recovery only succeeds once that authoritative snapshot is complete.
+At startup the node prefers retained Homie/LSH topics, but it does not depend on them exclusively: any device still unreachable is pinged during initial verification, and a ping response from a device that is still missing `conf` or `state` automatically triggers a full `REQUEST_DETAILS` + `REQUEST_STATE` refresh. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
 
 The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
+
+Operational simplifications:
+
+- Reloading `system-config.json` always clears pending network click transactions. In-flight distributed clicks are intentionally failed rather than preserved across a config change.
+- Runtime config reloads do not restart the startup warm-up/verification cycle. Recovery after reload is best-effort through normal live traffic, retained MQTT data and later watchdog pings.
+- Distributed long-click logic requires an authoritative actuator snapshot for every targeted LSH device. If a target is reachable but still missing fresh state, the click fails fast and is retried naturally on the next user action.
+- Extremely narrow timing races during startup or config reload are handled in best-effort mode rather than with complex transaction recovery logic.
 
 To verify that the Node-RED generated protocol files match the vendored source of truth:
 
