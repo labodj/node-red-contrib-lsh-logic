@@ -142,6 +142,57 @@ describe("LshLogicService - Watchdog & Health", () => {
     );
   });
 
+  it("should not treat retained Homie discovery topics as live watchdog activity", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, service, config } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1"),
+    });
+    setDeviceOnline("dev1");
+
+    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
+    service.runWatchdogCheck();
+
+    service.processMessage("homie/dev1/$nodes", "relay", { retained: true });
+
+    nowSpy.mockReturnValue(
+      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
+    );
+    const result = service.runWatchdogCheck();
+
+    expect(getAlertPayload(result).message).toContain("No response to ping");
+  });
+
+  it("should not emit the stale alert again while the device remains stale", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, service, config } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1"),
+    });
+    setDeviceOnline("dev1");
+
+    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
+    service.runWatchdogCheck();
+
+    nowSpy.mockReturnValue(
+      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
+    );
+    const firstStaleResult = service.runWatchdogCheck();
+
+    nowSpy.mockReturnValue(
+      START_TIME + (config.interrogateThreshold + 2 * config.pingTimeout + 4) * 1000,
+    );
+    const secondStaleResult = service.runWatchdogCheck();
+
+    expect(getAlertPayload(firstStaleResult).message).toContain("No response to ping");
+    expect(secondStaleResult.messages[Output.Alerts]).toBeUndefined();
+    expect(getSingleOutputMessage<{ p: number }>(secondStaleResult, Output.Lsh).payload.p).toBe(
+      LshProtocol.PING,
+    );
+  });
+
   it("should not re-mark a recently disconnected device as healthy during watchdog checks", () => {
     const nowSpy = mockNow();
     nowSpy.mockReturnValue(START_TIME);
@@ -202,7 +253,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     expect(result.logs).toContain("Device 'dev1' is now responsive.");
     expect(result.logs).toContain("Device 'dev1' is healthy again after ping response.");
     expect(result.logs).toContain(
-      "Device 'dev1' is missing details and state. Requesting a full authoritative snapshot.",
+      "Device 'dev1' is missing a complete device snapshot. Requesting details and state.",
     );
     expect(getAlertPayload(result).status).toBe("healthy");
     expect(service.getDeviceRegistry().dev1.connected).toBe(true);
@@ -213,7 +264,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     ]);
   });
 
-  it("should request only state when a ping response arrives after details but before state", () => {
+  it("should request a full refresh when a ping response arrives after details but before state", () => {
     const { sendDeviceDetails, sendMisc, service } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
@@ -223,9 +274,10 @@ describe("LshLogicService - Watchdog & Health", () => {
 
     expect(service.getDeviceRegistry().dev1.connected).toBe(true);
     expect(result.logs).toContain(
-      "Device 'dev1' is missing an authoritative state snapshot. Requesting state refresh.",
+      "Device 'dev1' is missing a complete device snapshot. Requesting details and state.",
     );
     expect(getOutputMessages(result, Output.Lsh).map((message) => message.payload)).toEqual([
+      { p: LshProtocol.REQUEST_DETAILS },
       { p: LshProtocol.REQUEST_STATE },
     ]);
   });

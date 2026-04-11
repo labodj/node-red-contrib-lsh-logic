@@ -17,7 +17,6 @@ import type {
   AlertPayload,
   AnyMiscTopicPayload,
   DeviceActuatorsStatePayload,
-  DeviceState,
   DeviceDetailsPayload,
   DeviceEntry,
   FailoverClickPayload,
@@ -49,6 +48,8 @@ type WatchdogActions = {
   unhealthyDevicesForAlert: Array<{ name: string; reason: string }>;
   stateChanged: boolean;
 };
+
+const BIT_MASK_8 = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] as const;
 
 function buildClickSlotKey(deviceName: string, buttonId: number, clickType: ClickType): string {
   return `${deviceName}.${buttonId}.${clickType}`;
@@ -163,8 +164,9 @@ export class LshLogicService {
 
   /**
    * Actively verifies the state of all configured devices after an initial grace period.
-   * This method identifies devices that haven't reported as 'connected' via Homie
-   * and generates targeted pings to check their LSH-level health.
+   * This method is intentionally simple: it only checks live reachability.
+   * Snapshot completeness is recovered on a best-effort basis afterwards and
+   * enforced only where an action truly requires it.
    * @returns A ServiceResult containing targeted ping commands.
    */
   public verifyInitialDeviceStates(): ServiceResult {
@@ -175,23 +177,21 @@ export class LshLogicService {
     }
 
     const configuredDevices = this.getConfiguredDeviceNames() as string[];
-    const silentDevices: string[] = [];
+    const devicesNeedingVerification: string[] = [];
 
     for (const deviceName of configuredDevices) {
       const deviceState = this.deviceManager.getDevice(deviceName);
-      // A device is considered silent if it's not in the registry yet, or if it is but isn't connected.
       if (!deviceState || !deviceState.connected) {
-        silentDevices.push(deviceName);
+        devicesNeedingVerification.push(deviceName);
       }
     }
 
-    if (silentDevices.length > 0) {
+    if (devicesNeedingVerification.length > 0) {
       result.logs.push(
-        `Initial state verification: ${silentDevices.length} device(s) did not report 'ready' state. Pinging them directly.`,
+        `Initial state verification: ${devicesNeedingVerification.length} device(s) are still unreachable. Pinging them directly.`,
       );
 
-      // Generate targeted ping commands for only the silent devices.
-      const pingCommands: NodeMessage[] = silentDevices.map((deviceName) =>
+      const pingCommands: NodeMessage[] = devicesNeedingVerification.map((deviceName) =>
         this._createLshCommand(
           `${this.lshBasePath}${deviceName}/IN`,
           { p: LshProtocol.PING } as PingPayload,
@@ -201,59 +201,7 @@ export class LshLogicService {
 
       result.messages[Output.Lsh] = pingCommands;
     } else {
-      result.logs.push("Initial state verification: all configured devices are connected.");
-    }
-
-    return result;
-  }
-
-  /**
-   * Runs a final check on devices that were pinged during initial verification.
-   * Any device from the list that is still not healthy is now declared unhealthy.
-   * @param pingedDevices - An array of device names that were pinged.
-   * @returns A ServiceResult containing alerts for any unresponsive devices.
-   */
-  public runFinalVerification(pingedDevices: string[]): ServiceResult {
-    const result = this.createEmptyResult();
-    const unhealthyDevicesForAlert: { name: string; reason: string }[] = [];
-
-    for (const deviceName of pingedDevices) {
-      const deviceState = this.deviceManager.getDevice(deviceName);
-      const hasAuthoritativeSnapshot = this._hasAuthoritativeSnapshot(deviceState);
-
-      // Startup recovery is complete only when the device is reachable again and
-      // has rebuilt an authoritative details + state snapshot.
-      if (!deviceState || !deviceState.isHealthy || !hasAuthoritativeSnapshot) {
-        const reason =
-          !deviceState || !deviceState.isHealthy
-            ? "Did not respond to initial verification ping."
-            : "Responded to ping but did not complete authoritative snapshot recovery.";
-        unhealthyDevicesForAlert.push({
-          name: deviceName,
-          reason,
-        });
-
-        // Forcibly update its state in the registry for consistency
-        if (deviceState) {
-          this.deviceManager.updateHealthFromResult(deviceName, {
-            status: "unhealthy",
-            reason: "Initial ping failed",
-          });
-        }
-        // Finding an unresponsive device is a state change for the system.
-        result.stateChanged = true;
-      }
-    }
-
-    if (unhealthyDevicesForAlert.length > 0) {
-      result.warnings.push(
-        `Final verification failed for: ${unhealthyDevicesForAlert.map((d) => d.name).join(", ")}`,
-      );
-      result.messages[Output.Alerts] = {
-        payload: formatAlertMessage(unhealthyDevicesForAlert, "unhealthy"),
-      };
-    } else {
-      result.logs.push("Final verification successful: all pinged devices responded.");
+      result.logs.push("Initial state verification: all configured devices are reachable.");
     }
 
     return result;
@@ -266,11 +214,11 @@ export class LshLogicService {
    * @returns A log message indicating the result of the update.
    */
   public updateSystemConfig(newConfig: SystemConfig): string {
-    const configChanged =
-      this.systemConfig === null || JSON.stringify(this.systemConfig) !== JSON.stringify(newConfig);
     this.systemConfig = newConfig;
     this.deviceConfigMap.clear();
-    const clearedPendingClicks = configChanged ? this.clickManager.clearAll() : 0;
+    // Simplicity over improbable race handling: any successful config load invalidates
+    // the assumptions under which pending network clicks were validated.
+    const clearedPendingClicks = this.clickManager.clearAll();
 
     const newDeviceNames = new Set(this.systemConfig.devices.map((d) => d.name));
     for (const device of this.systemConfig.devices) {
@@ -355,16 +303,16 @@ export class LshLogicService {
   }
 
   /**
-   * Builds the minimum snapshot recovery commands required to make a device authoritative again.
-   * If details are missing, a full `REQUEST_DETAILS` + `REQUEST_STATE` cycle is required.
-   * If only state is missing, a single `REQUEST_STATE` is sufficient.
+   * Builds the best-effort recovery commands required to refresh a device snapshot.
+   * To keep recovery logic simple, any missing piece triggers a full
+   * `REQUEST_DETAILS` + `REQUEST_STATE` cycle.
    * @internal
    */
   private _buildSnapshotRecoveryCommands(deviceName: string): NodeMessage[] {
     const device = this.deviceManager.getDevice(deviceName);
     const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
 
-    if (!device || device.lastDetailsTime === 0) {
+    if (!device || device.lastDetailsTime === 0 || device.lastStateTime === 0) {
       return [
         this._createLshCommand(
           commandTopic,
@@ -379,21 +327,7 @@ export class LshLogicService {
       ];
     }
 
-    if (device.lastStateTime === 0) {
-      return [
-        this._createLshCommand(
-          commandTopic,
-          { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
-          1,
-        ),
-      ];
-    }
-
     return [];
-  }
-
-  private _hasAuthoritativeSnapshot(device: DeviceState | undefined): boolean {
-    return device !== undefined && device.lastDetailsTime !== 0 && device.lastStateTime !== 0;
   }
 
   /**
@@ -419,15 +353,18 @@ export class LshLogicService {
     if (topic.startsWith(this.homieBasePath)) {
       const baseLen = this.homieBasePath.length;
       const slashIndex = topic.indexOf("/", baseLen);
+      const isRetained = options.retained === true;
 
       if (slashIndex === -1) return this._handleUnhandledTopic(topic);
 
       const deviceName = topic.substring(baseLen, slashIndex);
 
-      // Homie topics imply activity
-      this.watchdog.onDeviceActivity(deviceName);
-
       if (topic.endsWith("/$state")) {
+        // Only a live `$state` transition proves current Homie reachability.
+        // Retained discovery metadata must not reset watchdog ping tracking.
+        if (!isRetained) {
+          this.watchdog.onDeviceActivity(deviceName);
+        }
         return this._handleHomieState(deviceName, payload);
       }
 
@@ -555,10 +492,12 @@ export class LshLogicService {
         actions.devicesToPing.add(deviceName);
         break;
       case "stale":
-        actions.unhealthyDevicesForAlert.push({
-          name: deviceName,
-          reason: "No response to ping.",
-        });
+        if (stateChanged) {
+          actions.unhealthyDevicesForAlert.push({
+            name: deviceName,
+            reason: "No response to ping.",
+          });
+        }
         actions.devicesToPing.add(deviceName);
         break;
       case "unhealthy":
@@ -666,7 +605,7 @@ export class LshLogicService {
       );
       return result;
     }
-    const { changed, stateInvalidated } = this.deviceManager.registerDeviceDetails(
+    const { changed } = this.deviceManager.registerDeviceDetails(
       deviceName,
       detailsPayload,
       isLiveTelemetry,
@@ -691,16 +630,6 @@ export class LshLogicService {
     if (changed) {
       result.logs.push(`Stored/Updated details for device '${deviceName}'.`);
       result.stateChanged = true;
-    }
-    if (stateInvalidated) {
-      result.logs.push(
-        `Device '${deviceName}' details changed the actuator mapping. Requesting a fresh authoritative state snapshot.`,
-      );
-      result.messages[Output.Lsh] = this._createLshCommand(
-        `${this.lshBasePath}${deviceName}/IN`,
-        { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
-        1,
-      );
     }
     return result;
   }
@@ -734,10 +663,6 @@ export class LshLogicService {
         );
         return result;
       }
-
-      // LUT for bit masks - same pattern as C++ for consistency across architectures
-      // On modern JS engines (V8, SpiderMonkey) this is optimized to near-native performance
-      const BIT_MASK_8 = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] as const;
 
       // Unpack using per-byte loop structure (matches C++ implementation)
       // This avoids Math.floor() and % operations on the hot path
@@ -819,7 +744,8 @@ export class LshLogicService {
 
       case LshProtocol.PING:
         {
-          const { stateChanged, becameHealthy } = this.deviceManager.recordPingResponse(deviceName);
+          const { stateChanged, becameHealthy } =
+            this.deviceManager.recordReachableActivity(deviceName);
           const recoveryCommands = this._buildSnapshotRecoveryCommands(deviceName);
 
           if (stateChanged) {
@@ -843,9 +769,7 @@ export class LshLogicService {
           if (recoveryCommands.length > 0) {
             result.messages[Output.Lsh] = recoveryCommands;
             result.logs.push(
-              recoveryCommands.length === 2
-                ? `Device '${deviceName}' is missing details and state. Requesting a full authoritative snapshot.`
-                : `Device '${deviceName}' is missing an authoritative state snapshot. Requesting state refresh.`,
+              `Device '${deviceName}' is missing a complete device snapshot. Requesting details and state.`,
             );
           }
         }
@@ -992,9 +916,32 @@ export class LshLogicService {
         throw new ClickValidationError(`Target actor '${actor.name}' is offline.`, "click");
       }
 
+      if (device.isStale) {
+        throw new ClickValidationError(
+          `Target actor '${actor.name}' is stale after a timed-out ping.`,
+          "click",
+        );
+      }
+
+      if (!device.isHealthy) {
+        throw new ClickValidationError(`Target actor '${actor.name}' is unhealthy.`, "click");
+      }
+
       if (device.lastDetailsTime === 0) {
         throw new ClickValidationError(
           `Target actor '${actor.name}' has unknown device details.`,
+          "click",
+        );
+      }
+
+      // Keep distributed click handling intentionally simple: if the action needs
+      // an authoritative local state snapshot, reject it before sending ACK rather
+      // than trying to recover mid-transaction.
+      const requiresAuthoritativeState =
+        clickType === ClickType.Long || actor.allActuators === false;
+      if (requiresAuthoritativeState && device.lastStateTime === 0) {
+        throw new ClickValidationError(
+          `Target actor '${actor.name}' has no authoritative actuator state yet.`,
           "click",
         );
       }
@@ -1146,7 +1093,6 @@ export class LshLogicService {
         }
 
         // Pack boolean states into the current bitpacked LSH wire format.
-        const BIT_MASK_8 = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] as const;
         const numBytes = Math.ceil(booleanStates.length / 8);
         const packedBytes = new Array<number>(numBytes).fill(0);
 

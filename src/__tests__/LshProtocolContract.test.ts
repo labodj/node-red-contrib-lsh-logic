@@ -78,10 +78,13 @@ const toJsonByteLiteral = (value: number): string =>
     .map((char) => (char === "\n" ? "'\\n'" : `'${char}'`))
     .join(", ");
 
-const toMsgPackByteLiteral = (value: number): string =>
-  (value <= 0x7f ? [0x81, 0xa1, 0x70, value] : [0x81, 0xa1, 0x70, 0xcc, value])
+const toFramedMsgPackByteLiteral = (value: number): string => {
+  const payloadBytes = value <= 0x7f ? [0x81, 0xa1, 0x70, value] : [0x81, 0xa1, 0x70, 0xcc, value];
+  const frameBytes = [payloadBytes.length & 0xff, (payloadBytes.length >> 8) & 0xff, ...payloadBytes];
+  return frameBytes
     .map((byte) => `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`)
     .join(", ");
+};
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -193,7 +196,7 @@ describeContract("LSH protocol contract", () => {
         expect(header).toMatch(new RegExp(`\\b${escapeRegExp(enumName)}\\b`));
         expect(header).toContain(`JSON_${symbol}_BYTES = {${toJsonByteLiteral(commandValue!)}}`);
         expect(header).toContain(
-          `MSGPACK_${symbol}_BYTES = {${toMsgPackByteLiteral(commandValue!)}}`,
+          `MSGPACK_${symbol}_BYTES = {${toFramedMsgPackByteLiteral(commandValue!)}}`,
         );
       }
 

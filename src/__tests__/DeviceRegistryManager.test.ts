@@ -271,10 +271,10 @@ describe("DeviceRegistryManager", () => {
     });
   });
 
-  describe("recordPingResponse", () => {
+  describe("recordReachableActivity", () => {
     it("should report a state change for a previously unhealthy device", () => {
       manager.updateConnectionState("offline-device", "lost"); // unhealthy
-      const { stateChanged } = manager.recordPingResponse("offline-device");
+      const { stateChanged } = manager.recordReachableActivity("offline-device");
       const device = manager.getDevice("offline-device")!;
       expect(stateChanged).toBe(true);
       expect(device.connected).toBe(true);
@@ -287,7 +287,7 @@ describe("DeviceRegistryManager", () => {
       device.isStale = true; // Make it stale
       device.isHealthy = true;
 
-      const { stateChanged } = manager.recordPingResponse("stale-device");
+      const { stateChanged } = manager.recordReachableActivity("stale-device");
 
       expect(stateChanged).toBe(true);
       expect(device.connected).toBe(true);
@@ -306,7 +306,7 @@ describe("DeviceRegistryManager", () => {
       manager.registerActuatorStates("ping-only-device", [false]);
 
       const { stateChanged, becameConnected, becameHealthy } =
-        manager.recordPingResponse("ping-only-device");
+        manager.recordReachableActivity("ping-only-device");
       const device = manager.getDevice("ping-only-device")!;
 
       expect(stateChanged).toBe(true);

@@ -201,6 +201,24 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     expect(processResultSpy).toHaveBeenCalled();
   });
 
+  it("should skip watchdog checks while the node is still warming up", async () => {
+    jest
+      .spyOn(LshLogicService.prototype, "runWatchdogCheck")
+      .mockReturnValue(createServiceResult());
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      watchdogInterval: 1,
+      initialStateTimeout: 10,
+      pingTimeout: 10,
+    });
+
+    jest.advanceTimersByTime(1000);
+    await flushMicrotasks();
+
+    expect(LshLogicService.prototype.runWatchdogCheck).not.toHaveBeenCalled();
+  });
+
   it("should handle config reload successfully", async () => {
     await initializeNode();
 
@@ -220,6 +238,23 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
       "Configuration successfully reloaded from /tmp/new-config.json.",
     );
+  });
+
+  it("should not restart startup verification timers on config reload", async () => {
+    const verifySpy = jest.spyOn(LshLogicService.prototype, "verifyInitialDeviceStates");
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      initialStateTimeout: 2,
+      pingTimeout: 3,
+    });
+    verifySpy.mockClear();
+
+    await nodeInstance.handleConfigFileChange("/tmp/new-config.json", createValidator(true));
+    jest.advanceTimersByTime(5000);
+    await flushMicrotasks(6);
+
+    expect(verifySpy).not.toHaveBeenCalled();
   });
 
   it("should handle config reload failures", async () => {
@@ -257,7 +292,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     expect(reloadSpy).toHaveBeenCalledWith("/tmp/changed-config.json", expect.any(Function));
   });
 
-  it("should run initial and final verification timers using the configured LSH base path", async () => {
+  it("should run the initial verification timer using the configured LSH base path", async () => {
     const verifySpy = jest
       .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
       .mockReturnValue(
@@ -270,9 +305,6 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
           },
         }),
       );
-    const finalSpy = jest
-      .spyOn(LshLogicService.prototype, "runFinalVerification")
-      .mockReturnValue(createServiceResult());
 
     await initializeNode({
       ...defaultNodeConfig,
@@ -287,24 +319,19 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     expect(verifySpy).toHaveBeenCalled();
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Running initial device state verification: pinging silent devices...",
-    );
-    expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Scheduling final check for 1 pinged devices in 3s.",
+      "Running initial device state verification: pinging unreachable devices...",
     );
 
     jest.advanceTimersByTime(3000);
     await flushMicrotasks(6);
 
-    expect(finalSpy).toHaveBeenCalledWith(["device-a"]);
-    expect(mockNodeInstance.log).toHaveBeenCalledWith("Running final check on pinged devices...");
+    expect(verifySpy).toHaveBeenCalledTimes(1);
   });
 
-  it("should finish warm-up without scheduling final verification when no devices are pinged", async () => {
+  it("should finish warm-up without any second startup verification phase", async () => {
     const verifySpy = jest
       .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
       .mockReturnValue(createServiceResult());
-    const finalSpy = jest.spyOn(LshLogicService.prototype, "runFinalVerification");
 
     await initializeNode({
       ...defaultNodeConfig,
@@ -318,7 +345,6 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     await flushMicrotasks(6);
 
     expect(verifySpy).toHaveBeenCalled();
-    expect(finalSpy).not.toHaveBeenCalled();
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
       "Warm-up period finished. Node is now fully operational.",
     );
