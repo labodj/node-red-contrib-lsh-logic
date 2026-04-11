@@ -12,6 +12,14 @@ describe("schemas", () => {
     expect(isValid).toBe(false);
   });
 
+  it("ignores malformed unique-item candidates while still rejecting real duplicates", () => {
+    const isValid = validators.validateSystemConfig({
+      devices: [1, { name: "c1" }, { name: "c1" }],
+    });
+
+    expect(isValid).toBe(false);
+  });
+
   it("rejects duplicate button IDs inside the same device click config", () => {
     const isValid = validators.validateSystemConfig({
       devices: [
@@ -118,5 +126,18 @@ describe("schemas", () => {
     });
 
     expect(isValid).toBe(true);
+  });
+
+  it("rejects non-array containers for click button configuration", () => {
+    const isValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "c1",
+          longClickButtons: {},
+        },
+      ],
+    });
+
+    expect(isValid).toBe(false);
   });
 });
