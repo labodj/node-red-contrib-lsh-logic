@@ -52,6 +52,44 @@ describe("formatAlertMessage", () => {
     expect(result).toContain("*Details:*");
     expect(result).toContain(details);
   });
+
+  it("should prefer the error stack when details contain an Error", () => {
+    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
+    const details = new Error("boom");
+    details.stack = "custom-stack";
+
+    const result = formatAlertMessage(unhealthyDevices, "unhealthy", details);
+
+    expect(result).toContain("*Details:*");
+    expect(result).toContain("custom-stack");
+  });
+
+  it("should fall back to the error message when the stack is unavailable", () => {
+    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
+    const details = new Error("boom");
+    details.stack = undefined;
+
+    const result = formatAlertMessage(unhealthyDevices, "unhealthy", details);
+
+    expect(result).toContain("*Details:*");
+    expect(result).toContain("boom");
+  });
+
+  it("should stringify symbol details", () => {
+    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
+    const result = formatAlertMessage(unhealthyDevices, "unhealthy", Symbol.for("lsh-test"));
+
+    expect(result).toContain("*Details:*");
+    expect(result).toContain("Symbol(lsh-test)");
+  });
+
+  it("should keep the details section empty for unsupported detail types", () => {
+    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
+    const result = formatAlertMessage(unhealthyDevices, "unhealthy", () => "ignored");
+
+    expect(result).toContain("*Details:*");
+    expect(result).not.toContain("ignored");
+  });
 });
 
 describe("areSameArray", () => {
