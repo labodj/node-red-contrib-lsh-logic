@@ -80,7 +80,11 @@ const toJsonByteLiteral = (value: number): string =>
 
 const toFramedMsgPackByteLiteral = (value: number): string => {
   const payloadBytes = value <= 0x7f ? [0x81, 0xa1, 0x70, value] : [0x81, 0xa1, 0x70, 0xcc, value];
-  const frameBytes = [payloadBytes.length & 0xff, (payloadBytes.length >> 8) & 0xff, ...payloadBytes];
+  const frameBytes = [
+    payloadBytes.length & 0xff,
+    (payloadBytes.length >> 8) & 0xff,
+    ...payloadBytes,
+  ];
   return frameBytes
     .map((byte) => `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`)
     .join(", ");
