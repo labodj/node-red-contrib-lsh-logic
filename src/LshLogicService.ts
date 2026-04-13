@@ -19,6 +19,7 @@ import type {
   DeviceActuatorsStatePayload,
   DeviceDetailsPayload,
   DeviceEntry,
+  HomieLifecycleState,
   FailoverClickPayload,
   FailoverPayload,
   NetworkClickAckPayload,
@@ -62,6 +63,12 @@ function buildClickCorrelationKey(
   correlationId: number,
 ): string {
   return `${buildClickSlotKey(deviceName, buttonId, clickType)}.${correlationId}`;
+}
+
+function isDiagnosticOnlyHomieState(
+  homieState: HomieLifecycleState,
+): homieState is "init" | "sleeping" {
+  return homieState === "init" || homieState === "sleeping";
 }
 
 /**
@@ -545,12 +552,29 @@ export class LshLogicService {
       return result;
     }
 
-    const homieState = String(payload);
+    const homieState = String(payload) as HomieLifecycleState;
+    const { stateChanged: lifecycleChanged } = this.deviceManager.recordHomieLifecycleState(
+      deviceName,
+      homieState,
+      !isRetained,
+    );
 
     const { stateChanged, wasConnected, isConnected } = this.deviceManager.updateConnectionState(
       deviceName,
       homieState,
     );
+
+    if (isDiagnosticOnlyHomieState(homieState)) {
+      if (!stateChanged && !lifecycleChanged) {
+        return result;
+      }
+
+      result.stateChanged = stateChanged || lifecycleChanged;
+      result.logs.push(
+        `Device '${deviceName}' reported Homie lifecycle state '${homieState}'. Ignoring it for alerts and resync.`,
+      );
+      return result;
+    }
 
     if (!stateChanged) {
       return result; // No change, nothing more to do.

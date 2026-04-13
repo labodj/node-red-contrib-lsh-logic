@@ -76,7 +76,7 @@ describe("DeviceRegistryManager", () => {
 
   describe("updateConnectionState (Homie)", () => {
     it("should mark a device as connected on 'ready' and report a change", () => {
-      manager.updateConnectionState("device-1", "init");
+      manager.recordHomieLifecycleState("device-1", "init");
       const { stateChanged } = manager.updateConnectionState("device-1", "ready");
       const device = manager.getDevice("device-1");
 
@@ -99,6 +99,31 @@ describe("DeviceRegistryManager", () => {
       manager.updateConnectionState("device-1", "ready");
       const { stateChanged } = manager.updateConnectionState("device-1", "ready");
       expect(stateChanged).toBe(false);
+    });
+  });
+
+  describe("recordHomieLifecycleState", () => {
+    it("should store the raw Homie lifecycle state and update lastSeenTime for live messages", () => {
+      const before = Date.now();
+      const { stateChanged } = manager.recordHomieLifecycleState("device-1", "init");
+      const device = manager.getDevice("device-1");
+
+      expect(stateChanged).toBe(true);
+      expect(device?.lastHomieState).toBe("init");
+      expect(device?.lastHomieStateTime).toBeGreaterThanOrEqual(before);
+      expect(device?.lastSeenTime).toBe(device?.lastHomieStateTime);
+    });
+
+    it("should update diagnostics without changing lastSeenTime for retained messages", () => {
+      manager.recordHomieLifecycleState("device-1", "ready");
+      const initialLastSeenTime = manager.getDevice("device-1")!.lastSeenTime;
+
+      const { stateChanged } = manager.recordHomieLifecycleState("device-1", "sleeping", false);
+      const device = manager.getDevice("device-1");
+
+      expect(stateChanged).toBe(true);
+      expect(device?.lastHomieState).toBe("sleeping");
+      expect(device?.lastSeenTime).toBe(initialLastSeenTime);
     });
   });
 

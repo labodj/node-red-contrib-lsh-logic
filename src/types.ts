@@ -134,6 +134,8 @@ export interface ProcessMessageOptions {
   retained?: boolean;
 }
 
+export type HomieLifecycleState = "init" | "ready" | "lost" | "sleeping";
+
 // --------------------------------------------------------------------------
 // LSH Protocol and Payloads
 // --------------------------------------------------------------------------
@@ -343,6 +345,10 @@ export interface DeviceState {
   isStale: boolean;
   /** Timestamp of the last message of any kind received from the device. */
   lastSeenTime: number;
+  /** Last raw Homie `$state` observed for the device, independent of availability semantics. */
+  lastHomieState: HomieLifecycleState | null;
+  /** Timestamp of the last observed raw Homie `$state` message. */
+  lastHomieStateTime: number;
   /** Timestamp of the last 'conf' message from the device. */
   lastDetailsTime: number;
   /** Timestamp of the last authoritative 'state' message from the device. `0` means the current topology has no confirmed state snapshot yet. */

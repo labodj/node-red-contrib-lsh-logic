@@ -10,6 +10,7 @@ import type {
   DeviceDetailsPayload,
   Actor,
   ActuatorIndexMap,
+  HomieLifecycleState,
 } from "./types";
 import { areSameArray } from "./utils";
 import type { WatchdogResult } from "./Watchdog";
@@ -60,6 +61,8 @@ export class DeviceRegistryManager {
         isStale: false,
         alertSent: false,
         lastSeenTime: 0,
+        lastHomieState: null,
+        lastHomieStateTime: 0,
         lastDetailsTime: 0,
         lastStateTime: 0,
         actuatorsIDs: [],
@@ -203,7 +206,7 @@ export class DeviceRegistryManager {
    */
   public updateConnectionState(
     deviceName: string,
-    homieState: string,
+    homieState: HomieLifecycleState,
   ): { stateChanged: boolean; wasConnected: boolean; isConnected: boolean } {
     const device = this._ensureDeviceExists(deviceName);
     const wasConnected = device.connected;
@@ -226,6 +229,34 @@ export class DeviceRegistryManager {
       device.isStale = false;
     }
     return { stateChanged: true, wasConnected, isConnected };
+  }
+
+  /**
+   * Records the last raw Homie lifecycle state observed for a device.
+   * This keeps diagnostic lifecycle states inspectable without coupling them
+   * directly to alerting and resync decisions.
+   * @param deviceName - The name of the device.
+   * @param homieState - The raw Homie `$state` payload.
+   * @param markSeen - Whether this message should count as live device activity.
+   * @returns Whether the raw lifecycle state changed.
+   */
+  public recordHomieLifecycleState(
+    deviceName: string,
+    homieState: HomieLifecycleState,
+    markSeen = true,
+  ): { stateChanged: boolean } {
+    const device = this._ensureDeviceExists(deviceName);
+    const previousState = device.lastHomieState;
+    const now = Date.now();
+
+    device.lastHomieState = homieState;
+    device.lastHomieStateTime = now;
+
+    if (markSeen) {
+      device.lastSeenTime = now;
+    }
+
+    return { stateChanged: previousState !== homieState };
   }
 
   /**

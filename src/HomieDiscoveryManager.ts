@@ -7,7 +7,7 @@ import { Output } from "./types";
 import type { ServiceResult } from "./types";
 
 type DiscoveryCategory = "diagnostic";
-type DiscoveryComponentType = "light" | "sensor" | "binary_sensor";
+type DiscoveryPlatform = "light" | "sensor" | "binary_sensor";
 type AvailabilityPayload = "ready" | "lost";
 type BooleanLiteral = "true" | "false";
 
@@ -24,7 +24,7 @@ interface DeviceDiscoveryDefinition {
 interface HomeAssistantOrigin {
   name: string;
   sw_version: string;
-  url: string;
+  support_url: string;
 }
 
 interface HomeAssistantDevice {
@@ -38,50 +38,73 @@ interface HomeAssistantDevice {
 
 interface DiscoveryContext {
   deviceId: string;
+  deviceObjectId: string;
   baseTopic: string;
   baseDevice: HomeAssistantDevice;
 }
 
-interface DiscoveryPayloadBase {
+interface DiscoveryComponentBase {
   name: string;
   unique_id: string;
   default_entity_id: string;
-  origin: HomeAssistantOrigin;
-  "~": string;
-  device: HomeAssistantDevice;
   state_topic: string;
-  availability_topic: string;
-  payload_available: AvailabilityPayload;
-  payload_not_available: AvailabilityPayload;
   icon?: string;
   entity_category?: DiscoveryCategory;
-  qos: 2;
   device_class?: string;
   unit_of_measurement?: string;
   state_class?: "measurement";
 }
 
-interface LightDiscoveryPayload extends DiscoveryPayloadBase {
+interface LightDiscoveryComponent extends DiscoveryComponentBase {
+  platform: "light";
   command_topic: string;
   payload_on: BooleanLiteral;
   payload_off: BooleanLiteral;
 }
 
-interface BinarySensorDiscoveryPayload extends DiscoveryPayloadBase {
+interface SensorDiscoveryComponent extends DiscoveryComponentBase {
+  platform: "sensor";
+}
+
+interface BinarySensorDiscoveryComponent extends DiscoveryComponentBase {
+  platform: "binary_sensor";
   payload_on: BooleanLiteral;
   payload_off: BooleanLiteral;
 }
 
-type BinarySensorDiscoveryExtras = Pick<BinarySensorDiscoveryPayload, "payload_on" | "payload_off">;
+interface RemovedDiscoveryComponent {
+  platform: DiscoveryPlatform;
+}
 
-type DiscoveryPayload = DiscoveryPayloadBase | LightDiscoveryPayload | BinarySensorDiscoveryPayload;
+type DiscoveryComponent =
+  | LightDiscoveryComponent
+  | SensorDiscoveryComponent
+  | BinarySensorDiscoveryComponent;
+
+type DiscoveryComponentUpdate = DiscoveryComponent | RemovedDiscoveryComponent;
+
+interface DeviceDiscoveryPayload {
+  device: HomeAssistantDevice;
+  origin: HomeAssistantOrigin;
+  availability_topic: string;
+  payload_available: AvailabilityPayload;
+  payload_not_available: AvailabilityPayload;
+  qos: 2;
+  components: Record<string, DiscoveryComponentUpdate>;
+}
 
 type DiscoveryMessage = NodeMessage & {
   topic: string;
-  payload: DiscoveryPayload;
+  payload: DeviceDiscoveryPayload;
   qos: 1;
   retain: true;
 };
+
+interface DiscoveryComponentEntry {
+  id: string;
+  platform: DiscoveryPlatform;
+  config: DiscoveryComponent;
+}
 
 /**
  * State definitions for the Homie Discovery Manager.
@@ -90,7 +113,7 @@ interface DeviceDiscoveryState {
   mac?: string;
   fw_version?: string;
   nodes?: string[];
-  last_config_hash?: string;
+  last_component_platforms?: Record<string, DiscoveryPlatform>;
 }
 
 interface ReadyDeviceDiscoveryState extends DeviceDiscoveryState {
@@ -112,15 +135,16 @@ const readPackageVersion = (): string => {
 };
 
 /**
- * Manages the conversion of Homie devices to Home Assistant AutoDiscovery payloads.
- * Incorporates state management, idempotency checks, and payload generation.
+ * Manages the conversion of Homie devices to Home Assistant MQTT device discovery payloads.
+ * It keeps enough in-memory state to emit an explicit component-removal update before the
+ * final retained payload whenever the Homie node list shrinks.
  */
 export class HomieDiscoveryManager {
   private readonly discoveryState: Map<string, DeviceDiscoveryState> = new Map();
   private static readonly ORIGIN: HomeAssistantOrigin = {
     name: "node-red-contrib-lsh-logic",
     sw_version: readPackageVersion(),
-    url: "https://github.com/labodj/node-red-contrib-lsh-logic",
+    support_url: "https://github.com/labodj/node-red-contrib-lsh-logic",
   };
 
   private static readonly SENSORS_DEF: readonly DeviceDiscoveryDefinition[] = [
@@ -253,18 +277,12 @@ export class HomieDiscoveryManager {
     const updated = this.updateDeviceData(deviceData, topicSuffix, payload);
 
     if (updated && this.isDeviceReady(deviceData)) {
-      const newConfigHash = this.computeConfigHash(deviceData);
-
-      if (newConfigHash !== deviceData.last_config_hash) {
-        const discoveryMessages = this.generateDiscoveryPayloads(deviceId, deviceData);
-        result.messages[Output.Lsh] = discoveryMessages;
-        result.logs.push(
-          `Generated HA discovery config for ${deviceId} (${discoveryMessages.length} entities)`,
-        );
-        deviceData.last_config_hash = newConfigHash;
-      } else {
-        result.logs.push(`Discovery config for ${deviceId} is up-to-date.`);
-      }
+      const { messages, componentPlatforms } = this.generateDiscoveryPayloads(deviceId, deviceData);
+      result.messages[Output.Lsh] = messages;
+      result.logs.push(
+        `Generated HA device discovery config for ${deviceId} (${messages.length} messages)`,
+      );
+      deviceData.last_component_platforms = componentPlatforms;
     }
 
     return result;
@@ -345,24 +363,17 @@ export class HomieDiscoveryManager {
   }
 
   /**
-   * Computes a simple hash string to detect changes in the device configuration.
-   * @param data - The device state.
-   * @returns A string representation of the configuration state.
-   */
-  private computeConfigHash(data: DeviceDiscoveryState): string {
-    return `${data.mac}|${data.fw_version}|${data.nodes?.join(",")}`;
-  }
-
-  /**
-   * Main orchestrator for generating all discovery messages for a device.
-   * @param deviceId - The device identifier.
-   * @param data - The complete device state.
-   * @returns An array of NodeMessage objects suitable for MQTT publishing.
+   * Main orchestrator for generating retained device discovery messages for a device.
+   * When components disappear, HA expects a transitional update that carries only the
+   * platform for each removed component before the final payload omits it entirely.
    */
   private generateDiscoveryPayloads(
     deviceId: string,
     data: ReadyDeviceDiscoveryState,
-  ): DiscoveryMessage[] {
+  ): {
+    messages: DiscoveryMessage[];
+    componentPlatforms: Record<string, DiscoveryPlatform>;
+  } {
     const baseDevice: HomeAssistantDevice = {
       name: `LSH ${deviceId.toUpperCase()}`,
       manufacturer: "Jacopo Labardi",
@@ -372,85 +383,146 @@ export class HomieDiscoveryManager {
       sw_version: data.fw_version,
     };
 
-    const baseTopic = `${this.homieBasePath}${deviceId}`;
-    const discoveryContext: DiscoveryContext = { deviceId, baseTopic, baseDevice };
+    const discoveryContext: DiscoveryContext = {
+      deviceId,
+      deviceObjectId: `lsh_${deviceId.toLowerCase()}`,
+      baseTopic: `${this.homieBasePath}${deviceId}`,
+      baseDevice,
+    };
 
+    const componentEntries = this.buildComponents(data.nodes, discoveryContext);
+    const componentPlatforms = this.toComponentPlatformMap(componentEntries);
+    const removedComponents = this.findRemovedComponents(
+      data.last_component_platforms,
+      componentPlatforms,
+    );
+
+    const messages: DiscoveryMessage[] = [];
+    if (Object.keys(removedComponents).length > 0) {
+      messages.push(
+        this.buildDeviceDiscoveryMessage(discoveryContext, componentEntries, removedComponents),
+      );
+    }
+
+    messages.push(this.buildDeviceDiscoveryMessage(discoveryContext, componentEntries));
+
+    return { messages, componentPlatforms };
+  }
+
+  private buildComponents(
+    nodes: string[],
+    discoveryContext: DiscoveryContext,
+  ): DiscoveryComponentEntry[] {
     return [
-      ...this.generateLights(data.nodes, discoveryContext),
+      ...this.generateLights(nodes, discoveryContext),
       ...this.generateSensors(discoveryContext),
       ...this.generateBinarySensors(discoveryContext),
     ];
   }
 
+  private toComponentPlatformMap(
+    entries: DiscoveryComponentEntry[],
+  ): Record<string, DiscoveryPlatform> {
+    return Object.fromEntries(entries.map((entry) => [entry.id, entry.platform]));
+  }
+
+  private findRemovedComponents(
+    previous: Record<string, DiscoveryPlatform> | undefined,
+    current: Record<string, DiscoveryPlatform>,
+  ): Record<string, DiscoveryPlatform> {
+    if (!previous) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(previous).filter(([componentId]) => !(componentId in current)),
+    );
+  }
+
+  private buildDeviceDiscoveryMessage(
+    { deviceObjectId, baseTopic, baseDevice }: DiscoveryContext,
+    entries: DiscoveryComponentEntry[],
+    removedComponents: Record<string, DiscoveryPlatform> = {},
+  ): DiscoveryMessage {
+    const payload: DeviceDiscoveryPayload = {
+      device: baseDevice,
+      origin: HomieDiscoveryManager.ORIGIN,
+      availability_topic: `${baseTopic}/$state`,
+      payload_available: "ready",
+      payload_not_available: "lost",
+      qos: 2,
+      components: Object.fromEntries(entries.map((entry) => [entry.id, entry.config])),
+    };
+
+    for (const [componentId, platform] of Object.entries(removedComponents)) {
+      payload.components[componentId] = { platform };
+    }
+
+    return {
+      topic: `${this.discoveryPrefix}/device/${deviceObjectId}/config`,
+      payload,
+      qos: 1,
+      retain: true,
+    };
+  }
+
   /**
-   * Generates discovery payloads for 'Light' entities based on the device's nodes.
+   * Generates device-discovery component definitions for 'light' entities based on nodes.
    * @param nodes - List of node names (e.g., 'light1', 'light2').
-   * @param ctx - Context object containing deviceId, baseTopic, and baseDevice definition.
-   * @returns Array of discovery messages.
+   * @param ctx - Context object containing deviceId and base topic information.
+   * @returns Array of component definitions.
    */
   private generateLights(
     nodes: string[],
-    { deviceId, baseTopic, baseDevice }: DiscoveryContext,
-  ): DiscoveryMessage[] {
-    return nodes.reduce<DiscoveryMessage[]>((messages, node) => {
+    { deviceId, baseTopic }: DiscoveryContext,
+  ): DiscoveryComponentEntry[] {
+    return nodes.reduce<DiscoveryComponentEntry[]>((entries, node) => {
       if (!node) {
-        return messages;
+        return entries;
       }
 
-      const uniqueId = `lsh_${deviceId.toLowerCase()}_${node.toLowerCase()}`;
-      messages.push({
-        topic: `${this.discoveryPrefix}/light/${uniqueId}/config`,
-        payload: {
+      const componentId = `lsh_${deviceId.toLowerCase()}_${node.toLowerCase()}`;
+      entries.push({
+        id: componentId,
+        platform: "light",
+        config: {
+          platform: "light",
           name: `${deviceId.toUpperCase()} ${node.toUpperCase()}`,
-          unique_id: uniqueId,
-          default_entity_id: `light.${uniqueId}`,
-          origin: HomieDiscoveryManager.ORIGIN,
-          "~": baseTopic,
-          device: baseDevice,
-          state_topic: `~/${node}/state`,
-          command_topic: `~/${node}/state/set`,
+          unique_id: componentId,
+          default_entity_id: `light.${componentId}`,
+          state_topic: `${baseTopic}/${node}/state`,
+          command_topic: `${baseTopic}/${node}/state/set`,
           payload_on: "true",
           payload_off: "false",
-          availability_topic: "~/$state",
-          payload_available: "ready",
-          payload_not_available: "lost",
-          qos: 2,
         },
-        qos: 1,
-        retain: true,
       });
 
-      return messages;
+      return entries;
     }, []);
   }
 
   /**
-   * Generates discovery payloads for standard diagnostic 'Sensor' entities.
-   * @param ctx - Context object containing deviceId, baseTopic, and baseDevice definition.
-   * @returns Array of discovery messages.
+   * Generates discovery component definitions for standard diagnostic sensors.
+   * @param ctx - Context object containing deviceId and base topic information.
+   * @returns Array of component definitions.
    */
-  private generateSensors({
-    deviceId,
-    baseTopic,
-    baseDevice,
-  }: DiscoveryContext): DiscoveryMessage[] {
-    return HomieDiscoveryManager.SENSORS_DEF.map((s) =>
-      this.buildPayload(deviceId, baseTopic, baseDevice, "sensor", s),
+  private generateSensors({ deviceId, baseTopic }: DiscoveryContext): DiscoveryComponentEntry[] {
+    return HomieDiscoveryManager.SENSORS_DEF.map((definition) =>
+      this.buildPayload(deviceId, baseTopic, "sensor", definition),
     );
   }
 
   /**
-   * Generates discovery payloads for 'Binary Sensor' entities.
-   * @param ctx - Context object containing deviceId, baseTopic, and baseDevice definition.
-   * @returns Array of discovery messages.
+   * Generates discovery component definitions for binary sensors.
+   * @param ctx - Context object containing deviceId and base topic information.
+   * @returns Array of component definitions.
    */
   private generateBinarySensors({
     deviceId,
     baseTopic,
-    baseDevice,
-  }: DiscoveryContext): DiscoveryMessage[] {
-    return HomieDiscoveryManager.BINARY_SENSORS_DEF.map((bs) =>
-      this.buildPayload(deviceId, baseTopic, baseDevice, "binary_sensor", bs, {
+  }: DiscoveryContext): DiscoveryComponentEntry[] {
+    return HomieDiscoveryManager.BINARY_SENSORS_DEF.map((definition) =>
+      this.buildPayload(deviceId, baseTopic, "binary_sensor", definition, {
         payload_on: "true",
         payload_off: "false",
       }),
@@ -458,52 +530,54 @@ export class HomieDiscoveryManager {
   }
 
   /**
-   * Helper to construct a single Home Assistant discovery message.
+   * Helper to construct a single Home Assistant discovery component definition.
    * @param deviceId - The device identifier.
-   * @param baseTopic - The base Homie topic for the device.
-   * @param baseDevice - The universal device configuration block.
-   * @param type - The component type (e.g., 'sensor', 'light').
+   * @param type - The component type (e.g., 'sensor', 'binary_sensor').
    * @param def - The definition object for the specific entity.
    * @param extras - Additional payload properties to merge.
-   * @returns A complete NodeMessage.
+   * @returns A component definition keyed by a stable component ID.
    */
   private buildPayload(
     deviceId: string,
     baseTopic: string,
-    baseDevice: HomeAssistantDevice,
-    type: Exclude<DiscoveryComponentType, "light">,
+    type: Exclude<DiscoveryPlatform, "light">,
     def: DeviceDiscoveryDefinition,
-    extras: Partial<BinarySensorDiscoveryExtras> = {},
-  ): DiscoveryMessage {
+    extras: Partial<Pick<BinarySensorDiscoveryComponent, "payload_on" | "payload_off">> = {},
+  ): DiscoveryComponentEntry {
     const nameLc = def.name.toLowerCase().replace(/ /g, "_");
-    const uniqueId = `lsh_${deviceId.toLowerCase()}_${nameLc}`;
+    const componentId = `lsh_${deviceId.toLowerCase()}_${nameLc}`;
 
-    const payload: DiscoveryPayload = {
-      name: `${deviceId.toUpperCase()} ${def.name}`,
-      unique_id: uniqueId,
-      default_entity_id: `${type}.${uniqueId}`,
-      origin: HomieDiscoveryManager.ORIGIN,
-      "~": baseTopic,
-      device: baseDevice,
-      state_topic: `~/${def.topic}`,
-      availability_topic: "~/$state",
-      payload_available: "ready",
-      payload_not_available: "lost",
-      icon: def.icon,
-      entity_category: def.cat,
-      qos: 2,
-      ...extras,
-    };
+    const config: DiscoveryComponent =
+      type === "binary_sensor"
+        ? {
+            platform: "binary_sensor",
+            name: `${deviceId.toUpperCase()} ${def.name}`,
+            unique_id: componentId,
+            default_entity_id: `${type}.${componentId}`,
+            state_topic: `${baseTopic}/${def.topic}`,
+            icon: def.icon,
+            entity_category: def.cat,
+            payload_on: extras.payload_on ?? "true",
+            payload_off: extras.payload_off ?? "false",
+          }
+        : {
+            platform: "sensor",
+            name: `${deviceId.toUpperCase()} ${def.name}`,
+            unique_id: componentId,
+            default_entity_id: `${type}.${componentId}`,
+            state_topic: `${baseTopic}/${def.topic}`,
+            icon: def.icon,
+            entity_category: def.cat,
+          };
 
-    if (def.class) payload.device_class = def.class;
-    if (def.unit) payload.unit_of_measurement = def.unit;
-    if (def.state_class) payload.state_class = def.state_class;
+    if (def.class) config.device_class = def.class;
+    if (def.unit) config.unit_of_measurement = def.unit;
+    if (def.state_class) config.state_class = def.state_class;
 
     return {
-      topic: `${this.discoveryPrefix}/${type}/${uniqueId}/config`,
-      payload: payload,
-      qos: 1,
-      retain: true,
+      id: componentId,
+      platform: type,
+      config,
     };
   }
 }

@@ -408,6 +408,46 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry().actor1).toBeUndefined();
     });
 
+    it("should record a live Homie init state as diagnostics without alerting or resyncing", () => {
+      const result = service.processMessage("homie/actor1/$state", "init");
+      const device = service.getDeviceRegistry().actor1;
+
+      expect(result.stateChanged).toBe(true);
+      expect(result.messages).toEqual({});
+      expect(result.logs).toContain(
+        "Device 'actor1' reported Homie lifecycle state 'init'. Ignoring it for alerts and resync.",
+      );
+      expect(device.connected).toBe(false);
+      expect(device.isHealthy).toBe(false);
+      expect(device.lastHomieState).toBe("init");
+      expect(device.lastSeenTime).toBeGreaterThan(0);
+    });
+
+    it("should treat Homie sleeping as diagnostic unavailability without alerting", () => {
+      setDeviceOnline("actor1");
+
+      const result = service.processMessage("homie/actor1/$state", "sleeping");
+      const device = service.getDeviceRegistry().actor1;
+
+      expect(result.stateChanged).toBe(true);
+      expect(result.messages).toEqual({});
+      expect(result.logs).toContain(
+        "Device 'actor1' reported Homie lifecycle state 'sleeping'. Ignoring it for alerts and resync.",
+      );
+      expect(device.connected).toBe(false);
+      expect(device.lastHomieState).toBe("sleeping");
+    });
+
+    it("should return a no-op when receiving the same diagnostic Homie state twice", () => {
+      service.processMessage("homie/actor1/$state", "sleeping");
+
+      const result = service.processMessage("homie/actor1/$state", "sleeping");
+
+      expect(result.stateChanged).toBe(false);
+      expect(result.logs).toEqual([]);
+      expect(result.messages).toEqual({});
+    });
+
     it("should honor retained Homie offline transitions after live traffic established the session", () => {
       setDeviceOnline("actor1");
 
@@ -545,7 +585,62 @@ describe("LshLogicService - Core & Config", () => {
 
       const messages = getOutputMessages(result, Output.Lsh);
 
-      expect(messages[0].topic).toContain("homeassistant/light/lsh_new-homie-device_lamp/config");
+      expect(messages).toHaveLength(1);
+      expect(messages[0].topic).toBe("homeassistant/device/lsh_new-homie-device/config");
+      expect(messages[0].payload).not.toHaveProperty("~");
+      expect((messages[0].payload as { availability_topic: string }).availability_topic).toBe(
+        "homie/new-homie-device/$state",
+      );
+      expect(
+        (
+          messages[0].payload as {
+            components: Record<
+              string,
+              {
+                platform: string;
+                unique_id?: string;
+                state_topic?: string;
+                command_topic?: string;
+              }
+            >;
+          }
+        ).components["lsh_new-homie-device_lamp"],
+      ).toEqual(
+        expect.objectContaining({
+          platform: "light",
+          unique_id: "lsh_new-homie-device_lamp",
+          state_topic: "homie/new-homie-device/lamp/state",
+          command_topic: "homie/new-homie-device/lamp/state/set",
+        }),
+      );
+    });
+
+    it("should emit a removal update before the final device discovery payload when a Homie node disappears", () => {
+      const deviceId = "new-homie-device";
+
+      service.processMessage(`homie/${deviceId}/$mac`, "AA:BB:CC");
+      service.processMessage(`homie/${deviceId}/$fw/version`, "1.0.0");
+      service.processMessage(`homie/${deviceId}/$nodes`, "lamp,relay");
+
+      const result = service.processMessage(`homie/${deviceId}/$nodes`, "lamp");
+      const messages = getOutputMessages(result, Output.Lsh);
+
+      expect(messages).toHaveLength(2);
+      expect(messages[0].topic).toBe("homeassistant/device/lsh_new-homie-device/config");
+      expect(
+        (
+          messages[0].payload as {
+            components: Record<string, { platform: string; unique_id?: string }>;
+          }
+        ).components["lsh_new-homie-device_relay"],
+      ).toEqual({ platform: "light" });
+      expect(
+        (
+          messages[1].payload as {
+            components: Record<string, { platform: string; unique_id?: string }>;
+          }
+        ).components,
+      ).not.toHaveProperty("lsh_new-homie-device_relay");
     });
 
     it("should ignore Homie discovery attributes when disabled", () => {

@@ -143,6 +143,8 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
       isHealthy: true,
       isStale: false,
       lastSeenTime: 1,
+      lastHomieState: "ready",
+      lastHomieStateTime: 1,
       lastDetailsTime: 1,
       lastStateTime: 1,
       actuatorsIDs: [],
