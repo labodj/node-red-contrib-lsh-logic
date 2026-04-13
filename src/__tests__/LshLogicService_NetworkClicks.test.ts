@@ -394,6 +394,41 @@ describe("LshLogicService - Network Click Logic", () => {
     );
   });
 
+  it("should skip a specific super-long-click target if its state becomes non-authoritative before confirmation", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          superLongClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "actor1", allActuators: false, actuators: [1, 2] }],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "actor1" },
+      ],
+    };
+
+    const { setDeviceOnline, sendDeviceDetails, sendLshState, sendMisc } =
+      createClickHarness(systemConfig);
+    setDeviceOnline("sender");
+    setDeviceOnline("actor1", { a: [1, 2] });
+    sendLshState("actor1", [0]);
+
+    startClick(sendMisc, "sender", ClickType.SuperLong);
+
+    sendDeviceDetails("actor1", { a: [3, 4] });
+
+    const result = confirmClick(sendMisc, "sender", ClickType.SuperLong);
+
+    expect(result.messages[Output.Lsh]).toBeUndefined();
+    expect(result.warnings).toContain(
+      "Skipping actor 'actor1' because its actuator state is not authoritative yet.",
+    );
+  });
+
   it("should send failover when the target actor is stale after a timed-out ping", () => {
     const nowSpy = jest.spyOn(Date, "now");
     const START_TIME = 1_000_000;
@@ -497,6 +532,38 @@ describe("LshLogicService - Network Click Logic", () => {
     expect(getAlertPayload(result).message).toContain(
       "Target actor 'actor1' has unknown device details.",
     );
+  });
+
+  it("should send click-specific failover when the target device reports no actuators", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "actor1", allActuators: true, actuators: [] }],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "actor1" },
+      ],
+    };
+
+    const { setDeviceOnline, sendMisc } = createClickHarness(systemConfig);
+    setDeviceOnline("sender");
+    setDeviceOnline("actor1", { a: [] });
+
+    const result = startClick(sendMisc, "sender");
+
+    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+      p: LshProtocol.FAILOVER_CLICK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+    expect(getAlertPayload(result).message).toContain("Target actor 'actor1' has no actuators.");
   });
 
   it("should send click-specific failover when a configured actuator ID is unknown", () => {

@@ -262,6 +262,30 @@ describe("DeviceRegistryManager", () => {
       expect(result.stateToSet).toBe(false);
     });
 
+    it("should ignore devices whose state is not authoritative yet and surface a warning", () => {
+      manager.registerActuatorStates("light-group", [true, false, false, false]);
+      manager.registerDeviceDetails("snapshot-only", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "snapshot-only",
+        a: [9, 10],
+        b: [],
+      });
+
+      const actors: Actor[] = [
+        { name: "light-group", allActuators: true, actuators: [] },
+        { name: "snapshot-only", allActuators: true, actuators: [] },
+      ];
+      const result = manager.getSmartToggleState(actors, []);
+
+      expect(result.stateToSet).toBe(true);
+      expect(result.total).toBe(4);
+      expect(result.active).toBe(1);
+      expect(result.warning).toContain(
+        "State for device 'snapshot-only' is not authoritative yet; ignoring it for smart toggle.",
+      );
+    });
+
     it("should return false with a warning if no valid actuators are found at all", () => {
       const actors: Actor[] = [{ name: "non-existent-device", allActuators: true, actuators: [] }];
       const result = manager.getSmartToggleState(actors, []);

@@ -535,7 +535,13 @@ export class LshLogicService {
     isRetained: boolean,
   ): ServiceResult {
     const result = this.createEmptyResult();
-    if (isRetained) {
+    const existingDevice = this.deviceManager.getDevice(deviceName);
+
+    // Retained Homie state alone is not enough to bootstrap reachability for a device
+    // we have never seen live in this Node-RED session. Once a device has produced live
+    // traffic, keep honoring later retained Homie transitions so runtime lost/recovery
+    // sequences still propagate through the health logic.
+    if (isRetained && (!existingDevice || existingDevice.lastSeenTime === 0)) {
       return result;
     }
 

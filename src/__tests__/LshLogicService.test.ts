@@ -369,12 +369,70 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry().actor1.isHealthy).toBe(false);
     });
 
+    it("should ignore retained Homie ready states for devices known only from retained LSH snapshots", () => {
+      service.processMessage(
+        "LSH/actor1/conf",
+        {
+          p: LshProtocol.DEVICE_DETAILS,
+          v: LSH_WIRE_PROTOCOL_MAJOR,
+          n: "actor1",
+          a: [1, 2],
+          b: [],
+        },
+        { retained: true },
+      );
+      service.processMessage(
+        "LSH/actor1/state",
+        {
+          p: LshProtocol.ACTUATORS_STATE,
+          s: [0],
+        },
+        { retained: true },
+      );
+
+      const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
+      const device = service.getDeviceRegistry().actor1;
+
+      expect(result.stateChanged).toBe(false);
+      expect(result.messages).toEqual({});
+      expect(device).toBeDefined();
+      expect(device.connected).toBe(false);
+      expect(device.lastSeenTime).toBe(0);
+    });
+
     it("should ignore retained Homie ready states until live traffic arrives", () => {
       const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
 
       expect(result.stateChanged).toBe(false);
       expect(result.messages).toEqual({});
       expect(service.getDeviceRegistry().actor1).toBeUndefined();
+    });
+
+    it("should honor retained Homie offline transitions after live traffic established the session", () => {
+      setDeviceOnline("actor1");
+
+      const result = service.processMessage("homie/actor1/$state", "lost", { retained: true });
+      const [alertMessage] = getOutputMessages(result, Output.Alerts);
+
+      expect(result.stateChanged).toBe(true);
+      expect(service.getDeviceRegistry().actor1.connected).toBe(false);
+      expect((alertMessage.payload as { status: string }).status).toBe("unhealthy");
+    });
+
+    it("should honor retained Homie recovery after live traffic established the session", () => {
+      setDeviceOnline("actor1");
+      service.processMessage("homie/actor1/$state", "lost", { retained: true });
+
+      const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
+      const [alertMessage] = getOutputMessages(result, Output.Alerts);
+
+      expect(result.stateChanged).toBe(true);
+      expect(service.getDeviceRegistry().actor1.connected).toBe(true);
+      expect((alertMessage.payload as { status: string }).status).toBe("healthy");
+      expect(getOutputMessages(result, Output.Lsh).map((message) => message.topic)).toEqual([
+        "LSH/actor1/IN",
+        "LSH/actor1/IN",
+      ]);
     });
 
     it("should return a no-op when receiving the same Homie ready state twice", () => {
