@@ -36,12 +36,13 @@ This node acts as the central orchestrator for your custom smart home devices. I
 
 The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
 
-At startup the node prefers retained Homie/LSH topics, but it does not depend on them exclusively: any device still unreachable is pinged during initial verification, and a ping response from a device that is still missing `conf` or `state` automatically triggers a full `REQUEST_DETAILS` + `REQUEST_STATE` refresh. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
+At startup the node uses retained LSH snapshots when available, but it does not trust retained Homie `$state` alone as proof of current reachability: that must come from a live Homie transition or live LSH traffic. Any device still unreachable is pinged during initial verification, and a ping response from a device that is still missing `conf` or `state` automatically triggers a full `REQUEST_DETAILS` + `REQUEST_STATE` refresh. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
 
 The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
 
 Operational simplifications:
 
+- If a runtime config reload becomes unreadable or invalid, the node intentionally fails closed: it clears the active config, unsubscribes, and waits for a valid file again.
 - Reloading `system-config.json` always clears pending network click transactions. In-flight distributed clicks are intentionally failed rather than preserved across a config change.
 - Runtime config reloads do not restart the startup warm-up/verification cycle. Recovery after reload is best-effort through normal live traffic, retained MQTT data and later watchdog pings.
 - Distributed long-click logic requires an authoritative actuator snapshot for every targeted LSH device. If a target is reachable but still missing fresh state, the click fails fast and is retried naturally on the next user action.
@@ -79,7 +80,7 @@ The node has five distinct outputs for clear and organized flows:
 
 ### Node Settings
 
-- **MQTT Paths**: Base topics for Homie and LSH protocols.
+- **MQTT Paths**: Base topics for Homie and LSH protocols. Both must end with `/`.
 - **System Config Path**: Location of your `system-config.json` (absolute or relative to Node-RED user dir).
 - **Protocol**: Choose between `JSON` (human readable) and `MsgPack` (binary, efficient).
 - **Timings**: Customize Watchdog intervals, Ping timeouts, and Click expiration times.
@@ -144,6 +145,30 @@ The node handles decoding (Input) and encoding (Output) transparently.
 
 `chokidar` is kept at v4.x because v5 requires Node.js >= 20.19 and is ESM-only. Since this package supports Node.js >= 18 (to match Node-RED's supported runtimes), upgrading to chokidar v5 is not possible at this time.
 
+## Maintainer Notes
+
+Toolchain:
+
+- This repository includes a root `mise.toml`.
+- `mise` pins the Node.js version for this repository.
+- Python is pinned separately in `.python-version` and should be managed with the OS-installed `uv`.
+
+Runtime path rules:
+
+- `systemConfigPath` is resolved relative to the Node-RED user directory unless you provide an absolute path.
+- The example flow uses `configs/system-config.json` on purpose; it is a user/runtime path, not a repository-relative maintainer path.
+
+Protocol maintenance rules:
+
+- `tools/update_lsh_protocol.py` uses the vendored subtree in `vendor/lsh-protocol` by default.
+- You can override that source explicitly with `--protocol-root` or `LSH_PROTOCOL_ROOT` when doing manual maintenance work.
+
+Cross-repo contract tests:
+
+- The Jest contract test can validate this package against sibling `lsh-core` and `lsh-esp` repositories when they are available in the same workspace.
+- If your workspace uses different locations, set `LSH_CORE_ROOT` and `LSH_ESP_ROOT` before running `npm test`.
+- These paths are maintainer-only test inputs; they are not required for normal package runtime.
+
 ## Contributing
 
 Contributions are welcome!
@@ -151,9 +176,11 @@ Contributions are welcome!
 ### Development Setup
 
 1.  Clone the repo: `git clone https://github.com/labodj/node-red-contrib-lsh-logic.git`
-2.  Install dependencies: `npm install`
-3.  Build: `npm run build`
-4.  Test: `npm test`
+2.  Install toolchain: `mise install`
+3.  Install Python: `uv python install`
+4.  Install dependencies: `npm install`
+5.  Build: `npm run build`
+6.  Test: `npm test`
 
 ## License
 
