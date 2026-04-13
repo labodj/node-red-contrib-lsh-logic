@@ -26,7 +26,7 @@
     "serviceTopic": "LSH/Node-RED/SRV",
     "protocol": "json",
     "otherDevicesPrefix": "other_devices",
-    "systemConfigPath": "../configs/system-config.json",
+    "systemConfigPath": "configs/system-config.json",
     "exposeStateContext": "global",
     "exposeStateKey": "lsh_state",
     "exportTopics": "flow",

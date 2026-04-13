@@ -24,6 +24,72 @@ import type {
 } from "./types";
 import { sleep } from "./utils";
 
+type NumericConfigKey =
+  | "clickTimeout"
+  | "clickCleanupInterval"
+  | "watchdogInterval"
+  | "interrogateThreshold"
+  | "pingTimeout"
+  | "initialStateTimeout";
+
+const CONFIG_RELOAD_DEBOUNCE_MS = 200;
+
+const normalizeRequiredString = (value: string, fieldName: string): string => {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new Error(`${fieldName} cannot be empty.`);
+  }
+  return normalized;
+};
+
+const validateTopicBase = (value: string, fieldName: string): string => {
+  const normalized = normalizeRequiredString(value, fieldName);
+  if (!normalized.endsWith("/")) {
+    throw new Error(`${fieldName} must end with '/'.`);
+  }
+  return normalized;
+};
+
+const normalizePositiveNumber = (value: number, fieldName: string): number => {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    throw new Error(`${fieldName} must be a positive number.`);
+  }
+  return normalized;
+};
+
+const normalizeNodeConfig = (config: LshLogicNodeDef): LshLogicNodeDef => {
+  const normalizedConfig = {
+    ...config,
+    homieBasePath: validateTopicBase(config.homieBasePath, "Homie Base Path"),
+    lshBasePath: validateTopicBase(config.lshBasePath, "LSH Base Path"),
+    serviceTopic: normalizeRequiredString(config.serviceTopic, "Service Topic"),
+    otherDevicesPrefix: normalizeRequiredString(config.otherDevicesPrefix, "External State Prefix"),
+    systemConfigPath: normalizeRequiredString(config.systemConfigPath, "System Config"),
+    exposeStateKey: config.exposeStateKey.trim(),
+    exportTopicsKey: config.exportTopicsKey.trim(),
+    exposeConfigKey: config.exposeConfigKey.trim(),
+    haDiscoveryPrefix: config.haDiscovery
+      ? normalizeRequiredString(config.haDiscoveryPrefix, "Discovery Prefix")
+      : config.haDiscoveryPrefix.trim(),
+  };
+
+  const numericFields: Record<NumericConfigKey, string> = {
+    clickTimeout: "Click Ack Timeout",
+    clickCleanupInterval: "Click Cleanup",
+    watchdogInterval: "Watchdog Interval",
+    interrogateThreshold: "Ping Threshold",
+    pingTimeout: "Ping Timeout",
+    initialStateTimeout: "Initial Check Delay",
+  };
+
+  for (const [key, label] of Object.entries(numericFields) as Array<[NumericConfigKey, string]>) {
+    normalizedConfig[key] = normalizePositiveNumber(normalizedConfig[key], label);
+  }
+
+  return normalizedConfig;
+};
+
 /**
  * The adapter class that bridges the Node-RED environment and the LshLogicService.
  * It handles all I/O with the Node-RED runtime (receiving/sending messages,
@@ -43,6 +109,7 @@ export class LshLogicNode {
   private watchdogInterval: NodeJS.Timeout | null = null;
   private warmupTimer: NodeJS.Timeout | null = null;
   private initialVerificationTimer: NodeJS.Timeout | null = null;
+  private configReloadTimer: NodeJS.Timeout | null = null;
   private isWarmingUp: boolean = false;
 
   /**
@@ -53,7 +120,7 @@ export class LshLogicNode {
    */
   constructor(node: Node, config: LshLogicNodeDef, RED: NodeAPI) {
     this.node = node;
-    this.config = config;
+    this.config = normalizeNodeConfig(config);
     this.RED = RED;
     this.codec = new LshCodec();
 
@@ -345,11 +412,27 @@ export class LshLogicNode {
     if (this.watcher) {
       void this.watcher.close();
     }
-    this.watcher = chokidar.watch(filePath);
-    this.watcher.on("change", (path) => {
-      // Use fire-and-forget on an async function to satisfy no-misused-promises.
-      void this.handleConfigFileChange(path, validateFn);
+    this.watcher = chokidar.watch(filePath, {
+      ignoreInitial: true,
+      awaitWriteFinish: {
+        stabilityThreshold: CONFIG_RELOAD_DEBOUNCE_MS,
+        pollInterval: 100,
+      },
     });
+    const scheduleReload = (changedPath: string) => {
+      if (this.configReloadTimer) {
+        clearTimeout(this.configReloadTimer);
+      }
+      this.configReloadTimer = setTimeout(() => {
+        this.configReloadTimer = null;
+        // Use fire-and-forget on an async function to satisfy no-misused-promises.
+        void this.handleConfigFileChange(changedPath, validateFn);
+      }, CONFIG_RELOAD_DEBOUNCE_MS);
+    };
+
+    this.watcher.on("add", scheduleReload);
+    this.watcher.on("change", scheduleReload);
+    this.watcher.on("unlink", scheduleReload);
   }
 
   /**
@@ -410,6 +493,7 @@ export class LshLogicNode {
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
     if (this.warmupTimer) clearTimeout(this.warmupTimer);
     if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
+    if (this.configReloadTimer) clearTimeout(this.configReloadTimer);
     if (this.watcher) {
       await this.watcher.close();
     }
@@ -545,8 +629,14 @@ export class LshLogicNode {
 const nodeRedModule = function (RED: NodeAPI) {
   function LshLogicNodeWrapper(this: Node, config: LshLogicNodeDef) {
     RED.nodes.createNode(this, config);
-    // Instantiate our class to manage the node's lifecycle.
-    new LshLogicNode(this, config, RED);
+    try {
+      // Instantiate our class to manage the node's lifecycle.
+      new LshLogicNode(this, config, RED);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.error(`Invalid node configuration: ${message}`);
+      this.status({ fill: "red", shape: "ring", text: "Node Config Error" });
+    }
   }
   RED.nodes.registerType("lsh-logic", LshLogicNodeWrapper);
 };

@@ -1,13 +1,32 @@
 <!-- Node-RED Registration Script -->
 <script type="text/javascript">
+  const validatePositiveNumber = (value) => {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) && numericValue > 0;
+  };
+
+  const validateTopicBase = (value) => {
+    const normalized = String(value || "").trim();
+    return normalized.length > 0 && normalized.endsWith("/");
+  };
+
+  function validateDiscoveryPrefix(value) {
+    const isEnabled = this.haDiscovery === true || this.haDiscovery === "true";
+    if (!isEnabled) {
+      return true;
+    }
+
+    return String(value || "").trim().length > 0;
+  }
+
   RED.nodes.registerType("lsh-logic", {
     category: "function",
     color: "#4a90e2",
     defaults: {
       name: { value: "" },
       // MQTT Path Settings
-      homieBasePath: { value: "homie/", required: true },
-      lshBasePath: { value: "LSH/", required: true },
+      homieBasePath: { value: "homie/", required: true, validate: validateTopicBase },
+      lshBasePath: { value: "LSH/", required: true, validate: validateTopicBase },
       serviceTopic: { value: "LSH/Node-RED/SRV", required: true },
       protocol: { value: "json", required: true },
       // Context Key Prefixes
@@ -30,41 +49,46 @@
       clickTimeout: {
         value: 5,
         required: true,
-        validate: RED.validators.number(),
+        validate: validatePositiveNumber,
       },
       clickCleanupInterval: {
         value: 30,
         required: true,
-        validate: RED.validators.number(),
+        validate: validatePositiveNumber,
       },
       watchdogInterval: {
         value: 120,
         required: true,
-        validate: RED.validators.number(),
+        validate: validatePositiveNumber,
       },
       interrogateThreshold: {
         value: 180,
         required: true,
-        validate: RED.validators.number(),
+        validate: validatePositiveNumber,
       },
       initialStateTimeout: {
         value: 5,
         required: true,
-        validate: RED.validators.number(),
+        validate: validatePositiveNumber,
       },
       pingTimeout: {
         value: 15,
         required: true,
-        validate: RED.validators.number(),
+        validate: validatePositiveNumber,
       },
       haDiscovery: { value: false },
-      haDiscoveryPrefix: { value: "homeassistant" },
+      haDiscoveryPrefix: { value: "homeassistant", validate: validateDiscoveryPrefix },
     },
     inputs: 1,
     outputs: 5,
     icon: "font-awesome/fa-cogs",
     label: function () {
       return this.name || "LSH Logic";
+    },
+    oneditprepare: function () {
+      $("#node-input-haDiscovery").on("change", () => {
+        $("#node-input-haDiscoveryPrefix").trigger("change");
+      });
     },
     inputLabels: "MQTT Messages",
     outputLabels: ["LSH Commands", "Other Actor Commands", "Alerts", "Configuration", "Debug"],
@@ -203,6 +227,7 @@
     <div class="form-row">
       <label for="node-input-haDiscoveryPrefix">Discovery Prefix</label>
       <input type="text" id="node-input-haDiscoveryPrefix" placeholder="homeassistant" />
+      <span class="form-tip">Required only when auto-discovery is enabled.</span>
     </div>
   </div>
 

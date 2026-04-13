@@ -287,9 +287,61 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     expect(changeHandler).toBeDefined();
     changeHandler?.("/tmp/changed-config.json");
+    jest.advanceTimersByTime(250);
     await flushMicrotasks();
 
     expect(reloadSpy).toHaveBeenCalledWith("/tmp/changed-config.json", expect.any(Function));
+  });
+
+  it("should delegate file watcher add events to the reload handler after debounce", async () => {
+    await initializeNode();
+
+    const reloadSpy = jest
+      .spyOn(nodeInstance, "handleConfigFileChange")
+      .mockResolvedValue(undefined);
+    const addHandler = mockWatcher.on.mock.calls.find(([event]) => event === "add")?.[1] as
+      | ((path: string) => void)
+      | undefined;
+
+    expect(addHandler).toBeDefined();
+    addHandler?.("/tmp/changed-config.json");
+    jest.advanceTimersByTime(250);
+    await flushMicrotasks();
+
+    expect(reloadSpy).toHaveBeenCalledWith("/tmp/changed-config.json", expect.any(Function));
+  });
+
+  it("should allow an empty discovery prefix when HA discovery is disabled", async () => {
+    await initializeNode({
+      ...defaultNodeConfig,
+      haDiscovery: false,
+      haDiscoveryPrefix: "   ",
+    });
+
+    expect(mockNodeInstance.status).toHaveBeenCalledWith({
+      fill: "green",
+      shape: "dot",
+      text: "Ready",
+    });
+  });
+
+  it("should reject an empty discovery prefix when HA discovery is enabled", async () => {
+    await expect(
+      initializeNode({
+        ...defaultNodeConfig,
+        haDiscovery: true,
+        haDiscoveryPrefix: "   ",
+      }),
+    ).rejects.toThrow("Discovery Prefix cannot be empty.");
+  });
+
+  it("should reject topic bases without a trailing slash", async () => {
+    await expect(
+      initializeNode({
+        ...defaultNodeConfig,
+        lshBasePath: "custom/base",
+      }),
+    ).rejects.toThrow("LSH Base Path must end with '/'.");
   });
 
   it("should run the initial verification timer using the configured LSH base path", async () => {

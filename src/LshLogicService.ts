@@ -365,7 +365,7 @@ export class LshLogicService {
         if (!isRetained) {
           this.watchdog.onDeviceActivity(deviceName);
         }
-        return this._handleHomieState(deviceName, payload);
+        return this._handleHomieState(deviceName, payload, isRetained);
       }
 
       if (this.haDiscovery) {
@@ -529,8 +529,16 @@ export class LshLogicService {
   /*                             TOPIC HANDLERS                                 */
   /* -------------------------------------------------------------------------- */
 
-  private _handleHomieState(deviceName: string, payload: unknown): ServiceResult {
+  private _handleHomieState(
+    deviceName: string,
+    payload: unknown,
+    isRetained: boolean,
+  ): ServiceResult {
     const result = this.createEmptyResult();
+    if (isRetained) {
+      return result;
+    }
+
     const homieState = String(payload);
 
     const { stateChanged, wasConnected, isConnected } = this.deviceManager.updateConnectionState(

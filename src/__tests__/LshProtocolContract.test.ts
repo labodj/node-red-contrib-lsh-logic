@@ -36,24 +36,34 @@ type GoldenPayloads = {
 
 const NODE_RED_ROOT = resolve(__dirname, "../..");
 const WORKSPACE_ROOT = resolve(NODE_RED_ROOT, "..");
+const resolveWorkspaceRepo = (envVarName: string, candidates: string[]): string => {
+  const fromEnv = process.env[envVarName];
+  if (typeof fromEnv === "string" && fromEnv.trim().length > 0) {
+    return resolve(fromEnv.trim());
+  }
+
+  return candidates.find(existsSync) ?? candidates[0];
+};
+
+const CORE_WORKSPACE_ROOT = resolveWorkspaceRepo("LSH_CORE_ROOT", [
+  resolve(WORKSPACE_ROOT, "lsh-core"),
+]);
+const ESP_WORKSPACE_ROOT = resolveWorkspaceRepo("LSH_ESP_ROOT", [
+  resolve(WORKSPACE_ROOT, "lsh-esp"),
+  resolve(WORKSPACE_ROOT, "lsh-esp_bak"),
+]);
 const SPEC_PATH = resolve(NODE_RED_ROOT, "vendor/lsh-protocol/shared/lsh_protocol.json");
 const GOLDEN_PATH = resolve(
   NODE_RED_ROOT,
   "vendor/lsh-protocol/shared/lsh_protocol_golden_payloads.json",
 );
-const CORE_PROTOCOL_PATH = resolve(
-  WORKSPACE_ROOT,
-  "lsh-core/src/communication/constants/protocol.hpp",
-);
+const CORE_PROTOCOL_PATH = resolve(CORE_WORKSPACE_ROOT, "src/communication/constants/protocol.hpp");
 const CORE_STATIC_PAYLOADS_PATH = resolve(
-  WORKSPACE_ROOT,
-  "lsh-core/src/communication/constants/static_payloads.hpp",
+  CORE_WORKSPACE_ROOT,
+  "src/communication/constants/static_payloads.hpp",
 );
-const ESP_PROTOCOL_PATH = resolve(
-  WORKSPACE_ROOT,
-  "lsh-esp_bak/src/constants/communicationprotocol.hpp",
-);
-const ESP_STATIC_PAYLOADS_PATH = resolve(WORKSPACE_ROOT, "lsh-esp_bak/src/constants/payloads.hpp");
+const ESP_PROTOCOL_PATH = resolve(ESP_WORKSPACE_ROOT, "src/constants/communicationprotocol.hpp");
+const ESP_STATIC_PAYLOADS_PATH = resolve(ESP_WORKSPACE_ROOT, "src/constants/payloads.hpp");
 
 const hasCrossRepoWorkspace = [
   SPEC_PATH,

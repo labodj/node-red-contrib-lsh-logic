@@ -369,6 +369,14 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry().actor1.isHealthy).toBe(false);
     });
 
+    it("should ignore retained Homie ready states until live traffic arrives", () => {
+      const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
+
+      expect(result.stateChanged).toBe(false);
+      expect(result.messages).toEqual({});
+      expect(service.getDeviceRegistry().actor1).toBeUndefined();
+    });
+
     it("should return a no-op when receiving the same Homie ready state twice", () => {
       setDeviceOnline("actor1");
 
