@@ -149,9 +149,8 @@ The node handles decoding (Input) and encoding (Output) transparently.
 
 Toolchain:
 
-- This repository includes a root `mise.toml`.
-- `mise` pins the Node.js version for this repository.
-- Python is pinned separately in `.python-version` and should be managed with the OS-installed `uv`.
+- Use any Node.js runtime supported by this package (`>= 18`).
+- `python3` is only needed for maintainer tasks that run `tools/update_lsh_protocol.py`.
 
 Runtime path rules:
 
@@ -176,11 +175,11 @@ Contributions are welcome!
 ### Development Setup
 
 1.  Clone the repo: `git clone https://github.com/labodj/node-red-contrib-lsh-logic.git`
-2.  Install toolchain: `mise install`
-3.  Install Python: `uv python install`
-4.  Install dependencies: `npm install`
-5.  Build: `npm run build`
-6.  Test: `npm test`
+2.  Install a supported Node.js version (`>= 18`)
+3.  Install dependencies: `npm install`
+4.  Build: `npm run build`
+5.  Test: `npm test`
+6.  Optional maintainer tooling: ensure `python3` is available if you need to run `tools/update_lsh_protocol.py`
 
 ## License
 
