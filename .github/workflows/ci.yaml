@@ -113,6 +113,18 @@ jobs:
             exit 1
           fi
 
+      - name: Check whether version is already published on npm
+        id: npm_release
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm view "${PKG_NAME}@${PKG_VERSION}" version >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "Package ${PKG_NAME}@${PKG_VERSION} already exists on npm. The publish step will be skipped."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Pack for GitHub Release
         run: npm pack
 
@@ -123,4 +135,9 @@ jobs:
           files: "*.tgz"
 
       - name: Publish to npm
+        if: steps.npm_release.outputs.already_published != 'true'
         run: npm publish --provenance
+
+      - name: Skip npm publish for existing versions
+        if: steps.npm_release.outputs.already_published == 'true'
+        run: echo "Skipping npm publish because this version is already available on npm."
