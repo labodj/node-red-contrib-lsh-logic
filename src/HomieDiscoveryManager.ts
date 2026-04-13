@@ -93,9 +93,22 @@ interface DeviceDiscoveryPayload {
   components: Record<string, DiscoveryComponentUpdate>;
 }
 
+interface SingleSensorDiscoveryPayload {
+  name: string;
+  unique_id: string;
+  default_entity_id: string;
+  state_topic: string;
+  icon: string;
+  entity_category: DiscoveryCategory;
+  device: HomeAssistantDevice;
+  origin: HomeAssistantOrigin;
+}
+
+type DiscoveryPayload = DeviceDiscoveryPayload | SingleSensorDiscoveryPayload;
+
 type DiscoveryMessage = NodeMessage & {
   topic: string;
-  payload: DeviceDiscoveryPayload;
+  payload: DiscoveryPayload;
   qos: 1;
   retain: true;
 };
@@ -405,6 +418,7 @@ export class HomieDiscoveryManager {
     }
 
     messages.push(this.buildDeviceDiscoveryMessage(discoveryContext, componentEntries));
+    messages.push(this.buildHomieStateSensorMessage(discoveryContext));
 
     return { messages, componentPlatforms };
   }
@@ -460,6 +474,37 @@ export class HomieDiscoveryManager {
 
     return {
       topic: `${this.discoveryPrefix}/device/${deviceObjectId}/config`,
+      payload,
+      qos: 1,
+      retain: true,
+    };
+  }
+
+  /**
+   * Publishes the raw Homie `$state` as a standalone diagnostic sensor.
+   * This intentionally avoids shared availability so Home Assistant can
+   * record values like `lost` in history instead of marking the sensor
+   * unavailable at the same moment.
+   */
+  private buildHomieStateSensorMessage({
+    deviceId,
+    baseTopic,
+    baseDevice,
+  }: DiscoveryContext): DiscoveryMessage {
+    const componentId = `lsh_${deviceId.toLowerCase()}_homie_state`;
+    const payload: SingleSensorDiscoveryPayload = {
+      name: `${deviceId.toUpperCase()} Homie State`,
+      unique_id: componentId,
+      default_entity_id: `sensor.${componentId}`,
+      state_topic: `${baseTopic}/$state`,
+      icon: "mdi:state-machine",
+      entity_category: "diagnostic",
+      device: baseDevice,
+      origin: HomieDiscoveryManager.ORIGIN,
+    };
+
+    return {
+      topic: `${this.discoveryPrefix}/sensor/${componentId}/config`,
       payload,
       qos: 1,
       retain: true,

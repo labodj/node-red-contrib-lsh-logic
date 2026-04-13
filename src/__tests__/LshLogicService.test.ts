@@ -584,16 +584,24 @@ describe("LshLogicService - Core & Config", () => {
       const result = service.processMessage(`homie/${deviceId}/$nodes`, "lamp");
 
       const messages = getOutputMessages(result, Output.Lsh);
+      const deviceMessage = messages.find(
+        (message) => message.topic === "homeassistant/device/lsh_new-homie-device/config",
+      );
+      const homieStateMessage = messages.find(
+        (message) =>
+          message.topic === "homeassistant/sensor/lsh_new-homie-device_homie_state/config",
+      );
 
-      expect(messages).toHaveLength(1);
-      expect(messages[0].topic).toBe("homeassistant/device/lsh_new-homie-device/config");
-      expect(messages[0].payload).not.toHaveProperty("~");
-      expect((messages[0].payload as { availability_topic: string }).availability_topic).toBe(
+      expect(messages).toHaveLength(2);
+      expect(deviceMessage).toBeDefined();
+      expect(homieStateMessage).toBeDefined();
+      expect(deviceMessage!.payload).not.toHaveProperty("~");
+      expect((deviceMessage!.payload as { availability_topic: string }).availability_topic).toBe(
         "homie/new-homie-device/$state",
       );
       expect(
         (
-          messages[0].payload as {
+          deviceMessage!.payload as {
             components: Record<
               string,
               {
@@ -613,6 +621,20 @@ describe("LshLogicService - Core & Config", () => {
           command_topic: "homie/new-homie-device/lamp/state/set",
         }),
       );
+      expect(
+        homieStateMessage!.payload as {
+          unique_id: string;
+          default_entity_id: string;
+          state_topic: string;
+        },
+      ).toEqual(
+        expect.objectContaining({
+          unique_id: "lsh_new-homie-device_homie_state",
+          default_entity_id: "sensor.lsh_new-homie-device_homie_state",
+          state_topic: "homie/new-homie-device/$state",
+        }),
+      );
+      expect(homieStateMessage!.payload).not.toHaveProperty("availability_topic");
     });
 
     it("should emit a removal update before the final device discovery payload when a Homie node disappears", () => {
@@ -624,23 +646,31 @@ describe("LshLogicService - Core & Config", () => {
 
       const result = service.processMessage(`homie/${deviceId}/$nodes`, "lamp");
       const messages = getOutputMessages(result, Output.Lsh);
+      const deviceMessages = messages.filter(
+        (message) => message.topic === "homeassistant/device/lsh_new-homie-device/config",
+      );
 
-      expect(messages).toHaveLength(2);
-      expect(messages[0].topic).toBe("homeassistant/device/lsh_new-homie-device/config");
+      expect(messages).toHaveLength(3);
+      expect(deviceMessages).toHaveLength(2);
       expect(
         (
-          messages[0].payload as {
+          deviceMessages[0].payload as {
             components: Record<string, { platform: string; unique_id?: string }>;
           }
         ).components["lsh_new-homie-device_relay"],
       ).toEqual({ platform: "light" });
       expect(
         (
-          messages[1].payload as {
+          deviceMessages[1].payload as {
             components: Record<string, { platform: string; unique_id?: string }>;
           }
         ).components,
       ).not.toHaveProperty("lsh_new-homie-device_relay");
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          topic: "homeassistant/sensor/lsh_new-homie-device_homie_state/config",
+        }),
+      );
     });
 
     it("should ignore Homie discovery attributes when disabled", () => {
