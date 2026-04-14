@@ -5,7 +5,7 @@ import { HomieDiscoveryManager } from "../HomieDiscoveryManager";
 import { Output } from "../types";
 import type { NodeMessage } from "node-red";
 
-type DiscoveryPlatform = "light" | "sensor" | "binary_sensor";
+type DiscoveryPlatform = "light" | "switch" | "fan" | "sensor" | "binary_sensor";
 
 type DiscoveryComponent = {
   platform: DiscoveryPlatform;
@@ -22,6 +22,7 @@ type DiscoveryComponent = {
 type DiscoveryPayload = {
   device: {
     sw_version: string;
+    name?: string;
   };
   origin: {
     support_url: string;
@@ -308,5 +309,96 @@ describe("HomieDiscoveryManager", () => {
     expect(componentTopics).toContain("homie/device06/led/state/set");
     expect(homieStateMessage.payload.state_topic).toBe("homie/device06/$state");
     expect(homieStateMessage.payload).not.toHaveProperty("availability_topic");
+  });
+
+  it("should apply config-driven platform and naming overrides for actuator discovery", () => {
+    const deviceId = "device07";
+
+    manager.setDiscoveryConfig(
+      new Map([
+        [
+          deviceId,
+          {
+            name: deviceId,
+            haDiscovery: {
+              deviceName: "Kitchen Board",
+              defaultPlatform: "switch",
+              nodes: {
+                "2": {
+                  platform: "fan",
+                  name: "Kitchen Extractor",
+                  defaultEntityId: "fan.kitchen_extractor",
+                },
+              },
+            },
+          },
+        ],
+      ]),
+    );
+
+    manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    const result = manager.processDiscoveryMessage(deviceId, "/$nodes", "1,2");
+
+    const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
+    const deviceMessage = getMessageByTopic(messages, "homeassistant/device/lsh_device07/config");
+
+    expect(deviceMessage.payload.device.name).toBe("Kitchen Board");
+    expect(deviceMessage.payload.components?.lsh_device07_1).toEqual(
+      expect.objectContaining({
+        platform: "switch",
+        name: "DEVICE07 1",
+        default_entity_id: "switch.lsh_device07_1",
+      }),
+    );
+    expect(deviceMessage.payload.components?.lsh_device07_2).toEqual(
+      expect.objectContaining({
+        platform: "fan",
+        name: "Kitchen Extractor",
+        default_entity_id: "fan.kitchen_extractor",
+      }),
+    );
+  });
+
+  it("should emit a removal update before switching a component platform", () => {
+    const deviceId = "device08";
+
+    manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    manager.processDiscoveryMessage(deviceId, "/$nodes", "1");
+
+    manager.setDiscoveryConfig(
+      new Map([
+        [
+          deviceId,
+          {
+            name: deviceId,
+            haDiscovery: {
+              nodes: {
+                "1": {
+                  platform: "switch",
+                },
+              },
+            },
+          },
+        ],
+      ]),
+    );
+
+    const result = manager.regenerateDiscoveryPayloads();
+    const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
+    const deviceMessages = messages.filter(
+      (message) => message.topic === "homeassistant/device/lsh_device08/config",
+    );
+
+    expect(deviceMessages).toHaveLength(2);
+    expect(deviceMessages[0].payload.components?.lsh_device08_1).toEqual({
+      platform: "light",
+    });
+    expect(deviceMessages[1].payload.components?.lsh_device08_1).toEqual(
+      expect.objectContaining({
+        platform: "switch",
+      }),
+    );
   });
 });

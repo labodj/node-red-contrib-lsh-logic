@@ -231,6 +231,7 @@ export class LshLogicService {
     for (const device of this.systemConfig.devices) {
       this.deviceConfigMap.set(device.name, device);
     }
+    this.discoveryManager.setDiscoveryConfig(this.deviceConfigMap);
 
     const prunedDevices = [];
     for (const deviceName of this.deviceManager.getRegisteredDeviceNames()) {
@@ -249,12 +250,21 @@ export class LshLogicService {
     return logMessage;
   }
 
+  public syncDiscoveryConfig(): ServiceResult {
+    if (!this.haDiscovery) {
+      return this.createEmptyResult();
+    }
+
+    return this.discoveryManager.regenerateDiscoveryPayloads();
+  }
+
   /**
    * Resets the configuration to null, typically on a file loading or validation error.
    */
   public clearSystemConfig(): void {
     this.systemConfig = null;
     this.deviceConfigMap.clear();
+    this.discoveryManager.setDiscoveryConfig(this.deviceConfigMap);
     this.clickManager.clearAll();
   }
 

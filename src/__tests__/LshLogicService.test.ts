@@ -175,6 +175,54 @@ describe("LshLogicService - Core & Config", () => {
       );
     });
 
+    it("should regenerate HA discovery payloads when discovery overrides change", () => {
+      loadConfig({
+        devices: [{ name: "c1" }],
+      });
+
+      service.processMessage("homie/c1/$mac", "AA:BB:CC:DD:EE:FF");
+      service.processMessage("homie/c1/$fw/version", "1.0.0");
+      service.processMessage("homie/c1/$nodes", "1");
+
+      service.updateSystemConfig({
+        devices: [
+          {
+            name: "c1",
+            haDiscovery: {
+              deviceName: "Kitchen Board",
+              nodes: {
+                "1": {
+                  platform: "switch",
+                  name: "Kitchen Light",
+                  defaultEntityId: "switch.kitchen_light",
+                },
+              },
+            },
+          },
+        ],
+      });
+
+      const syncResult = service.syncDiscoveryConfig();
+      const discoveryMessages = getOutputMessages(syncResult, Output.Lsh);
+      const deviceMessages = discoveryMessages.filter(
+        (message) => message.topic === "homeassistant/device/lsh_c1/config",
+      );
+      const finalPayload = deviceMessages[1]?.payload as {
+        device: { name: string };
+        components: Record<string, { platform: string; name?: string; default_entity_id?: string }>;
+      };
+
+      expect(deviceMessages).toHaveLength(2);
+      expect(finalPayload.device.name).toBe("Kitchen Board");
+      expect(finalPayload.components.lsh_c1_1).toEqual(
+        expect.objectContaining({
+          platform: "switch",
+          name: "Kitchen Light",
+          default_entity_id: "switch.kitchen_light",
+        }),
+      );
+    });
+
     it("should clear the loaded system config", () => {
       loadConfig();
 

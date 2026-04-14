@@ -308,11 +308,34 @@ export interface ButtonAction {
   otherActors: string[];
 }
 
+export type HomeAssistantActuatorPlatform = "light" | "switch" | "fan";
+
+export interface HomeAssistantNodeDiscoveryConfig {
+  /** Optional Home Assistant entity platform override for this Homie node. */
+  platform?: HomeAssistantActuatorPlatform;
+  /** Optional friendly entity name override shown in Home Assistant. */
+  name?: string;
+  /** Optional Home Assistant default entity ID override. */
+  defaultEntityId?: string;
+  /** Optional Home Assistant icon override. */
+  icon?: string;
+}
+
+export interface DeviceHomeAssistantDiscoveryConfig {
+  /** Optional Home Assistant device name override. */
+  deviceName?: string;
+  /** Optional default platform for all actuator nodes of the device. */
+  defaultPlatform?: HomeAssistantActuatorPlatform;
+  /** Optional per-node discovery overrides keyed by the Homie node ID. */
+  nodes?: Record<string, HomeAssistantNodeDiscoveryConfig>;
+}
+
 /** A single device's entry from the system configuration file. */
 export interface DeviceEntry {
   name: string;
   longClickButtons?: ButtonAction[];
   superLongClickButtons?: ButtonAction[];
+  haDiscovery?: DeviceHomeAssistantDiscoveryConfig;
 }
 
 /** The root structure of the `system-config.json` file. */

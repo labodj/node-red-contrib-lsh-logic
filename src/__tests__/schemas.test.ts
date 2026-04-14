@@ -140,4 +140,42 @@ describe("schemas", () => {
 
     expect(isValid).toBe(false);
   });
+
+  it("accepts optional Home Assistant discovery overrides in system config", () => {
+    const isValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "c1",
+          haDiscovery: {
+            deviceName: "Kitchen Board",
+            defaultPlatform: "switch",
+            nodes: {
+              "1": {
+                platform: "fan",
+                name: "Kitchen Extractor",
+                defaultEntityId: "fan.kitchen_extractor",
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(isValid).toBe(true);
+  });
+
+  it("rejects unsupported Home Assistant platform overrides in system config", () => {
+    const isValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "c1",
+          haDiscovery: {
+            defaultPlatform: "cover",
+          },
+        },
+      ],
+    });
+
+    expect(isValid).toBe(false);
+  });
 });

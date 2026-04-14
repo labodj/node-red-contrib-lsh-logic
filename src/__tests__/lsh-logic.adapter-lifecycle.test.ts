@@ -188,6 +188,27 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     expect(mockNodeInstance.log).toHaveBeenCalledWith("Cleaned up 2 clicks.");
   });
 
+  it("should process discovery sync messages after loading system config", async () => {
+    const discoveryMessage = {
+      topic: "homeassistant/device/lsh_test/config",
+      payload: { components: {} },
+      qos: 1,
+      retain: true,
+    };
+
+    jest.spyOn(LshLogicService.prototype, "syncDiscoveryConfig").mockReturnValue(
+      createServiceResult({
+        messages: {
+          [Output.Lsh]: discoveryMessage,
+        },
+      }),
+    );
+
+    await initializeNode();
+
+    expect(mockNodeInstance.send).toHaveBeenCalledWith([discoveryMessage, null, null, null, null]);
+  });
+
   it("should run the watchdog check periodically", async () => {
     jest
       .spyOn(LshLogicService.prototype, "runWatchdogCheck")

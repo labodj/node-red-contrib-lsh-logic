@@ -125,6 +125,52 @@ const buttonActionSchema = {
   additionalProperties: false,
 } as const;
 
+const homeAssistantNodeDiscoveryConfigSchema = {
+  type: "object",
+  properties: {
+    platform: {
+      type: "string",
+      enum: ["light", "switch", "fan"],
+      description: "Optional Home Assistant entity platform override for this node.",
+    },
+    name: {
+      ...nonEmptyStringSchema,
+      description: "Optional Home Assistant friendly entity name override.",
+    },
+    defaultEntityId: {
+      ...nonEmptyStringSchema,
+      description: "Optional Home Assistant default entity ID override.",
+    },
+    icon: {
+      ...nonEmptyStringSchema,
+      description: "Optional Home Assistant icon override.",
+    },
+  },
+  additionalProperties: false,
+} as const;
+
+const deviceHomeAssistantDiscoveryConfigSchema = {
+  type: "object",
+  properties: {
+    deviceName: {
+      ...nonEmptyStringSchema,
+      description: "Optional Home Assistant device name override.",
+    },
+    defaultPlatform: {
+      type: "string",
+      enum: ["light", "switch", "fan"],
+      description: "Optional default Home Assistant platform for all nodes of the device.",
+    },
+    nodes: {
+      type: "object",
+      description: "Optional per-node Home Assistant discovery overrides keyed by Homie node ID.",
+      propertyNames: nonEmptyStringSchema,
+      additionalProperties: homeAssistantNodeDiscoveryConfigSchema,
+    },
+  },
+  additionalProperties: false,
+} as const;
+
 /**
  * Schema for the main `system-config.json` file.
  * It defines the overall structure, containing a list of all devices
@@ -157,6 +203,7 @@ export const systemConfigSchema = {
             items: buttonActionSchema,
             uniqueItemProperty: "id",
           },
+          haDiscovery: deviceHomeAssistantDiscoveryConfigSchema,
         },
         required: ["name"],
         additionalProperties: false,

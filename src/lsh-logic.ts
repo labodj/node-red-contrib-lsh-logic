@@ -224,26 +224,25 @@ export class LshLogicNode {
    * @param done The callback to signal completion to the Node-RED runtime.
    */
   private async handleInput(msg: NodeMessage, done: (err?: Error) => void): Promise<void> {
-    let processedPayload: unknown = msg.payload;
+    const topic = msg.topic || "";
+    let processedPayload: unknown;
 
     try {
-      const payloadProtocol = this.getPayloadProtocol(msg.topic || "");
+      const payloadProtocol = this.getPayloadProtocol(topic);
       processedPayload = this.codec.decode(msg.payload, payloadProtocol);
       if (Buffer.isBuffer(msg.payload) && payloadProtocol === "msgpack") {
-        this.node.log(`Decoded MsgPack payload from topic: ${msg.topic || "unknown"}`);
+        this.node.log(`Decoded MsgPack payload from topic: ${topic || "unknown"}`);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.node.error(
-        `Failed to decode payload on topic ${msg.topic || "unknown"}: ${errorMessage}`,
-      );
+      this.node.error(`Failed to decode payload on topic ${topic || "unknown"}: ${errorMessage}`);
       done(error instanceof Error ? error : new Error(errorMessage));
       return;
     }
 
     try {
       // The service always receives a standard JavaScript object, regardless of original format.
-      const result = this.service.processMessage(msg.topic || "", processedPayload, {
+      const result = this.service.processMessage(topic, processedPayload, {
         retained: (msg as { retain?: unknown }).retain === true,
       });
       await this.processServiceResult(result);
@@ -355,6 +354,7 @@ export class LshLogicNode {
       }
       const logMessage = this.service.updateSystemConfig(parsedConfig as SystemConfig);
       this.node.log(logMessage);
+      await this.processServiceResult(this.service.syncDiscoveryConfig());
 
       if (scheduleStartupVerification) {
         this.scheduleInitialVerification();
