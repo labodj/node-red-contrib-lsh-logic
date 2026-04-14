@@ -1,0 +1,23 @@
+{
+  "devices": [
+    {
+      "name": "c1",
+      "longClickButtons": [
+        {
+          "id": 1,
+          "actors": [
+            {
+              "name": "j1",
+              "allActuators": true,
+              "actuators": []
+            }
+          ],
+          "otherActors": []
+        }
+      ]
+    },
+    {
+      "name": "j1"
+    }
+  ]
+}

@@ -19,6 +19,7 @@ This node replaces complex Node-RED flows with a single, robust, and stateful co
 - **Robust Cold Recovery**: If Node-RED restarts and retained MQTT state is incomplete, the node actively pings any device that is still unreachable. Snapshot recovery stays best-effort and actions fail fast if a required fresh state is still missing.
 - **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when target devices are reachable and currently healthy.
 - **Homie & HA Discovery**: Fully compliant with the [Homie Convention](https://homieiot.github.io/) for state tracking and automatically generates Home Assistant Auto-Discovery payloads for seamless integration.
+- **Config-Driven HA Entity Mapping**: Optionally remap Homie actuator nodes to Home Assistant `light`, `switch`, or `fan` entities and assign friendly names directly from `system-config.json`.
 - **High Performance**: Optimized message routing using direct string parsing and efficient internal state management.
 - **Declarative Configuration**: Define your entire system in a single `system-config.json` file. The node automatically hot-reloads configuration changes.
 
@@ -90,11 +91,28 @@ The node has five distinct outputs for clear and organized flows:
 
 This file defines the topology of your smart home. It should be placed in your Node-RED user directory.
 
+Ready-to-copy examples are available in:
+
+- [examples/system-config.minimal.json](examples/system-config.minimal.json)
+- [examples/system-config.discovery-overrides.json](examples/system-config.discovery-overrides.json)
+- [examples/system-config.multi-device.json](examples/system-config.multi-device.json)
+
 ```json
 {
   "devices": [
     {
       "name": "c1",
+      "haDiscovery": {
+        "deviceName": "Kitchen Board",
+        "defaultPlatform": "switch",
+        "nodes": {
+          "1": {
+            "platform": "light",
+            "name": "Kitchen Ceiling",
+            "defaultEntityId": "light.kitchen_ceiling"
+          }
+        }
+      },
       "longClickButtons": [
         {
           "id": 1,
@@ -110,6 +128,14 @@ This file defines the topology of your smart home. It should be placed in your N
 ```
 
 - **`name`**: Must match the exact device ID used in MQTT topics. With the current ESP bridge defaults this is typically a short ID such as `c1`, `j1`, `k1`; the default bridge build allocates 4 characters unless `CONFIG_MAX_NAME_LENGTH` is raised.
+- **`haDiscovery`**: Optional Home Assistant discovery overrides for this device.
+- **`haDiscovery.deviceName`**: Optional Home Assistant device name override.
+- **`haDiscovery.defaultPlatform`**: Optional default Home Assistant entity platform for all actuator nodes of the device (`light`, `switch`, or `fan`).
+- **`haDiscovery.nodes`**: Optional per-node overrides keyed by the Homie node ID as published under `$nodes`.
+- **`haDiscovery.nodes.<id>.platform`**: Optional per-node Home Assistant entity platform override.
+- **`haDiscovery.nodes.<id>.name`**: Optional friendly entity name override shown in Home Assistant.
+- **`haDiscovery.nodes.<id>.defaultEntityId`**: Optional Home Assistant `default_entity_id` override for first discovery.
+- **`haDiscovery.nodes.<id>.icon`**: Optional Home Assistant icon override.
 - **`id`**: Button ID (numeric, e.g., `1` for Button 1).
 - **`actors`**: Target LSH devices.
 - **`otherActors`**: Target external devices (strings).
@@ -141,15 +167,12 @@ To use MsgPack:
 
 The node handles decoding (Input) and encoding (Output) transparently.
 
-## Dependency Notes
-
-`chokidar` is kept at v4.x because v5 requires Node.js >= 20.19 and is ESM-only. Since this package supports Node.js >= 18 (to match Node-RED's supported runtimes), upgrading to chokidar v5 is not possible at this time.
-
 ## Maintainer Notes
 
 Toolchain:
 
-- Use any Node.js runtime supported by this package (`>= 18`).
+- Runtime compatibility for the published package remains `Node.js >= 18`.
+- Maintainer tooling is validated on modern Node.js and currently expected to run on `Node.js 24` for linting, formatting, testing and packaging.
 - `python3` is only needed for maintainer tasks that run `tools/update_lsh_protocol.py`.
 
 Runtime path rules:
