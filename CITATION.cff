@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use or reference node-red-contrib-lsh-logic, please cite it using the metadata below."
+title: "node-red-contrib-lsh-logic"
+type: software
+authors:
+  - family-names: "Labardi"
+    given-names: "Jacopo"
+repository-code: "https://github.com/labodj/node-red-contrib-lsh-logic"
+url: "https://github.com/labodj/node-red-contrib-lsh-logic"
+license: "Apache-2.0"
+abstract: "Node-RED orchestration node for the LSH ecosystem, with MQTT logic, Homie support and Home Assistant discovery."
+keywords:
+  - node-red
+  - mqtt
+  - home-assistant
+  - homie
+  - smart-home
+  - lsh
