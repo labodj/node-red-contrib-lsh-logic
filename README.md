@@ -4,9 +4,11 @@
 [![Build Status](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml/badge.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-A powerful, high-performance Node-RED node designed to manage advanced automation logic for embedded smart home devices (ESP32/ESP8266 based). Built with TypeScript for maximum reliability and type safety.
+A powerful, high-performance Node-RED node designed to manage advanced automation logic for smart home devices that speak the public LSH MQTT / protocol contract. Built with TypeScript for maximum reliability and type safety.
 
 This node replaces complex Node-RED flows with a single, robust, and stateful component that manages device state, implements distributed click logic (two-phase commit), and actively monitors device health.
+
+The original installation behind it uses Controllino controllers plus ESP32 bridges, but the Node-RED boundary is the **LSH protocol contract**, not the exact hardware. If another controller / bridge stack implements the same public MQTT topics and payload contract, this node is designed to work there too.
 
 ![Node Appearance](images/node-appearance.png)
 
@@ -31,9 +33,21 @@ Install directly from the Node-RED **Palette Manager** or via npm in your user d
 npm install node-red-contrib-lsh-logic
 ```
 
+## Scope And Portability
+
+This package is intentionally **LSH-oriented**. It is not meant as a completely generic drop-in automation node for arbitrary MQTT devices.
+
+The important dependency is the public **LSH protocol + MQTT contract**, not the exact hardware used in the original installation.
+
+In practice that means:
+
+- if your devices speak the same LSH topics and payload contract, this node is intended to work with them
+- if your devices use a different protocol model entirely, this package is the wrong abstraction layer
+- the original Controllino + ESP32 combination is the reference implementation, not a hard runtime requirement
+
 ## How It Works
 
-This node acts as the central orchestrator for your custom smart home devices. It subscribes to MQTT topics, processes incoming telemetry and events, updates its internal state registry, and dispatches commands.
+This node acts as the central orchestrator for your protocol-compatible smart home devices. It subscribes to MQTT topics, processes incoming telemetry and events, updates its internal state registry, and dispatches commands.
 
 The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
 
@@ -71,7 +85,7 @@ The node accepts messages from an `mqtt-in` node. It processes:
 
 The node has five distinct outputs for clear and organized flows:
 
-1.  **LSH Commands**: Commands targeting your ESP devices (e.g., `SET_STATE`, `PING`, `CLICK_ACK`).
+1.  **LSH Commands**: Commands targeting your LSH protocol devices (e.g., `SET_STATE`, `PING`, `CLICK_ACK`).
 2.  **Other Actor Commands**: Abstracted commands for controlling 3rd party devices (Tasmota, Zigbee) via other Node-RED flows. The payload contains the listing of target actors and the state to set.
 3.  **Alerts**: Human-readable health alerts (Markdown formatted) suitable for notifications (Telegram/Slack).
 4.  **Configuration**: Dynamic control messages for the `mqtt-in` node.
@@ -127,7 +141,7 @@ Ready-to-copy examples are available in:
 }
 ```
 
-- **`name`**: Must match the exact device ID used in MQTT topics. With the current ESP bridge defaults this is typically a short ID such as `c1`, `j1`, `k1`; the default bridge build allocates 4 characters unless `CONFIG_MAX_NAME_LENGTH` is raised.
+- **`name`**: Must match the exact device ID used in MQTT topics. With the current reference bridge defaults this is typically a short ID such as `c1`, `j1`, `k1`; the default bridge build allocates 4 characters unless `CONFIG_MAX_NAME_LENGTH` is raised.
 - **`haDiscovery`**: Optional Home Assistant discovery overrides for this device.
 - **`haDiscovery.deviceName`**: Optional Home Assistant device name override.
 - **`haDiscovery.defaultPlatform`**: Optional default Home Assistant entity platform for all actuator nodes of the device (`light`, `switch`, or `fan`).
