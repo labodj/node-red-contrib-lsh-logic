@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "A single, powerful node for advanced automation logic on devices implementing the public LSH MQTT/protocol contract.",
   "main": "dist/lsh-logic.js",
   "scripts": {
@@ -10,8 +10,8 @@
     "build": "npm run clean && tsc -p tsconfig.prod.json && npm run copy-assets",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "lint": "eslint src --max-warnings=0 --cache --cache-location ./.cache/eslint",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "prettier --write \"src/**/*.{ts,html,json}\" \"examples/**/*.json\" README.md CITATION.cff package.json jest.config.js eslint.config.mjs knip.json tsconfig*.json .prettierrc.json \".github/**/*.{yml,yaml}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,html,json}\" \"examples/**/*.json\" README.md CITATION.cff package.json jest.config.js eslint.config.mjs knip.json tsconfig*.json .prettierrc.json \".github/**/*.{yml,yaml}\"",
     "knip": "knip --production --strict",
     "watch": "tsc -w",
     "prepublishOnly": "npm run build",
@@ -74,7 +74,7 @@
     "globals": "^17.5.0",
     "jest": "^30.3.0",
     "knip": "^6.4.1",
-    "prettier": "^3.8.2",
+    "prettier": "^3.8.3",
     "ts-jest": "^29.4.9",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.58.2"
