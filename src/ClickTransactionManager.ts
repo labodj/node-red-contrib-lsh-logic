@@ -17,6 +17,17 @@ export class ClickTransactionManager {
   }
 
   /**
+   * Removes a transaction from every internal registry, regardless of whether it
+   * completed successfully or expired.
+   */
+  private discardTransaction(correlationKey: string, transaction: PendingClickTransaction): void {
+    this.pendingClicks.delete(correlationKey);
+    if (this.activeSlots.get(transaction.slotKey) === correlationKey) {
+      this.activeSlots.delete(transaction.slotKey);
+    }
+  }
+
+  /**
    * Starts a new click transaction, storing the associated actors and a timestamp.
    * This is the first phase of the two-phase commit protocol.
    * @param slotKey - A stable key for the logical click slot (e.g., 'deviceName.7.1').
@@ -58,11 +69,16 @@ export class ClickTransactionManager {
     if (!transaction) {
       return null;
     }
-    // The transaction is confirmed, so remove it from the pending list.
-    this.pendingClicks.delete(correlationKey);
-    if (this.activeSlots.get(transaction.slotKey) === correlationKey) {
-      this.activeSlots.delete(transaction.slotKey);
+
+    // Treat timeout as a hard semantic boundary. A late CONFIRM must never
+    // execute just because the periodic cleanup sweep has not run yet.
+    if (Date.now() - transaction.timestamp > this.clickTimeoutMs) {
+      this.discardTransaction(correlationKey, transaction);
+      return null;
     }
+
+    // The transaction is confirmed, so remove it from the pending list.
+    this.discardTransaction(correlationKey, transaction);
     return {
       actors: transaction.actors,
       otherActors: transaction.otherActors,
@@ -80,10 +96,7 @@ export class ClickTransactionManager {
     let cleanedCount = 0;
     for (const [correlationKey, transaction] of this.pendingClicks) {
       if (now - transaction.timestamp > this.clickTimeoutMs) {
-        this.pendingClicks.delete(correlationKey);
-        if (this.activeSlots.get(transaction.slotKey) === correlationKey) {
-          this.activeSlots.delete(transaction.slotKey);
-        }
+        this.discardTransaction(correlationKey, transaction);
         cleanedCount++;
       }
     }

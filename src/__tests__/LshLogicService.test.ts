@@ -252,16 +252,86 @@ describe("LshLogicService - Core & Config", () => {
       );
     });
 
-    it("should not ping a device that is already reachable even if its snapshot is incomplete", () => {
+    it("should request only the missing snapshot data for a reachable but incomplete device", () => {
       loadConfig(createSystemConfig("dev1"));
       service.processMessage("homie/dev1/$state", "ready");
 
       const result = service.verifyInitialDeviceStates();
 
-      expect(result.messages[Output.Lsh]).toBeUndefined();
+      expect(getOutputMessages(result, Output.Lsh).map((message) => message.payload)).toEqual([
+        { p: LshProtocol.REQUEST_DETAILS },
+        { p: LshProtocol.REQUEST_STATE },
+      ]);
+      expect(result.logs).toContain(
+        "Initial state verification: 1 reachable device(s) still need authoritative snapshot recovery.",
+      );
     });
 
-    it("should log success when all configured devices are reachable", () => {
+    it("should combine snapshot repair and direct pings when only a subset of devices is offline", () => {
+      loadConfig(createSystemConfig("dev1", "dev2"));
+      service.processMessage("homie/dev1/$state", "ready");
+
+      const result = service.verifyInitialDeviceStates();
+
+      expect(getOutputMessages(result, Output.Lsh)).toEqual([
+        expect.objectContaining({
+          topic: "LSH/dev1/IN",
+          payload: { p: LshProtocol.REQUEST_DETAILS },
+        }),
+        expect.objectContaining({
+          topic: "LSH/dev1/IN",
+          payload: { p: LshProtocol.REQUEST_STATE },
+        }),
+        expect.objectContaining({
+          topic: "LSH/dev2/IN",
+          payload: { p: LshProtocol.PING },
+        }),
+      ]);
+      expect(result.logs).toContain(
+        "Initial state verification: 1 reachable device(s) still need authoritative snapshot recovery.",
+      );
+      expect(result.logs).toContain(
+        "Initial state verification: 1 device(s) are still unreachable. Pinging them directly.",
+      );
+    });
+
+    it("should ping retained-only devices that still are not live", () => {
+      loadConfig(createSystemConfig("dev1", "dev2"));
+      service.processMessage(
+        "LSH/dev1/conf",
+        {
+          p: LshProtocol.DEVICE_DETAILS,
+          v: LSH_WIRE_PROTOCOL_MAJOR,
+          n: "dev1",
+          a: [1],
+          b: [],
+        },
+        { retained: true },
+      );
+      service.processMessage(
+        "LSH/dev1/state",
+        {
+          p: LshProtocol.ACTUATORS_STATE,
+          s: [0],
+        },
+        { retained: true },
+      );
+
+      const result = service.verifyInitialDeviceStates();
+
+      expect(getOutputMessages(result, Output.Lsh)).toEqual([
+        expect.objectContaining({
+          topic: "LSH/dev1/IN",
+          payload: { p: LshProtocol.PING },
+        }),
+        expect.objectContaining({
+          topic: "LSH/dev2/IN",
+          payload: { p: LshProtocol.PING },
+        }),
+      ]);
+    });
+
+    it("should log success when all configured devices are reachable with authoritative snapshots", () => {
       setDeviceOnline("device-sender");
       setDeviceOnline("actor1");
       setDeviceOnline("device-silent");
@@ -269,7 +339,7 @@ describe("LshLogicService - Core & Config", () => {
       const result = service.verifyInitialDeviceStates();
 
       expect(result.logs).toContain(
-        "Initial state verification: all configured devices are reachable.",
+        "Initial state verification: all configured devices are reachable and already have authoritative snapshots.",
       );
     });
 
@@ -277,8 +347,58 @@ describe("LshLogicService - Core & Config", () => {
       const result = service.getStartupCommands();
 
       expect(result.logs).toContain(
-        "Node started. Passively waiting for device Homie state announcements.",
+        "Requesting a single bridge-local BOOT resync from all devices.",
       );
+      expect(getOutputMessages(result, Output.Lsh)).toEqual([
+        expect.objectContaining({
+          topic: defaultServiceConfig.serviceTopic,
+          payload: { p: LshProtocol.BOOT },
+        }),
+      ]);
+    });
+
+    it("should request a startup BOOT replay when any configured device lacks a full snapshot", () => {
+      loadConfig(createSystemConfig("dev1", "dev2"));
+      service.processMessage(
+        "LSH/dev1/conf",
+        {
+          p: LshProtocol.DEVICE_DETAILS,
+          v: LSH_WIRE_PROTOCOL_MAJOR,
+          n: "dev1",
+          a: [1],
+          b: [],
+        },
+        { retained: true },
+      );
+
+      expect(service.needsStartupBootReplay()).toBe(true);
+    });
+
+    it("should skip a startup BOOT replay when every configured device already has details and state snapshots", () => {
+      loadConfig(createSystemConfig("dev1", "dev2"));
+      for (const deviceName of ["dev1", "dev2"]) {
+        service.processMessage(
+          `LSH/${deviceName}/conf`,
+          {
+            p: LshProtocol.DEVICE_DETAILS,
+            v: LSH_WIRE_PROTOCOL_MAJOR,
+            n: deviceName,
+            a: [1],
+            b: [],
+          },
+          { retained: true },
+        );
+        service.processMessage(
+          `LSH/${deviceName}/state`,
+          {
+            p: LshProtocol.ACTUATORS_STATE,
+            s: [0],
+          },
+          { retained: true },
+        );
+      }
+
+      expect(service.needsStartupBootReplay()).toBe(false);
     });
 
     it("should warn when startup commands are requested for an empty configuration", () => {
@@ -496,31 +616,35 @@ describe("LshLogicService - Core & Config", () => {
       expect(result.messages).toEqual({});
     });
 
-    it("should honor retained Homie offline transitions after live traffic established the session", () => {
+    it("should ignore retained Homie offline transitions for reachability after live traffic established the session", () => {
       setDeviceOnline("actor1");
 
       const result = service.processMessage("homie/actor1/$state", "lost", { retained: true });
-      const [alertMessage] = getOutputMessages(result, Output.Alerts);
+      const device = service.getDeviceRegistry().actor1;
 
       expect(result.stateChanged).toBe(true);
-      expect(service.getDeviceRegistry().actor1.connected).toBe(false);
-      expect((alertMessage.payload as { status: string }).status).toBe("unhealthy");
+      expect(result.messages).toEqual({});
+      expect(result.logs).toContain(
+        "Device 'actor1' reported retained Homie lifecycle state 'lost'. Ignoring it for reachability, alerts and resync.",
+      );
+      expect(device.connected).toBe(true);
+      expect(device.lastHomieState).toBe("lost");
     });
 
-    it("should honor retained Homie recovery after live traffic established the session", () => {
+    it("should ignore retained Homie recovery transitions for reachability after live traffic established the session", () => {
       setDeviceOnline("actor1");
       service.processMessage("homie/actor1/$state", "lost", { retained: true });
 
       const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
-      const [alertMessage] = getOutputMessages(result, Output.Alerts);
+      const device = service.getDeviceRegistry().actor1;
 
       expect(result.stateChanged).toBe(true);
-      expect(service.getDeviceRegistry().actor1.connected).toBe(true);
-      expect((alertMessage.payload as { status: string }).status).toBe("healthy");
-      expect(getOutputMessages(result, Output.Lsh).map((message) => message.topic)).toEqual([
-        "LSH/actor1/IN",
-        "LSH/actor1/IN",
-      ]);
+      expect(result.messages).toEqual({});
+      expect(result.logs).toContain(
+        "Device 'actor1' reported retained Homie lifecycle state 'ready'. Ignoring it for reachability, alerts and resync.",
+      );
+      expect(device.connected).toBe(true);
+      expect(device.lastHomieState).toBe("ready");
     });
 
     it("should return a no-op when receiving the same Homie ready state twice", () => {

@@ -376,6 +376,49 @@ describe("LshLogicService - Network Click Logic", () => {
     });
   });
 
+  it("should ignore retained Homie offline markers when validating target actors", () => {
+    const { setDeviceOnline, sendMisc, service } = createClickHarness();
+    setDeviceOnline("device-sender");
+    setDeviceOnline("actor1");
+
+    service.processMessage("homie/actor1/$state", "lost", { retained: true });
+
+    const result = startClick(sendMisc, "device-sender");
+
+    expect(
+      getSingleOutputMessage<{ c: number; i: number; p: number; t: number }>(result, Output.Lsh)
+        .payload,
+    ).toEqual({
+      p: LshProtocol.NETWORK_CLICK_ACK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+  });
+
+  it("should treat live network click traffic as proof the sender is reachable", () => {
+    const { setDeviceOnline, sendHomieState, sendMisc, service } = createClickHarness();
+    setDeviceOnline("device-sender");
+    setDeviceOnline("actor1");
+    sendHomieState("device-sender", "lost");
+
+    const result = startClick(sendMisc, "device-sender");
+
+    expect(service.getDeviceRegistry()["device-sender"].connected).toBe(true);
+    expect(result.logs).toContain(
+      "Device 'device-sender' sent live misc traffic and is reachable.",
+    );
+    expect(
+      getSingleOutputMessage<{ c: number; i: number; p: number; t: number }>(result, Output.Lsh)
+        .payload,
+    ).toEqual({
+      p: LshProtocol.NETWORK_CLICK_ACK,
+      c: 1,
+      i: 1,
+      t: ClickType.Long,
+    });
+  });
+
   it("should fail fast when a long-click target is reachable but still missing authoritative state", () => {
     const { setDeviceOnline, sendDeviceDetails, sendMisc } = createClickHarness();
     setDeviceOnline("device-sender");
@@ -731,6 +774,26 @@ describe("LshLogicService - Network Click Logic", () => {
     nowSpy.mockReturnValue(1_000 + config.clickTimeout * 1000 + 1);
 
     expect(service.cleanupPendingClicks()).toBe("Cleaned up 1 expired click transactions.");
+  });
+
+  it("should reject a late confirmation even if periodic cleanup has not run yet", () => {
+    const nowSpy = jest.spyOn(Date, "now");
+    nowSpy.mockReturnValue(1_000);
+
+    const { setDeviceOnline, sendMisc, config } = createClickHarness();
+    setDeviceOnline("actor1");
+    setDeviceOnline("device-sender");
+
+    startClick(sendMisc, "device-sender");
+
+    nowSpy.mockReturnValue(1_000 + config.clickTimeout * 1000 + 1);
+
+    const result = confirmClick(sendMisc, "device-sender");
+
+    expect(result.warnings).toContain(
+      "Received confirmation for an expired or unknown click: device-sender.1.1.1.",
+    );
+    expect(result.messages).toEqual({});
   });
 
   it("should ignore stale confirmations when a newer correlation replaced the same click slot", () => {

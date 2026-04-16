@@ -75,4 +75,13 @@ describe("ClickTransactionManager", () => {
     expect(manager.consumeTransaction("key1")).toBeNull();
     expect(manager.consumeTransaction("key2")).not.toBeNull();
   });
+
+  it("should reject an expired transaction even before cleanup runs", () => {
+    manager.startTransaction("slot1", "key1", [], []);
+
+    jest.advanceTimersByTime((CLICK_TIMEOUT_SEC + 1) * 1000);
+
+    expect(manager.consumeTransaction("key1")).toBeNull();
+    expect(manager.getPendingCount()).toBe(0);
+  });
 });

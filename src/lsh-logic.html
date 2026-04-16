@@ -5,10 +5,32 @@
     return Number.isFinite(numericValue) && numericValue > 0;
   };
 
+  const validateRequiredTrimmed = (value) => String(value || "").trim().length > 0;
+
   const validateTopicBase = (value) => {
     const normalized = String(value || "").trim();
     return normalized.length > 0 && normalized.endsWith("/");
   };
+
+  function validateContextBackedKey(value, contextFieldName) {
+    const contextValue = this[contextFieldName];
+    if (contextValue === "none") {
+      return true;
+    }
+    return validateRequiredTrimmed(value);
+  }
+
+  function validateExposeStateKey(value) {
+    return validateContextBackedKey.call(this, value, "exposeStateContext");
+  }
+
+  function validateExportTopicsKey(value) {
+    return validateContextBackedKey.call(this, value, "exportTopics");
+  }
+
+  function validateExposeConfigKey(value) {
+    return validateContextBackedKey.call(this, value, "exposeConfigContext");
+  }
 
   function validateDiscoveryPrefix(value) {
     const isEnabled = this.haDiscovery === true || this.haDiscovery === "true";
@@ -27,27 +49,36 @@
       // MQTT Path Settings
       homieBasePath: { value: "homie/", required: true, validate: validateTopicBase },
       lshBasePath: { value: "LSH/", required: true, validate: validateTopicBase },
-      serviceTopic: { value: "LSH/Node-RED/SRV", required: true },
+      serviceTopic: {
+        value: "LSH/Node-RED/SRV",
+        required: true,
+        validate: validateRequiredTrimmed,
+      },
       protocol: { value: "json", required: true },
       // Context Key Prefixes
-      otherDevicesPrefix: { value: "other_devices", required: true },
+      otherDevicesPrefix: {
+        value: "other_devices",
+        required: true,
+        validate: validateRequiredTrimmed,
+      },
       // File Config
       systemConfigPath: {
         value: "configs/system-config.json",
         required: true,
+        validate: validateRequiredTrimmed,
       },
       // Context Export
       exposeStateContext: { value: "none", required: true },
-      exposeStateKey: { value: "lsh_state" },
+      exposeStateKey: { value: "lsh_state", validate: validateExposeStateKey },
       exportTopics: { value: "flow", required: true },
-      exportTopicsKey: { value: "lsh_topics" },
+      exportTopicsKey: { value: "lsh_topics", validate: validateExportTopicsKey },
       exposeConfigContext: { value: "none", required: true },
-      exposeConfigKey: { value: "lsh_config" },
+      exposeConfigKey: { value: "lsh_config", validate: validateExposeConfigKey },
       // Other Actors
       otherActorsContext: { value: "global", required: true },
       // Timing
       clickTimeout: {
-        value: 5,
+        value: 2,
         required: true,
         validate: validatePositiveNumber,
       },
@@ -57,22 +88,22 @@
         validate: validatePositiveNumber,
       },
       watchdogInterval: {
-        value: 120,
+        value: 60,
         required: true,
         validate: validatePositiveNumber,
       },
       interrogateThreshold: {
-        value: 180,
+        value: 120,
         required: true,
         validate: validatePositiveNumber,
       },
       initialStateTimeout: {
-        value: 5,
+        value: 2,
         required: true,
         validate: validatePositiveNumber,
       },
       pingTimeout: {
-        value: 15,
+        value: 3,
         required: true,
         validate: validatePositiveNumber,
       },
@@ -86,9 +117,55 @@
       return this.name || "LSH Logic";
     },
     oneditprepare: function () {
+      const toggleRow = (inputSelector, rowSelector, isEnabled) => {
+        const $row = $(rowSelector);
+        const $input = $(inputSelector);
+        $row.toggle(isEnabled);
+        $input.prop("disabled", !isEnabled);
+      };
+
+      const refreshConditionalFields = () => {
+        const haEnabled =
+          $("#node-input-haDiscovery").prop("checked") === true ||
+          $("#node-input-haDiscovery").val() === "true";
+        toggleRow("#node-input-haDiscoveryPrefix", "#node-row-haDiscoveryPrefix", haEnabled);
+
+        const exposeStateEnabled = $("#node-input-exposeStateContext").val() !== "none";
+        toggleRow("#node-input-exposeStateKey", "#node-row-exposeStateKey", exposeStateEnabled);
+
+        const exportTopicsEnabled = $("#node-input-exportTopics").val() !== "none";
+        toggleRow("#node-input-exportTopicsKey", "#node-row-exportTopicsKey", exportTopicsEnabled);
+
+        const exposeConfigEnabled = $("#node-input-exposeConfigContext").val() !== "none";
+        toggleRow("#node-input-exposeConfigKey", "#node-row-exposeConfigKey", exposeConfigEnabled);
+
+        const msgpackEnabled = $("#node-input-protocol").val() === "msgpack";
+        $("#node-row-protocol-msgpack-tip").toggle(msgpackEnabled);
+      };
+
       $("#node-input-haDiscovery").on("change", () => {
+        refreshConditionalFields();
         $("#node-input-haDiscoveryPrefix").trigger("change");
       });
+
+      $("#node-input-exposeStateContext").on("change", () => {
+        refreshConditionalFields();
+        $("#node-input-exposeStateKey").trigger("change");
+      });
+
+      $("#node-input-exportTopics").on("change", () => {
+        refreshConditionalFields();
+        $("#node-input-exportTopicsKey").trigger("change");
+      });
+
+      $("#node-input-exposeConfigContext").on("change", () => {
+        refreshConditionalFields();
+        $("#node-input-exposeConfigKey").trigger("change");
+      });
+
+      $("#node-input-protocol").on("change", refreshConditionalFields);
+
+      refreshConditionalFields();
     },
     inputLabels: "MQTT Messages",
     outputLabels: ["LSH Commands", "Other Actor Commands", "Alerts", "Configuration", "Debug"],
@@ -118,6 +195,32 @@
       margin-right: 10px;
       color: #999;
     }
+    .lsh-config-subtitle {
+      margin: 10px 0 8px;
+      color: #555;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .lsh-form-tip {
+      display: block;
+      box-sizing: border-box;
+      margin-top: 5px;
+      margin-left: 110px;
+      max-width: calc(100% - 110px);
+      color: #666;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    #node-row-protocol-msgpack-tip .lsh-form-tip {
+      margin-left: 0;
+      max-width: 100%;
+      padding-left: 110px;
+    }
   </style>
 
   <div class="form-row">
@@ -132,17 +235,20 @@
     <div class="form-row">
       <label for="node-input-homieBasePath">Homie Base Path</label>
       <input type="text" id="node-input-homieBasePath" placeholder="e.g., homie/" />
-      <span class="form-tip">Base path for Homie device state topics. Must end with a '/'.</span>
+      <span class="lsh-form-tip">Base path for Homie topics. Must end with a '/'.</span>
     </div>
     <div class="form-row">
       <label for="node-input-lshBasePath">LSH Base Path</label>
       <input type="text" id="node-input-lshBasePath" placeholder="e.g., LSH/" />
-      <span class="form-tip">Base path for LSH device topics. Must end with a '/'.</span>
+      <span class="lsh-form-tip">Base path for LSH topics. Must end with a '/'.</span>
     </div>
     <div class="form-row">
       <label for="node-input-serviceTopic">Service Topic</label>
       <input type="text" id="node-input-serviceTopic" placeholder="e.g., LSH/Node-RED/SRV" />
-      <span class="form-tip">Broadcast topic for global commands (e.g., ping).</span>
+      <span class="lsh-form-tip"
+        >Hop-local bridge service topic used for <code>PING</code> and startup
+        <code>BOOT</code>.</span
+      >
     </div>
 
     <div class="form-row">
@@ -151,7 +257,13 @@
         <option value="json">JSON</option>
         <option value="msgpack">MsgPack</option>
       </select>
-      <span class="form-tip"> Payload format for commands sent to LSH devices. </span>
+      <span class="lsh-form-tip">Payload format for commands sent to LSH devices.</span>
+    </div>
+    <div class="form-row" id="node-row-protocol-msgpack-tip" style="display: none;">
+      <span class="lsh-form-tip"
+        >When using MsgPack, the upstream <code>mqtt-in</code> node should output a
+        <strong>Buffer</strong>, not a parsed string.</span
+      >
     </div>
   </div>
 
@@ -164,46 +276,82 @@
         id="node-input-systemConfigPath"
         placeholder="configs/system-config.json"
       />
-      <span class="form-tip"
-        >Path to the main JSON config, relative to your Node-RED user directory.</span
+      <span class="lsh-form-tip"
+        >Path to <code>system-config.json</code>, relative to the Node-RED user directory.</span
       >
     </div>
   </div>
 
   <div class="lsh-config-section">
     <div class="lsh-config-section-title"><i class="fa fa-clock-o"></i> Timing Settings</div>
+    <div class="lsh-config-subtitle">Click Protocol</div>
     <div class="form-row">
-      <label for="node-input-clickTimeout">Click Ack Timeout (s)</label>
-      <input type="number" id="node-input-clickTimeout" style="width: 80px;" />
-      <span class="form-tip">Seconds to wait for a network click confirmation.</span>
-    </div>
-    <div class="form-row">
-      <label for="node-input-clickCleanupInterval">Click Cleanup (s)</label>
-      <input type="number" id="node-input-clickCleanupInterval" style="width: 80px;" />
-      <span class="form-tip">How often to remove expired, unconfirmed clicks.</span>
-    </div>
-    <div class="form-row">
-      <label for="node-input-watchdogInterval">Watchdog Interval (s)</label>
-      <input type="number" id="node-input-watchdogInterval" style="width: 80px;" />
-      <span class="form-tip">Frequency of periodic device health checks.</span>
-    </div>
-    <div class="form-row">
-      <label for="node-input-interrogateThreshold">Ping Threshold (s)</label>
-      <input type="number" id="node-input-interrogateThreshold" style="width: 80px;" />
-      <span class="form-tip">Seconds of device silence before sending a check-up ping.</span>
-    </div>
-    <div class="form-row">
-      <label for="node-input-initialStateTimeout">Initial Check Delay (s)</label>
-      <input type="number" id="node-input-initialStateTimeout" style="width: 80px;" />
-      <span class="form-tip"
-        >Seconds to wait after config load before actively checking for missing devices.</span
+      <label for="node-input-clickTimeout">Click Confirm Timeout (s)</label>
+      <input type="number" id="node-input-clickTimeout" style="width: 80px;" min="0.1" step="0.1" />
+      <span class="lsh-form-tip"
+        >Hard timeout for the pending request → confirm phase. Keep it close to the controller
+        timeout.</span
       >
     </div>
     <div class="form-row">
+      <label for="node-input-clickCleanupInterval">Click Cleanup (s)</label>
+      <input
+        type="number"
+        id="node-input-clickCleanupInterval"
+        style="width: 80px;"
+        min="0.1"
+        step="0.1"
+      />
+      <span class="lsh-form-tip"
+        >Periodic sweep for stale click slots. Late confirmations are still rejected
+        immediately.</span
+      >
+    </div>
+
+    <div class="lsh-config-subtitle">Startup & Recovery</div>
+    <div class="form-row">
+      <label for="node-input-initialStateTimeout">Initial Replay Window (s)</label>
+      <input
+        type="number"
+        id="node-input-initialStateTimeout"
+        style="width: 80px;"
+        min="0.1"
+        step="0.1"
+      />
+      <span class="lsh-form-tip"
+        >Wait only if startup <code>BOOT</code> is needed. If all devices already have
+        <code>conf</code> and <code>state</code>, verification starts immediately.</span
+      >
+    </div>
+
+    <div class="lsh-config-subtitle">Watchdog</div>
+    <div class="form-row">
+      <label for="node-input-watchdogInterval">Watchdog Interval (s)</label>
+      <input
+        type="number"
+        id="node-input-watchdogInterval"
+        style="width: 80px;"
+        min="0.1"
+        step="0.1"
+      />
+      <span class="lsh-form-tip">Frequency of periodic hop-local device health checks.</span>
+    </div>
+    <div class="form-row">
+      <label for="node-input-interrogateThreshold">Ping Threshold (s)</label>
+      <input
+        type="number"
+        id="node-input-interrogateThreshold"
+        style="width: 80px;"
+        min="0.1"
+        step="0.1"
+      />
+      <span class="lsh-form-tip">Seconds of silence before sending a ping.</span>
+    </div>
+    <div class="form-row">
       <label for="node-input-pingTimeout">Ping Timeout (s)</label>
-      <input type="number" id="node-input-pingTimeout" style="width: 80px;" />
-      <span class="form-tip"
-        >Seconds to wait for a ping response before marking a device as 'stale'.</span
+      <input type="number" id="node-input-pingTimeout" style="width: 80px;" min="0.1" step="0.1" />
+      <span class="lsh-form-tip"
+        >Seconds to wait for a ping response before marking a device as stale.</span
       >
     </div>
   </div>
@@ -219,15 +367,14 @@
         id="node-input-haDiscovery"
         style="display: inline-block; width: auto; vertical-align: top;"
       />
-      <div class="form-tip" style="margin-top: 5px;">
-        Automatically generate Home Assistant configuration for all Homie devices found under the
-        configured base path.
+      <div class="lsh-form-tip" style="margin-top: 5px;">
+        Generate Home Assistant discovery config for Homie devices under the configured base path.
       </div>
     </div>
-    <div class="form-row">
+    <div class="form-row" id="node-row-haDiscoveryPrefix">
       <label for="node-input-haDiscoveryPrefix">Discovery Prefix</label>
       <input type="text" id="node-input-haDiscoveryPrefix" placeholder="homeassistant" />
-      <span class="form-tip">Required only when auto-discovery is enabled.</span>
+      <span class="lsh-form-tip">Required only when auto-discovery is enabled.</span>
     </div>
   </div>
 
@@ -243,9 +390,10 @@
           <option value="global">Global Context</option>
         </select>
       </div>
-      <div class="form-row">
+      <div class="form-row" id="node-row-exposeStateKey">
         <label for="node-input-exposeStateKey">With key</label>
         <input type="text" id="node-input-exposeStateKey" style="width: 70%;" />
+        <span class="lsh-form-tip">Required only when state export is enabled.</span>
       </div>
       <hr />
       <h4>Export MQTT Topics (Context)</h4>
@@ -257,9 +405,25 @@
           <option value="global">Global Context</option>
         </select>
       </div>
-      <div class="form-row">
+      <div class="form-row" id="node-row-exportTopicsKey">
         <label for="node-input-exportTopicsKey">With key</label>
         <input type="text" id="node-input-exportTopicsKey" style="width: 70%;" />
+        <span class="lsh-form-tip">Required only when topic export is enabled.</span>
+      </div>
+      <hr />
+      <h4>Export Effective Config</h4>
+      <div class="form-row">
+        <label for="node-input-exposeConfigContext">Store in</label>
+        <select id="node-input-exposeConfigContext" style="width: 70%;">
+          <option value="none">Nowhere (Disabled)</option>
+          <option value="flow">Flow Context</option>
+          <option value="global">Global Context</option>
+        </select>
+      </div>
+      <div class="form-row" id="node-row-exposeConfigKey">
+        <label for="node-input-exposeConfigKey">With key</label>
+        <input type="text" id="node-input-exposeConfigKey" style="width: 70%;" />
+        <span class="lsh-form-tip">Required only when config export is enabled.</span>
       </div>
       <hr />
       <h4>Read External Actor State</h4>
@@ -273,7 +437,7 @@
       <div class="form-row">
         <label for="node-input-otherDevicesPrefix">External State Prefix</label>
         <input type="text" id="node-input-otherDevicesPrefix" placeholder="e.g., other_devices" />
-        <span class="form-tip">Prefix for reading external actor states.</span>
+        <span class="lsh-form-tip">Prefix for reading external actor states.</span>
       </div>
     </div>
   </div>
@@ -309,8 +473,9 @@
     <li>
       <strong>Intelligent Watchdog:</strong> Actively monitors device health using a combination of
       passive (Homie <code>$state</code>) and active (LSH ping) checks. It uses a smart initial
-      verification process to quickly and accurately detect offline devices at startup, preventing
-      false alarms and alert spam.
+      verification process to quickly and accurately detect offline devices at startup. Retained
+      snapshots accelerate recovery, but live reachability still comes only from fresh Homie or LSH
+      traffic, preventing false alarms and alert spam.
     </li>
     <li>
       <strong>Dynamic Topic Management:</strong> Emits messages on a dedicated output to dynamically
@@ -383,11 +548,37 @@
     <dt>Timing Settings</dt>
     <dd>
       Allows you to fine-tune all system timeouts and intervals. The
-      <code>Initial Check Delay</code> is particularly important: it defines a "grace period" after
-      deployment for devices to report their online status via Homie, before the node actively pings
-      any that are missing.
+      <code>Initial Replay Window</code> is particularly important: it defines how long the node
+      waits only when the startup bridge-local <code>BOOT</code> replay is needed because at least
+      one configured device is still missing an authoritative <code>conf</code> or
+      <code>state</code> snapshot. If snapshots are already complete, the node skips the replay and
+      proceeds directly to targeted recovery requests and pings.
     </dd>
   </dl>
+
+  <h3>Startup Semantics</h3>
+  <p>
+    Startup intentionally separates <strong>snapshot availability</strong> from
+    <strong>device health</strong>.
+  </p>
+  <ul>
+    <li>
+      Retained <code>conf</code> and <code>state</code> are reused as the last known authoritative
+      topology/state snapshots.
+    </li>
+    <li>
+      Retained snapshots do <strong>not</strong> mark a device as connected, healthy, or freshly
+      reachable.
+    </li>
+    <li>
+      Current reachability only comes from live Homie <code>$state=ready</code>, live LSH traffic,
+      or a successful watchdog <code>PING</code> response.
+    </li>
+    <li>
+      If a device is offline during startup, it is recovered automatically later when it sends live
+      traffic again; the node will request only the missing snapshot pieces at that moment.
+    </li>
+  </ul>
 
   <h3>Best Practices</h3>
   <h4>Dynamic MQTT Subscriptions</h4>

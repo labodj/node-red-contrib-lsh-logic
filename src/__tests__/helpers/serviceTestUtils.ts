@@ -44,7 +44,7 @@ export const defaultServiceConfig: ServiceConfig = {
   serviceTopic: "LSH/Node-RED/SRV",
   protocol: "json",
   otherDevicesPrefix: "other_devices",
-  clickTimeout: 5,
+  clickTimeout: 2,
   interrogateThreshold: 3,
   pingTimeout: 5,
   haDiscovery: true,

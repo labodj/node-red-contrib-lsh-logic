@@ -36,22 +36,29 @@ type GoldenPayloads = {
 
 const NODE_RED_ROOT = resolve(__dirname, "../..");
 const WORKSPACE_ROOT = resolve(NODE_RED_ROOT, "..");
-const resolveWorkspaceRepo = (envVarName: string, candidates: string[]): string => {
-  const fromEnv = process.env[envVarName];
-  if (typeof fromEnv === "string" && fromEnv.trim().length > 0) {
-    return resolve(fromEnv.trim());
+const resolveWorkspaceRepo = (envVarNames: string[], candidates: string[]): string => {
+  for (const envVarName of envVarNames) {
+    const fromEnv = process.env[envVarName];
+    if (typeof fromEnv === "string" && fromEnv.trim().length > 0) {
+      return resolve(fromEnv.trim());
+    }
   }
 
   return candidates.find(existsSync) ?? candidates[0];
 };
 
-const CORE_WORKSPACE_ROOT = resolveWorkspaceRepo("LSH_CORE_ROOT", [
-  resolve(WORKSPACE_ROOT, "lsh-core"),
-]);
-const ESP_WORKSPACE_ROOT = resolveWorkspaceRepo("LSH_ESP_ROOT", [
-  resolve(WORKSPACE_ROOT, "lsh-esp"),
-  resolve(WORKSPACE_ROOT, "lsh-esp_bak"),
-]);
+const CORE_WORKSPACE_ROOT = resolveWorkspaceRepo(
+  ["LSH_CORE_ROOT"],
+  [resolve(WORKSPACE_ROOT, "lsh-core")],
+);
+const BRIDGE_WORKSPACE_ROOT = resolveWorkspaceRepo(
+  ["LSH_BRIDGE_ROOT", "LSH_ESP_ROOT"],
+  [
+    resolve(WORKSPACE_ROOT, "lsh-bridge"),
+    resolve(WORKSPACE_ROOT, "lsh-esp"),
+    resolve(WORKSPACE_ROOT, "lsh-esp_bak"),
+  ],
+);
 const SPEC_PATH = resolve(NODE_RED_ROOT, "vendor/lsh-protocol/shared/lsh_protocol.json");
 const GOLDEN_PATH = resolve(
   NODE_RED_ROOT,
@@ -62,16 +69,19 @@ const CORE_STATIC_PAYLOADS_PATH = resolve(
   CORE_WORKSPACE_ROOT,
   "src/communication/constants/static_payloads.hpp",
 );
-const ESP_PROTOCOL_PATH = resolve(ESP_WORKSPACE_ROOT, "src/constants/communicationprotocol.hpp");
-const ESP_STATIC_PAYLOADS_PATH = resolve(ESP_WORKSPACE_ROOT, "src/constants/payloads.hpp");
+const BRIDGE_PROTOCOL_PATH = resolve(
+  BRIDGE_WORKSPACE_ROOT,
+  "src/constants/communicationprotocol.hpp",
+);
+const BRIDGE_STATIC_PAYLOADS_PATH = resolve(BRIDGE_WORKSPACE_ROOT, "src/constants/payloads.hpp");
 
 const hasCrossRepoWorkspace = [
   SPEC_PATH,
   GOLDEN_PATH,
   CORE_PROTOCOL_PATH,
   CORE_STATIC_PAYLOADS_PATH,
-  ESP_PROTOCOL_PATH,
-  ESP_STATIC_PAYLOADS_PATH,
+  BRIDGE_PROTOCOL_PATH,
+  BRIDGE_STATIC_PAYLOADS_PATH,
 ].every(existsSync);
 
 const describeContract = hasCrossRepoWorkspace ? describe : describe.skip;
@@ -164,9 +174,9 @@ describeContract("LSH protocol contract", () => {
 
   it("keeps generated C++ protocol headers aligned with the shared spec", () => {
     const coreHeader = readFileSync(CORE_PROTOCOL_PATH, "utf8");
-    const espHeader = readFileSync(ESP_PROTOCOL_PATH, "utf8");
+    const bridgeHeader = readFileSync(BRIDGE_PROTOCOL_PATH, "utf8");
 
-    for (const header of [coreHeader, espHeader]) {
+    for (const header of [coreHeader, bridgeHeader]) {
       expect(header).toContain(`SPEC_REVISION = ${spec!.meta.specRevision}U`);
       expect(header).toContain(`WIRE_PROTOCOL_MAJOR = ${spec!.meta.wireProtocolMajor}U`);
 
@@ -187,7 +197,7 @@ describeContract("LSH protocol contract", () => {
   it("keeps generated static payload headers aligned with the shared spec", () => {
     const headersByTarget = {
       core: readFileSync(CORE_STATIC_PAYLOADS_PATH, "utf8"),
-      esp: readFileSync(ESP_STATIC_PAYLOADS_PATH, "utf8"),
+      esp: readFileSync(BRIDGE_STATIC_PAYLOADS_PATH, "utf8"),
     };
     const commandsByName = new Map(spec!.commands.map((command) => [command.name, command.value]));
 

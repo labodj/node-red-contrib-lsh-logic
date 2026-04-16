@@ -33,6 +33,7 @@ type NumericConfigKey =
   | "initialStateTimeout";
 
 const CONFIG_RELOAD_DEBOUNCE_MS = 200;
+const STARTUP_BOOT_DELAY_MS = 500;
 
 const normalizeRequiredString = (value: string, fieldName: string): string => {
   const normalized = value.trim();
@@ -75,12 +76,12 @@ const normalizeNodeConfig = (config: LshLogicNodeDef): LshLogicNodeDef => {
   };
 
   const numericFields: Record<NumericConfigKey, string> = {
-    clickTimeout: "Click Ack Timeout",
+    clickTimeout: "Click Confirm Timeout",
     clickCleanupInterval: "Click Cleanup",
     watchdogInterval: "Watchdog Interval",
     interrogateThreshold: "Ping Threshold",
     pingTimeout: "Ping Timeout",
-    initialStateTimeout: "Initial Check Delay",
+    initialStateTimeout: "Initial Replay Window",
   };
 
   for (const [key, label] of Object.entries(numericFields) as Array<[NumericConfigKey, string]>) {
@@ -108,6 +109,7 @@ export class LshLogicNode {
   private cleanupInterval: NodeJS.Timeout | null = null;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private warmupTimer: NodeJS.Timeout | null = null;
+  private startupBootTimer: NodeJS.Timeout | null = null;
   private initialVerificationTimer: NodeJS.Timeout | null = null;
   private configReloadTimer: NodeJS.Timeout | null = null;
   private isWarmingUp: boolean = false;
@@ -158,9 +160,6 @@ export class LshLogicNode {
 
       await this.loadSystemConfig(configPath, validateSystemConfig, true);
       this.setupFileWatcher(configPath, validateSystemConfig);
-
-      const startupResult = this.service.getStartupCommands();
-      await this.processServiceResult(startupResult);
 
       this.node.status({ fill: "green", shape: "dot", text: "Ready" });
       this.node.log("Node initialized and configuration loaded.");
@@ -337,8 +336,10 @@ export class LshLogicNode {
   ): Promise<void> {
     // Clear any pending verification timers from a previous load.
     if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
+    if (this.startupBootTimer) clearTimeout(this.startupBootTimer);
     if (this.warmupTimer) clearTimeout(this.warmupTimer);
     this.initialVerificationTimer = null;
+    this.startupBootTimer = null;
     this.warmupTimer = null;
     this.isWarmingUp = false;
 
@@ -370,37 +371,94 @@ export class LshLogicNode {
   }
 
   /**
-   * Schedules the startup warm-up and a single best-effort verification pass.
-   * This smart startup sequence prevents false "device offline" alerts on deployment.
-   * 1. A "warm-up" period is started, during which "device recovered" alerts are suppressed.
-   * 2. After an initial delay (`initialStateTimeout`), it pings any devices that are
-   *    still unreachable.
-   * 3. The watchdog takes over after warm-up; there is intentionally no second startup phase.
+   * Schedules the startup warm-up and the startup recovery sequence.
+   * This startup path deliberately separates three concerns:
+   * 1. A short MQTT subscription settle window.
+   * 2. If any configured device is still missing an authoritative `details + state`
+   *    snapshot after that window, request one bridge-local BOOT replay.
+   * 3. After the optional replay window, run a best-effort verification pass that
+   *    repairs incomplete snapshots and pings only the devices that are still unreachable.
    */
   private scheduleInitialVerification(): void {
     const initialStateTimeoutMs = this.config.initialStateTimeout * 1000;
     const pingTimeoutMs = this.config.pingTimeout * 1000;
-    const totalWarmupTimeMs = initialStateTimeoutMs + pingTimeoutMs;
+    const totalWarmupTimeMs = STARTUP_BOOT_DELAY_MS + initialStateTimeoutMs + pingTimeoutMs;
 
-    this.node.log(`Starting warm-up period for ${totalWarmupTimeMs / 1000}s.`);
+    this.node.log(
+      `Starting warm-up period for up to ${this.formatDurationSeconds(totalWarmupTimeMs)}s (subscription settle ${this.formatDurationSeconds(STARTUP_BOOT_DELAY_MS)}s + optional replay window ${this.formatDurationSeconds(initialStateTimeoutMs)}s + ping timeout ${this.formatDurationSeconds(pingTimeoutMs)}s).`,
+    );
+    this.startWarmup(totalWarmupTimeMs);
+
+    this.startupBootTimer = setTimeout(() => {
+      void this.runStartupSequence(initialStateTimeoutMs, pingTimeoutMs);
+    }, STARTUP_BOOT_DELAY_MS);
+  }
+
+  private formatDurationSeconds(durationMs: number): string {
+    const seconds = durationMs / 1000;
+    return Number.isInteger(seconds) ? seconds.toFixed(0) : seconds.toFixed(1);
+  }
+
+  private startWarmup(durationMs: number): void {
+    if (this.warmupTimer) {
+      clearTimeout(this.warmupTimer);
+    }
+
     this.isWarmingUp = true;
-
     this.warmupTimer = setTimeout(() => {
       this.isWarmingUp = false;
       this.node.log("Warm-up period finished. Node is now fully operational.");
       this.warmupTimer = null;
-    }, totalWarmupTimeMs);
+    }, durationMs);
+  }
 
-    // This pattern avoids a 'no-misused-promises' error for async setTimeout callbacks.
-    const initialVerification = async () => {
-      this.node.log("Running initial device state verification: pinging unreachable devices...");
-      const result = this.service.verifyInitialDeviceStates();
-      await this.processServiceResult(result);
-      this.initialVerificationTimer = null;
-    };
+  private scheduleInitialVerificationFromBoot(initialStateTimeoutMs: number): void {
+    if (this.initialVerificationTimer) {
+      clearTimeout(this.initialVerificationTimer);
+    }
+
     this.initialVerificationTimer = setTimeout(() => {
-      void initialVerification();
+      void this.runInitialVerification();
     }, initialStateTimeoutMs);
+  }
+
+  private async runStartupSequence(
+    initialStateTimeoutMs: number,
+    pingTimeoutMs: number,
+  ): Promise<void> {
+    if (this.startupBootTimer) {
+      clearTimeout(this.startupBootTimer);
+      this.startupBootTimer = null;
+    }
+
+    if (!this.service.needsStartupBootReplay()) {
+      this.node.log(
+        "Skipping startup bridge-local BOOT resync because all configured devices already have authoritative details and state snapshots.",
+      );
+      this.startWarmup(pingTimeoutMs);
+      await this.runInitialVerification();
+      return;
+    }
+
+    await this.runStartupBootResync(
+      "after MQTT subscription settle because one or more configured devices are missing authoritative snapshots",
+    );
+    this.scheduleInitialVerificationFromBoot(initialStateTimeoutMs);
+  }
+
+  private async runStartupBootResync(reason: string): Promise<void> {
+    this.node.log(`Requesting startup bridge-local BOOT resync ${reason}.`);
+    const startupResult = this.service.getStartupCommands();
+    await this.processServiceResult(startupResult);
+  }
+
+  private async runInitialVerification(): Promise<void> {
+    this.initialVerificationTimer = null;
+    this.node.log(
+      "Running initial device state verification: repairing incomplete snapshots and pinging unreachable devices...",
+    );
+    const result = this.service.verifyInitialDeviceStates();
+    await this.processServiceResult(result);
   }
 
   /**
@@ -491,6 +549,7 @@ export class LshLogicNode {
   public async _cleanupResources(): Promise<void> {
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
+    if (this.startupBootTimer) clearTimeout(this.startupBootTimer);
     if (this.warmupTimer) clearTimeout(this.warmupTimer);
     if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
     if (this.configReloadTimer) clearTimeout(this.configReloadTimer);

@@ -17,7 +17,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     jest.restoreAllMocks();
   });
 
-  it("should request full state and emit a recovery alert on Homie ready", () => {
+  it("should request the missing snapshot data and emit a recovery alert on Homie ready", () => {
     const { sendHomieState } = createLoadedServiceHarness();
 
     const result = sendHomieState("actor1", "ready");
@@ -30,6 +30,20 @@ describe("LshLogicService - Watchdog & Health", () => {
       { p: LshProtocol.REQUEST_STATE },
     ]);
     expect(getAlertPayload(result).message).toContain("back online");
+  });
+
+  it("should request only state on Homie ready when details are already known", () => {
+    const { sendDeviceDetails, sendHomieState } = createLoadedServiceHarness();
+    sendDeviceDetails("actor1", { a: [1, 2] }, { retained: true });
+
+    const result = sendHomieState("actor1", "ready");
+    const messages = getOutputMessages(result, Output.Lsh);
+    const payloads = messages.map((message) => message.payload as { p: number });
+
+    expect(payloads).toEqual([{ p: LshProtocol.REQUEST_STATE }]);
+    expect(result.logs).toContain(
+      "Device 'actor1' is online. Requesting the missing authoritative snapshot data.",
+    );
   });
 
   it("should emit an unhealthy alert on Homie lost", () => {
@@ -253,7 +267,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     expect(result.logs).toContain("Device 'dev1' is now responsive.");
     expect(result.logs).toContain("Device 'dev1' is healthy again after ping response.");
     expect(result.logs).toContain(
-      "Device 'dev1' is missing a complete device snapshot. Requesting details and state.",
+      "Device 'dev1' is missing device details. Requesting details and state.",
     );
     expect(getAlertPayload(result).status).toBe("healthy");
     expect(service.getDeviceRegistry().dev1.connected).toBe(true);
@@ -264,7 +278,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     ]);
   });
 
-  it("should request a full refresh when a ping response arrives after details but before state", () => {
+  it("should request only state when a ping response arrives after details but before state", () => {
     const { sendDeviceDetails, sendMisc, service } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
@@ -274,10 +288,9 @@ describe("LshLogicService - Watchdog & Health", () => {
 
     expect(service.getDeviceRegistry().dev1.connected).toBe(true);
     expect(result.logs).toContain(
-      "Device 'dev1' is missing a complete device snapshot. Requesting details and state.",
+      "Device 'dev1' is missing an authoritative actuator state. Requesting state.",
     );
     expect(getOutputMessages(result, Output.Lsh).map((message) => message.payload)).toEqual([
-      { p: LshProtocol.REQUEST_DETAILS },
       { p: LshProtocol.REQUEST_STATE },
     ]);
   });

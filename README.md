@@ -18,8 +18,8 @@ The original installation behind it uses Controllino controllers plus ESP32 brid
 
 - **Shared LSH Protocol Support**: Uses the generated contract vendored from `lsh-protocol`, keeping command IDs, compact keys and examples aligned with the firmware repositories.
 - **Robust Health Monitoring**: Features a multi-stage intelligent Watchdog that detects stale or offline devices without generating false positives during startup or temporary network glitches.
-- **Robust Cold Recovery**: If Node-RED restarts and retained MQTT state is incomplete, the node actively pings any device that is still unreachable. Snapshot recovery stays best-effort and actions fail fast if a required fresh state is still missing.
-- **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when target devices are reachable and currently healthy.
+- **Robust Cold Recovery**: If Node-RED restarts, the node first reuses retained `conf`/`state` snapshots when they are already complete. Only when at least one configured device is missing an authoritative snapshot does it request a single bridge-local `BOOT` replay, then repairs missing snapshots and pings any device that is still unreachable.
+- **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when target devices are reachable and currently healthy. Pending clicks expire on a hard timeout; a late confirmation is rejected even if a later cleanup sweep has not run yet.
 - **Homie & HA Discovery**: Fully compliant with the [Homie Convention](https://homieiot.github.io/) for state tracking and automatically generates Home Assistant Auto-Discovery payloads for seamless integration.
 - **Config-Driven HA Entity Mapping**: Optionally remap Homie actuator nodes to Home Assistant `light`, `switch`, or `fan` entities and assign friendly names directly from `system-config.json`.
 - **High Performance**: Optimized message routing using direct string parsing and efficient internal state management.
@@ -51,7 +51,7 @@ This node acts as the central orchestrator for your protocol-compatible smart ho
 
 The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
 
-At startup the node uses retained LSH snapshots when available, but it does not trust retained Homie `$state` alone as proof of current reachability: that must come from a live Homie transition or live LSH traffic. Any device still unreachable is pinged during initial verification, and a ping response from a device that is still missing `conf` or `state` automatically triggers a full `REQUEST_DETAILS` + `REQUEST_STATE` refresh. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
+At startup the node uses retained LSH snapshots when available, but it does not trust retained Homie `$state` alone as proof of current reachability: that must come from a live Homie transition or live LSH traffic. After a short subscription-settle window, the node checks whether every configured device already has an authoritative `conf + state` snapshot. If yes, it skips the startup `BOOT` entirely. If not, it requests a single bridge-local `BOOT` replay, waits for the replay window, and then runs an active verification pass. During that verification, reachable devices receive only the missing snapshot requests, while still-unreachable devices are pinged directly. A later live `ready`, `conf`, `state`, `misc`, or `PING` response automatically recovers devices that were offline during startup. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
 
 The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
 
@@ -61,6 +61,7 @@ Operational simplifications:
 - Reloading `system-config.json` always clears pending network click transactions. In-flight distributed clicks are intentionally failed rather than preserved across a config change.
 - Runtime config reloads do not restart the startup warm-up/verification cycle. Recovery after reload is best-effort through normal live traffic, retained MQTT data and later watchdog pings.
 - Distributed long-click logic requires an authoritative actuator snapshot for every targeted LSH device. If a target is reachable but still missing fresh state, the click fails fast and is retried naturally on the next user action.
+- Retained `conf` and `state` snapshots are treated as the last known authoritative topology/state, not as proof that the device is currently alive. Device health and reachability come only from live Homie transitions, live LSH traffic and watchdog ping responses.
 - Extremely narrow timing races during startup or config reload are handled in best-effort mode rather than with complex transaction recovery logic.
 
 To verify that the Node-RED generated protocol files match the vendored source of truth:
@@ -98,7 +99,7 @@ The node has five distinct outputs for clear and organized flows:
 - **MQTT Paths**: Base topics for Homie and LSH protocols. Both must end with `/`.
 - **System Config Path**: Location of your `system-config.json` (absolute or relative to Node-RED user dir).
 - **Protocol**: Choose between `JSON` (human readable) and `MsgPack` (binary, efficient).
-- **Timings**: Customize Watchdog intervals, Ping timeouts, and Click expiration times.
+- **Timings**: Customize Watchdog intervals, Ping timeouts, the hard pending-click timeout, periodic click cleanup, and the optional startup replay window.
 - **Home Assistant**: Enable/Disable auto-discovery generation.
 
 ### `system-config.json`
@@ -201,8 +202,8 @@ Protocol maintenance rules:
 
 Cross-repo contract tests:
 
-- The Jest contract test can validate this package against sibling `lsh-core` and `lsh-esp` repositories when they are available in the same workspace.
-- If your workspace uses different locations, set `LSH_CORE_ROOT` and `LSH_ESP_ROOT` before running `npm test`.
+- The Jest contract test can validate this package against sibling `lsh-core` and `lsh-bridge` repositories when they are available in the same workspace.
+- If your workspace uses different locations, set `LSH_CORE_ROOT` and `LSH_BRIDGE_ROOT` before running `npm test`. `LSH_ESP_ROOT` is still accepted as a legacy fallback for older workspaces.
 - These paths are maintainer-only test inputs; they are not required for normal package runtime.
 
 ## Contributing

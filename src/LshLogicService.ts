@@ -16,6 +16,7 @@ import type {
   Actor,
   AlertPayload,
   AnyMiscTopicPayload,
+  BootPayload,
   DeviceActuatorsStatePayload,
   DeviceDetailsPayload,
   DeviceEntry,
@@ -170,11 +171,12 @@ export class LshLogicService {
   }
 
   /**
-   * Actively verifies the state of all configured devices after an initial grace period.
-   * This method is intentionally simple: it only checks live reachability.
-   * Snapshot completeness is recovered on a best-effort basis afterwards and
-   * enforced only where an action truly requires it.
-   * @returns A ServiceResult containing targeted ping commands.
+   * Actively verifies the state of all configured devices after the startup
+   * replay window. The check prefers the lightest recovery step that can close
+   * each device gap:
+   * - reachable but incomplete devices get only the missing snapshot requests
+   * - still-unreachable devices get direct pings
+   * @returns A ServiceResult describing the startup recovery work.
    */
   public verifyInitialDeviceStates(): ServiceResult {
     const result = this.createEmptyResult();
@@ -184,21 +186,45 @@ export class LshLogicService {
     }
 
     const configuredDevices = this.getConfiguredDeviceNames() as string[];
-    const devicesNeedingVerification: string[] = [];
+    const unreachableDevices: string[] = [];
+    const recoveryCommands: NodeMessage[] = [];
 
     for (const deviceName of configuredDevices) {
       const deviceState = this.deviceManager.getDevice(deviceName);
-      if (!deviceState || !deviceState.connected) {
-        devicesNeedingVerification.push(deviceName);
+      if (!deviceState) {
+        unreachableDevices.push(deviceName);
+        continue;
       }
+
+      if (!deviceState.connected) {
+        unreachableDevices.push(deviceName);
+        continue;
+      }
+
+      recoveryCommands.push(...this._buildSnapshotRecoveryCommands(deviceName));
     }
 
-    if (devicesNeedingVerification.length > 0) {
+    if (recoveryCommands.length > 0) {
+      const devicesNeedingRepair = new Set(
+        recoveryCommands.map((command) => {
+          const topic = String(command.topic);
+          const baseLen = this.lshBasePath.length;
+          const slashIndex = topic.indexOf("/", baseLen);
+          return slashIndex === -1 ? topic : topic.substring(baseLen, slashIndex);
+        }),
+      );
       result.logs.push(
-        `Initial state verification: ${devicesNeedingVerification.length} device(s) are still unreachable. Pinging them directly.`,
+        `Initial state verification: ${devicesNeedingRepair.size} reachable device(s) still need authoritative snapshot recovery.`,
+      );
+      result.messages[Output.Lsh] = recoveryCommands;
+    }
+
+    if (unreachableDevices.length > 0) {
+      result.logs.push(
+        `Initial state verification: ${unreachableDevices.length} device(s) are still unreachable. Pinging them directly.`,
       );
 
-      const pingCommands: NodeMessage[] = devicesNeedingVerification.map((deviceName) =>
+      const pingCommands: NodeMessage[] = unreachableDevices.map((deviceName) =>
         this._createLshCommand(
           `${this.lshBasePath}${deviceName}/IN`,
           { p: LshProtocol.PING } as PingPayload,
@@ -206,12 +232,39 @@ export class LshLogicService {
         ),
       );
 
-      result.messages[Output.Lsh] = pingCommands;
-    } else {
-      result.logs.push("Initial state verification: all configured devices are reachable.");
+      if (result.messages[Output.Lsh]) {
+        const existingMessages = Array.isArray(result.messages[Output.Lsh])
+          ? result.messages[Output.Lsh]
+          : [result.messages[Output.Lsh]];
+        result.messages[Output.Lsh] = [...existingMessages, ...pingCommands];
+      } else {
+        result.messages[Output.Lsh] = pingCommands;
+      }
+    }
+
+    if (recoveryCommands.length === 0 && unreachableDevices.length === 0) {
+      result.logs.push(
+        "Initial state verification: all configured devices are reachable and already have authoritative snapshots.",
+      );
     }
 
     return result;
+  }
+
+  /**
+   * Returns whether startup should request a bridge-local BOOT replay because
+   * at least one configured device still lacks a complete retained/live
+   * `details + state` snapshot in the registry.
+   */
+  public needsStartupBootReplay(): boolean {
+    if (!this.systemConfig || this.systemConfig.devices.length === 0) {
+      return false;
+    }
+
+    return this.systemConfig.devices.some(({ name }) => {
+      const device = this.deviceManager.getDevice(name);
+      return !device || device.lastDetailsTime === 0 || device.lastStateTime === 0;
+    });
   }
 
   /**
@@ -277,8 +330,9 @@ export class LshLogicService {
   }
 
   /**
-   * Generates a ServiceResult with commands to be sent on node startup.
-   * This is now a passive action, waiting for Homie state messages.
+   * Generates the broadcast bridge-local BOOT resync command used during
+   * startup when one or more configured devices still lack an authoritative
+   * `details + state` snapshot.
    * @returns A ServiceResult containing the startup commands.
    */
   public getStartupCommands(): ServiceResult {
@@ -287,7 +341,12 @@ export class LshLogicService {
       result.warnings.push("Cannot generate startup commands: config not loaded.");
       return result;
     }
-    result.logs.push("Node started. Passively waiting for device Homie state announcements.");
+    result.logs.push("Requesting a single bridge-local BOOT resync from all devices.");
+    result.messages[Output.Lsh] = this._createLshCommand(
+      this.serviceTopic,
+      { p: LshProtocol.BOOT } as BootPayload,
+      1,
+    );
     return result;
   }
 
@@ -319,23 +378,69 @@ export class LshLogicService {
     };
   }
 
+  private mergeServiceResult(target: ServiceResult, source: ServiceResult): void {
+    Object.assign(target.messages, source.messages);
+    target.logs.push(...source.logs);
+    target.warnings.push(...source.warnings);
+    target.errors.push(...source.errors);
+    target.stateChanged = target.stateChanged || source.stateChanged;
+    if (source.staggerLshMessages) {
+      target.staggerLshMessages = true;
+    }
+  }
+
+  private recordLiveDeviceReachability(
+    result: ServiceResult,
+    deviceName: string,
+    trafficDescription: string,
+  ): void {
+    const { stateChanged, becameHealthy } = this.deviceManager.recordReachableActivity(deviceName);
+    if (!stateChanged) {
+      return;
+    }
+
+    result.stateChanged = true;
+    result.logs.push(`Device '${deviceName}' sent live ${trafficDescription} and is reachable.`);
+
+    if (becameHealthy) {
+      const alertInfo = [
+        {
+          name: deviceName,
+          reason: `Device sent live ${trafficDescription} and is now healthy.`,
+        },
+      ];
+      Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
+    }
+  }
+
   /**
-   * Builds the best-effort recovery commands required to refresh a device snapshot.
-   * To keep recovery logic simple, any missing piece triggers a full
-   * `REQUEST_DETAILS` + `REQUEST_STATE` cycle.
+   * Builds the smallest best-effort recovery command set required to refresh a
+   * device snapshot.
+   * If details are missing, request both details and state. If only the
+   * authoritative state is missing, request only state.
    * @internal
    */
   private _buildSnapshotRecoveryCommands(deviceName: string): NodeMessage[] {
     const device = this.deviceManager.getDevice(deviceName);
     const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
 
-    if (!device || device.lastDetailsTime === 0 || device.lastStateTime === 0) {
+    if (!device || device.lastDetailsTime === 0) {
       return [
         this._createLshCommand(
           commandTopic,
           { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
           1,
         ),
+        this._createLshCommand(
+          commandTopic,
+          { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
+          1,
+        ),
+      ];
+    }
+
+    if (device.lastStateTime === 0) {
+      return [
         this._createLshCommand(
           commandTopic,
           { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
@@ -553,20 +658,38 @@ export class LshLogicService {
   ): ServiceResult {
     const result = this.createEmptyResult();
     const existingDevice = this.deviceManager.getDevice(deviceName);
+    const homieState = String(payload) as HomieLifecycleState;
 
     // Retained Homie state alone is not enough to bootstrap reachability for a device
     // we have never seen live in this Node-RED session. Once a device has produced live
-    // traffic, keep honoring later retained Homie transitions so runtime lost/recovery
-    // sequences still propagate through the health logic.
+    // traffic, retained `$state` frames are still treated as metadata only: broker
+    // reconnects can replay stale retained lifecycle states that should not flip the
+    // live reachability model used by network-click validation.
     if (isRetained && (!existingDevice || existingDevice.lastSeenTime === 0)) {
       return result;
     }
 
-    const homieState = String(payload) as HomieLifecycleState;
+    if (isRetained) {
+      const { stateChanged: lifecycleChanged } = this.deviceManager.recordHomieLifecycleState(
+        deviceName,
+        homieState,
+        false,
+      );
+      if (!lifecycleChanged) {
+        return result;
+      }
+
+      result.stateChanged = true;
+      result.logs.push(
+        `Device '${deviceName}' reported retained Homie lifecycle state '${homieState}'. Ignoring it for reachability, alerts and resync.`,
+      );
+      return result;
+    }
+
     const { stateChanged: lifecycleChanged } = this.deviceManager.recordHomieLifecycleState(
       deviceName,
       homieState,
-      !isRetained,
+      true,
     );
 
     const { stateChanged, wasConnected, isConnected } = this.deviceManager.updateConnectionState(
@@ -613,22 +736,13 @@ export class LshLogicService {
         },
       ];
       Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
-      result.logs.push(
-        `Device '${deviceName}' is online. Requesting full state (details and actuators).`,
-      );
-      const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
-      result.messages[Output.Lsh] = [
-        this._createLshCommand(
-          commandTopic,
-          { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
-          1,
-        ),
-        this._createLshCommand(
-          commandTopic,
-          { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
-          1,
-        ),
-      ];
+      const recoveryCommands = this._buildSnapshotRecoveryCommands(deviceName);
+      if (recoveryCommands.length > 0) {
+        result.logs.push(
+          `Device '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
+        );
+        result.messages[Output.Lsh] = recoveryCommands;
+      }
     }
     return result;
   }
@@ -784,14 +898,21 @@ export class LshLogicService {
     const result = this.createEmptyResult();
 
     switch (miscPayload.p) {
-      case LshProtocol.NETWORK_CLICK_REQUEST:
-        return this._processNewClickRequest(deviceName, miscPayload);
+      case LshProtocol.NETWORK_CLICK_REQUEST: {
+        this.recordLiveDeviceReachability(result, deviceName, "misc traffic");
+        this.mergeServiceResult(result, this._processNewClickRequest(deviceName, miscPayload));
+        return result;
+      }
 
-      case LshProtocol.NETWORK_CLICK_CONFIRM:
-        return this._processClickConfirmation(deviceName, miscPayload);
+      case LshProtocol.NETWORK_CLICK_CONFIRM: {
+        this.recordLiveDeviceReachability(result, deviceName, "misc traffic");
+        this.mergeServiceResult(result, this._processClickConfirmation(deviceName, miscPayload));
+        return result;
+      }
 
       case LshProtocol.PING:
         {
+          const device = this.deviceManager.getDevice(deviceName);
           const { stateChanged, becameHealthy } =
             this.deviceManager.recordReachableActivity(deviceName);
           const recoveryCommands = this._buildSnapshotRecoveryCommands(deviceName);
@@ -816,9 +937,15 @@ export class LshLogicService {
 
           if (recoveryCommands.length > 0) {
             result.messages[Output.Lsh] = recoveryCommands;
-            result.logs.push(
-              `Device '${deviceName}' is missing a complete device snapshot. Requesting details and state.`,
-            );
+            if (!device || device.lastDetailsTime === 0) {
+              result.logs.push(
+                `Device '${deviceName}' is missing device details. Requesting details and state.`,
+              );
+            } else {
+              result.logs.push(
+                `Device '${deviceName}' is missing an authoritative actuator state. Requesting state.`,
+              );
+            }
           }
         }
         break;

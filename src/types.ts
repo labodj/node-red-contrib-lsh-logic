@@ -62,7 +62,7 @@ export interface LshLogicNodeDef extends NodeDef {
   interrogateThreshold: number;
   /** Seconds to wait for a ping response before marking a device as 'stale'. */
   pingTimeout: number;
-  /** Seconds to wait for initial Homie states before running active verification. */
+  /** Seconds to wait for the startup BOOT replay before running active verification. */
   initialStateTimeout: number;
   /** Enable Home Assistant Auto-Discovery for Homie devices. */
   haDiscovery: boolean;
@@ -183,6 +183,11 @@ export interface NetworkClickRequestPayload {
 /** Payload: Ping. A ping message for health checks, sent via the 'misc' topic. */
 export interface PingPayload {
   p: LshProtocol.PING;
+}
+
+/** Payload: Boot. Requests a role-local resynchronization from the immediate peer. */
+export interface BootPayload {
+  p: LshProtocol.BOOT;
 }
 
 /**

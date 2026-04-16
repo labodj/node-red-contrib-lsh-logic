@@ -1,7 +1,7 @@
 import * as utils from "../utils";
 import { LshLogicService } from "../LshLogicService";
 import type { LshLogicNode } from "../lsh-logic";
-import { Output } from "../types";
+import { LshProtocol, Output } from "../types";
 import type { AlertPayload, DeviceState } from "../types";
 import type { MockNodeInstance } from "./helpers/nodeRedTestUtils";
 import { defaultNodeConfig, flushMicrotasks } from "./helpers/nodeRedTestUtils";
@@ -368,6 +368,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
   });
 
   it("should run the initial verification timer using the configured LSH base path", async () => {
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(true);
     const verifySpy = jest
       .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
       .mockReturnValue(
@@ -389,12 +390,14 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     });
     mockNodeInstance.send.mockClear();
 
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
     jest.advanceTimersByTime(2000);
     await flushMicrotasks(6);
 
     expect(verifySpy).toHaveBeenCalled();
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Running initial device state verification: pinging unreachable devices...",
+      "Running initial device state verification: repairing incomplete snapshots and pinging unreachable devices...",
     );
 
     jest.advanceTimersByTime(3000);
@@ -403,7 +406,95 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     expect(verifySpy).toHaveBeenCalledTimes(1);
   });
 
-  it("should finish warm-up without any second startup verification phase", async () => {
+  it("should finish warm-up after the standard startup window when no retry is needed", async () => {
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(true);
+    const verifySpy = jest
+      .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
+      .mockReturnValue(createServiceResult());
+    const startupSpy = jest.spyOn(LshLogicService.prototype, "getStartupCommands");
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      initialStateTimeout: 2,
+      pingTimeout: 3,
+    });
+
+    jest.advanceTimersByTime(2500);
+    await flushMicrotasks(6);
+    jest.advanceTimersByTime(3000);
+    await flushMicrotasks(6);
+
+    expect(verifySpy).toHaveBeenCalled();
+    expect(startupSpy).toHaveBeenCalledTimes(1);
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Warm-up period finished. Node is now fully operational.",
+    );
+  });
+
+  it("should emit MQTT configuration updates before the first startup BOOT", async () => {
+    await initializeNode();
+
+    const configurationCall = mockNodeInstance.send.mock.calls.find((call) => {
+      const outputs = call[0] as Array<unknown>;
+      return outputs[Output.Configuration] !== null;
+    });
+    expect(configurationCall).toBeDefined();
+
+    const bootCallBeforeDelay = mockNodeInstance.send.mock.calls.find((call) => {
+      const outputs = call[0] as Array<{ payload?: { p?: number } } | null>;
+      return outputs[Output.Lsh]?.payload?.p === LshProtocol.BOOT;
+    });
+    expect(bootCallBeforeDelay).toBeUndefined();
+
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+
+    const configurationCallIndex = mockNodeInstance.send.mock.calls.indexOf(configurationCall!);
+    const bootCallIndex = mockNodeInstance.send.mock.calls.findIndex((call) => {
+      const outputs = call[0] as Array<{ payload?: { p?: number } } | null>;
+      return outputs[Output.Lsh]?.payload?.p === LshProtocol.BOOT;
+    });
+
+    expect(bootCallIndex).toBeGreaterThan(configurationCallIndex);
+  });
+
+  it("should delay the startup BOOT until after the MQTT subscription settle window", async () => {
+    const startupSpy = jest.spyOn(LshLogicService.prototype, "getStartupCommands");
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(true);
+
+    await initializeNode();
+
+    expect(startupSpy).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(499);
+    await flushMicrotasks(6);
+    expect(startupSpy).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(1);
+    await flushMicrotasks(6);
+    expect(startupSpy).toHaveBeenCalledTimes(1);
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Requesting startup bridge-local BOOT resync after MQTT subscription settle because one or more configured devices are missing authoritative snapshots.",
+    );
+  });
+
+  it("should skip the startup BOOT replay when all configured devices already have details and state snapshots", async () => {
+    const startupSpy = jest.spyOn(LshLogicService.prototype, "getStartupCommands");
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(false);
+
+    await initializeNode();
+
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+
+    expect(startupSpy).not.toHaveBeenCalled();
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Skipping startup bridge-local BOOT resync because all configured devices already have authoritative details and state snapshots.",
+    );
+  });
+
+  it("should run the initial verification immediately after the settle window when startup BOOT is skipped", async () => {
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(false);
     const verifySpy = jest
       .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
       .mockReturnValue(createServiceResult());
@@ -414,15 +505,40 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
       pingTimeout: 3,
     });
 
-    jest.advanceTimersByTime(2000);
+    jest.advanceTimersByTime(499);
     await flushMicrotasks(6);
-    jest.advanceTimersByTime(3000);
-    await flushMicrotasks(6);
+    expect(verifySpy).not.toHaveBeenCalled();
 
-    expect(verifySpy).toHaveBeenCalled();
-    expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Warm-up period finished. Node is now fully operational.",
-    );
+    jest.advanceTimersByTime(1);
+    await flushMicrotasks(6);
+    expect(verifySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("should anchor the first startup verification window to the actual BOOT replay time", async () => {
+    const startupSpy = jest.spyOn(LshLogicService.prototype, "getStartupCommands");
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(true);
+    const verifySpy = jest
+      .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
+      .mockReturnValue(createServiceResult());
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      initialStateTimeout: 2,
+      pingTimeout: 3,
+    });
+
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+    expect(startupSpy).toHaveBeenCalledTimes(1);
+    expect(verifySpy).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(1999);
+    await flushMicrotasks(6);
+    expect(verifySpy).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(1);
+    await flushMicrotasks(6);
+    expect(verifySpy).toHaveBeenCalledTimes(1);
   });
 
   it("should run cleanup when the close handler is invoked", async () => {
