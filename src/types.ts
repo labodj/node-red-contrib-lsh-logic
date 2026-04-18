@@ -191,6 +191,25 @@ export interface BootPayload {
 }
 
 /**
+ * Payload: Bridge-local diagnostic published on a device `misc` topic.
+ * These events come from `lsh-bridge` itself, not from controller/device
+ * business logic, so the Node-RED runtime accepts them but does not treat
+ * them as click traffic or proof of current device reachability.
+ */
+export interface BridgeDiagnosticPayload {
+  /** Diagnostic kind emitted by the bridge runtime. */
+  bridge_diagnostic: string;
+  /** Optional duration for an unstable pending actuator batch. */
+  pending_ms?: number;
+  /** Optional mutation count for a dropped unstable actuator batch. */
+  mutation_count?: number;
+  /** Optional count of dropped device-topic commands caused by queue overflow. */
+  dropped_device_commands?: number;
+  /** Optional count of dropped service-topic commands caused by queue overflow. */
+  dropped_service_commands?: number;
+}
+
+/**
  * Defines the structure of the message payload sent to the 'OtherActors' output.
  */
 export interface OtherActorsCommandPayload {
@@ -208,7 +227,8 @@ export interface OtherActorsCommandPayload {
 export type AnyMiscTopicPayload =
   | NetworkClickRequestPayload
   | NetworkClickConfirmPayload
-  | PingPayload;
+  | PingPayload
+  | BridgeDiagnosticPayload;
 
 // --------------------------------------------------------------------------
 // Node -> Client Payloads (Controllino -> ESP)

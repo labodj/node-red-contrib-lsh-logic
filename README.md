@@ -62,6 +62,7 @@ Operational simplifications:
 - Runtime config reloads do not restart the startup warm-up/verification cycle. Recovery after reload is best-effort through normal live traffic, retained MQTT data and later watchdog pings.
 - Distributed long-click logic requires an authoritative actuator snapshot for every targeted LSH device. If a target is reachable but still missing fresh state, the click fails fast and is retried naturally on the next user action.
 - Retained `conf` and `state` snapshots are treated as the last known authoritative topology/state, not as proof that the device is currently alive. Device health and reachability come only from live Homie transitions, live LSH traffic and watchdog ping responses.
+- Bridge-local diagnostics published by `lsh-bridge` on `misc` are accepted as informational runtime events, but they do not count as click traffic or proof of current device reachability.
 - Extremely narrow timing races during startup or config reload are handled in best-effort mode rather than with complex transaction recovery logic.
 
 To verify that the Node-RED generated protocol files match the vendored source of truth:
@@ -77,7 +78,7 @@ The node accepts messages from an `mqtt-in` node. It processes:
 1.  **LSH Protocol Topics**:
     - `<lshBase>/<device>/conf`: Static configuration (actuators `a`, buttons `b`).
     - `<lshBase>/<device>/state`: Live actuator states (`s`).
-    - `<lshBase>/<device>/misc`: Events like Clicks and Pings.
+    - `<lshBase>/<device>/misc`: Events like Clicks, Pings, and bridge-local diagnostics.
 2.  **Homie Topics**:
     - `<homieBase>/<device>/$state`: Connectivity status (`ready`, `lost`).
     - Homie attributes (`$mac`, `$fw/version`, etc.) for HA Discovery.
@@ -203,7 +204,7 @@ Protocol maintenance rules:
 Cross-repo contract tests:
 
 - The Jest contract test can validate this package against sibling `lsh-core` and `lsh-bridge` repositories when they are available in the same workspace.
-- If your workspace uses different locations, set `LSH_CORE_ROOT` and `LSH_BRIDGE_ROOT` before running `npm test`. `LSH_ESP_ROOT` is still accepted as a legacy fallback for older workspaces.
+- If your workspace uses different locations, set `LSH_CORE_ROOT` and `LSH_BRIDGE_ROOT` before running `npm test`.
 - These paths are maintainer-only test inputs; they are not required for normal package runtime.
 
 ## Contributing

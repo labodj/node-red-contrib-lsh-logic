@@ -493,6 +493,11 @@
       <strong>Configuration</strong> output to an <code>mqtt-in</code> node to complete the setup.
     </dd>
   </dl>
+  <p>
+    Device <code>misc</code> topics may also carry bridge-local diagnostics emitted by
+    <code>lsh-bridge</code>. The node accepts those payloads as informational runtime events, but
+    it does not treat them as click traffic or as proof that the device is currently reachable.
+  </p>
 
   <h3>Outputs</h3>
   <ol style="margin-bottom: 20px;">

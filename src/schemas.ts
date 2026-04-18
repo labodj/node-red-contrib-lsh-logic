@@ -304,6 +304,45 @@ const pingPayloadSchema = {
 } as const;
 
 /**
+ * Schema for bridge-local diagnostics emitted by `lsh-bridge` on the `misc`
+ * topic.
+ * Keep this intentionally permissive: the diagnostic kind string is the
+ * stable contract, while extra numeric fields may grow over time without
+ * requiring a Node-RED package release first.
+ */
+const bridgeDiagnosticPayloadSchema = {
+  type: "object",
+  properties: {
+    bridge_diagnostic: {
+      ...nonEmptyStringSchema,
+      description: "Bridge-local diagnostic kind emitted on the misc topic.",
+    },
+    pending_ms: {
+      type: "integer",
+      minimum: 0,
+      description: "Optional pending batch duration for dropped actuator storms.",
+    },
+    mutation_count: {
+      type: "integer",
+      minimum: 0,
+      description: "Optional accepted mutation count for a dropped actuator storm.",
+    },
+    dropped_device_commands: {
+      type: "integer",
+      minimum: 0,
+      description: "Optional count of dropped device-topic commands.",
+    },
+    dropped_service_commands: {
+      type: "integer",
+      minimum: 0,
+      description: "Optional count of dropped service-topic commands.",
+    },
+  },
+  required: ["bridge_diagnostic"],
+  additionalProperties: true,
+} as const;
+
+/**
  * A "super-schema" that validates any valid 'misc' topic payload.
  * It uses a `oneOf` keyword to ensure the payload matches exactly one of the
  * valid misc schemas. This replaces the `discriminator` which required string values.
@@ -312,8 +351,12 @@ export const anyMiscTopicPayloadSchema = {
   $id: "AnyMiscTopicPayload",
   description: "Schema for any valid 'misc' topic payload.",
   type: "object",
-  oneOf: [networkClickRequestPayloadSchema, networkClickConfirmPayloadSchema, pingPayloadSchema],
-  required: ["p"],
+  oneOf: [
+    networkClickRequestPayloadSchema,
+    networkClickConfirmPayloadSchema,
+    pingPayloadSchema,
+    bridgeDiagnosticPayloadSchema,
+  ],
 };
 
 /** An interface describing the collection of all validation functions for the app. */

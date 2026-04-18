@@ -128,6 +128,16 @@ describe("schemas", () => {
     expect(isValid).toBe(true);
   });
 
+  it("accepts bridge-local diagnostic payloads on the misc topic", () => {
+    const isValid = validators.validateAnyMiscTopic({
+      bridge_diagnostic: "mqtt_queue_overflow",
+      dropped_device_commands: 2,
+      extra_future_field: true,
+    });
+
+    expect(isValid).toBe(true);
+  });
+
   it("rejects non-array containers for click button configuration", () => {
     const isValid = validators.validateSystemConfig({
       devices: [

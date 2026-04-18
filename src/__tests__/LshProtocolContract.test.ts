@@ -26,7 +26,7 @@ type ProtocolSpec = {
     command: string;
     cppName?: string;
     symbolName?: string;
-    targets: Array<"core" | "esp">;
+    targets: Array<"core" | "bridge">;
   }>;
 };
 
@@ -52,12 +52,8 @@ const CORE_WORKSPACE_ROOT = resolveWorkspaceRepo(
   [resolve(WORKSPACE_ROOT, "lsh-core")],
 );
 const BRIDGE_WORKSPACE_ROOT = resolveWorkspaceRepo(
-  ["LSH_BRIDGE_ROOT", "LSH_ESP_ROOT"],
-  [
-    resolve(WORKSPACE_ROOT, "lsh-bridge"),
-    resolve(WORKSPACE_ROOT, "lsh-esp"),
-    resolve(WORKSPACE_ROOT, "lsh-esp_bak"),
-  ],
+  ["LSH_BRIDGE_ROOT"],
+  [resolve(WORKSPACE_ROOT, "lsh-bridge")],
 );
 const SPEC_PATH = resolve(NODE_RED_ROOT, "vendor/lsh-protocol/shared/lsh_protocol.json");
 const GOLDEN_PATH = resolve(
@@ -71,7 +67,7 @@ const CORE_STATIC_PAYLOADS_PATH = resolve(
 );
 const BRIDGE_PROTOCOL_PATH = resolve(
   BRIDGE_WORKSPACE_ROOT,
-  "src/constants/communicationprotocol.hpp",
+  "src/constants/communication_protocol.hpp",
 );
 const BRIDGE_STATIC_PAYLOADS_PATH = resolve(BRIDGE_WORKSPACE_ROOT, "src/constants/payloads.hpp");
 
@@ -197,7 +193,7 @@ describeContract("LSH protocol contract", () => {
   it("keeps generated static payload headers aligned with the shared spec", () => {
     const headersByTarget = {
       core: readFileSync(CORE_STATIC_PAYLOADS_PATH, "utf8"),
-      esp: readFileSync(BRIDGE_STATIC_PAYLOADS_PATH, "utf8"),
+      bridge: readFileSync(BRIDGE_STATIC_PAYLOADS_PATH, "utf8"),
     };
     const commandsByName = new Map(spec!.commands.map((command) => [command.name, command.value]));
 
@@ -217,7 +213,7 @@ describeContract("LSH protocol contract", () => {
         );
       }
 
-      const unsupportedTargets = (["core", "esp"] as const).filter(
+      const unsupportedTargets = (["core", "bridge"] as const).filter(
         (candidate) => !payload.targets.includes(candidate),
       );
       for (const target of unsupportedTargets) {

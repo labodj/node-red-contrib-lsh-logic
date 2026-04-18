@@ -18,6 +18,7 @@ import type {
   AnyMiscTopicPayload,
   BootPayload,
   DeviceActuatorsStatePayload,
+  BridgeDiagnosticPayload,
   DeviceDetailsPayload,
   DeviceEntry,
   HomieLifecycleState,
@@ -70,6 +71,17 @@ function isDiagnosticOnlyHomieState(
   homieState: HomieLifecycleState,
 ): homieState is "init" | "sleeping" {
   return homieState === "init" || homieState === "sleeping";
+}
+
+function isBridgeDiagnosticPayload(
+  payload: AnyMiscTopicPayload,
+): payload is BridgeDiagnosticPayload {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "bridge_diagnostic" in payload &&
+    typeof payload.bridge_diagnostic === "string"
+  );
 }
 
 /**
@@ -896,6 +908,16 @@ export class LshLogicService {
     }
     const miscPayload = payload as AnyMiscTopicPayload;
     const result = this.createEmptyResult();
+
+    if (isBridgeDiagnosticPayload(miscPayload)) {
+      // Bridge-local diagnostics share the `misc` topic for transport convenience,
+      // but they do not describe button logic or device-side reachability.
+      // Accept them silently as informational runtime events.
+      result.logs.push(
+        `Bridge diagnostic from '${deviceName}': ${miscPayload.bridge_diagnostic}. Ignoring it for reachability and click logic.`,
+      );
+      return result;
+    }
 
     switch (miscPayload.p) {
       case LshProtocol.NETWORK_CLICK_REQUEST: {

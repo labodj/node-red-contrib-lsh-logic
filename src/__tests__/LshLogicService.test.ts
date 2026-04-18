@@ -722,6 +722,23 @@ describe("LshLogicService - Core & Config", () => {
       expect(result.errors).toEqual([]);
     });
 
+    it("should accept bridge-local diagnostics on misc without treating them as device traffic", () => {
+      const result = service.processMessage("LSH/actor1/misc", {
+        bridge_diagnostic: "actuator_command_storm_dropped",
+        pending_ms: 1000,
+        mutation_count: 32,
+      });
+
+      expect(result.stateChanged).toBe(false);
+      expect(result.messages).toEqual({});
+      expect(result.warnings).toEqual([]);
+      expect(result.errors).toEqual([]);
+      expect(result.logs).toContain(
+        "Bridge diagnostic from 'actor1': actuator_command_storm_dropped. Ignoring it for reachability and click logic.",
+      );
+      expect(service.getDeviceRegistry().actor1).toBeUndefined();
+    });
+
     it("should ignore device details with an incompatible protocol major", () => {
       const result = service.processMessage("LSH/actor1/conf", {
         p: LshProtocol.DEVICE_DETAILS,
