@@ -3,6 +3,7 @@ import { LSH_WIRE_PROTOCOL_MAJOR, LshProtocol, Output } from "../types";
 import type { ServiceHarness } from "./helpers/serviceTestUtils";
 import {
   createAjvError,
+  getAlertPayload,
   createLoadedServiceHarness,
   createServiceHarness,
   createSystemConfig,
@@ -537,7 +538,7 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry().actor1.isHealthy).toBe(false);
     });
 
-    it("should ignore retained Homie ready states for devices known only from retained LSH snapshots", () => {
+    it("should keep retained Homie ready as a silent baseline for devices known only from retained LSH snapshots", () => {
       service.processMessage(
         "LSH/actor1/conf",
         {
@@ -566,14 +567,29 @@ describe("LshLogicService - Core & Config", () => {
       expect(device).toBeDefined();
       expect(device.connected).toBe(false);
       expect(device.lastSeenTime).toBe(0);
+      expect(device.lastHomieState).toBe("ready");
     });
 
-    it("should ignore retained Homie ready states until live traffic arrives", () => {
+    it("should keep retained Homie ready as a silent baseline for configured devices until live traffic arrives", () => {
       const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
+      const device = service.getDeviceRegistry().actor1;
 
       expect(result.stateChanged).toBe(false);
       expect(result.messages).toEqual({});
-      expect(service.getDeviceRegistry().actor1).toBeUndefined();
+      expect(device).toBeDefined();
+      expect(device.connected).toBe(false);
+      expect(device.lastSeenTime).toBe(0);
+      expect(device.lastHomieState).toBe("ready");
+    });
+
+    it("should still ignore retained Homie ready for devices outside the loaded system config", () => {
+      const result = service.processMessage("homie/unknown-device/$state", "ready", {
+        retained: true,
+      });
+
+      expect(result.stateChanged).toBe(false);
+      expect(result.messages).toEqual({});
+      expect(service.getDeviceRegistry()["unknown-device"]).toBeUndefined();
     });
 
     it("should record a live Homie init state as diagnostics without alerting or resyncing", () => {
@@ -623,9 +639,9 @@ describe("LshLogicService - Core & Config", () => {
       const device = service.getDeviceRegistry().actor1;
 
       expect(result.stateChanged).toBe(true);
-      expect(result.messages).toEqual({});
+      expect(result.messages[Output.Alerts]).toBeDefined();
       expect(result.logs).toContain(
-        "Device 'actor1' reported retained Homie lifecycle state 'lost'. Ignoring it for reachability, alerts and resync.",
+        "Device 'actor1' reported retained Homie runtime transition 'ready -> lost'. Emitting an offline alert without changing reachability state.",
       );
       expect(device.connected).toBe(true);
       expect(device.lastHomieState).toBe("lost");
@@ -639,12 +655,46 @@ describe("LshLogicService - Core & Config", () => {
       const device = service.getDeviceRegistry().actor1;
 
       expect(result.stateChanged).toBe(true);
-      expect(result.messages).toEqual({});
+      expect(result.messages[Output.Alerts]).toBeDefined();
       expect(result.logs).toContain(
-        "Device 'actor1' reported retained Homie lifecycle state 'ready'. Ignoring it for reachability, alerts and resync.",
+        "Device 'actor1' reported retained Homie runtime transition 'lost -> ready'. Emitting a recovery alert without changing reachability state.",
       );
       expect(device.connected).toBe(true);
       expect(device.lastHomieState).toBe("ready");
+    });
+
+    it("should tag recovery alerts triggered by live details as live telemetry", () => {
+      service.processMessage("homie/actor1/$state", "lost");
+
+      const result = service.processMessage("LSH/actor1/conf", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "actor1",
+        a: [1, 2],
+        b: [],
+      });
+
+      expect(getAlertPayload(result).event_type).toBe("device_recovered");
+      expect(getAlertPayload(result).event_source).toBe("live_telemetry");
+      expect(getAlertPayload(result).message).toContain("live details");
+    });
+
+    it("should tag recovery alerts triggered by live actuator state as live telemetry", () => {
+      service.processMessage("LSH/actor1/conf", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "actor1",
+        a: [1, 2],
+        b: [],
+      });
+      sendLshState("actor1", [0]);
+      service.processMessage("homie/actor1/$state", "lost");
+
+      const result = sendLshState("actor1", [0]);
+
+      expect(getAlertPayload(result).event_type).toBe("device_recovered");
+      expect(getAlertPayload(result).event_source).toBe("live_telemetry");
+      expect(getAlertPayload(result).message).toContain("live state");
     });
 
     it("should return a no-op when receiving the same Homie ready state twice", () => {

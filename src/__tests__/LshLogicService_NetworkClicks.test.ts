@@ -317,6 +317,8 @@ describe("LshLogicService - Network Click Logic", () => {
       t: ClickType.Long,
     });
     expect(getAlertPayload(result).message).toContain("Target actor 'offline_act' is offline.");
+    expect(getAlertPayload(result).event_type).toBe("action_failed");
+    expect(getAlertPayload(result).event_source).toBe("action_validation");
   });
 
   it("should send click-specific failover when target actor is unknown to the registry", () => {

@@ -30,6 +30,8 @@ describe("LshLogicService - Watchdog & Health", () => {
       { p: LshProtocol.REQUEST_STATE },
     ]);
     expect(getAlertPayload(result).message).toContain("back online");
+    expect(getAlertPayload(result).event_type).toBe("device_lifecycle_online");
+    expect(getAlertPayload(result).event_source).toBe("homie_lifecycle");
   });
 
   it("should request only state on Homie ready when details are already known", () => {
@@ -53,6 +55,24 @@ describe("LshLogicService - Watchdog & Health", () => {
     const result = sendHomieState("actor1", "lost");
 
     expect(getAlertPayload(result).message).toContain("Alert");
+    expect(getAlertPayload(result).event_type).toBe("device_lifecycle_offline");
+    expect(getAlertPayload(result).event_source).toBe("homie_lifecycle");
+  });
+
+  it("should emit an unhealthy alert when the first live transition after startup is Homie lost", () => {
+    const { sendHomieState } = createLoadedServiceHarness();
+
+    const retainedReadyResult = sendHomieState("actor1", "ready", { retained: true });
+    const liveLostResult = sendHomieState("actor1", "lost");
+
+    expect(retainedReadyResult.stateChanged).toBe(false);
+    expect(retainedReadyResult.messages[Output.Alerts]).toBeUndefined();
+    expect(liveLostResult.logs).toContain(
+      "Device 'actor1' reported a live Homie transition from retained 'ready' to live 'lost'. Treating it as an offline event.",
+    );
+    expect(getAlertPayload(liveLostResult).status).toBe("unhealthy");
+    expect(getAlertPayload(liveLostResult).event_type).toBe("device_lifecycle_offline");
+    expect(getAlertPayload(liveLostResult).event_source).toBe("homie_lifecycle");
   });
 
   it("should prepare a broadcast ping when every configured device is silent", () => {
@@ -151,6 +171,8 @@ describe("LshLogicService - Watchdog & Health", () => {
     const result = service.runWatchdogCheck();
 
     expect(getAlertPayload(result).message).toContain("No response to ping");
+    expect(getAlertPayload(result).event_type).toBe("device_unreachable");
+    expect(getAlertPayload(result).event_source).toBe("watchdog");
     expect(getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p).toBe(
       LshProtocol.PING,
     );
@@ -235,6 +257,8 @@ describe("LshLogicService - Watchdog & Health", () => {
     const secondResult = service.runWatchdogCheck();
 
     expect(getAlertPayload(firstResult).message).toContain("Never seen");
+    expect(getAlertPayload(firstResult).event_type).toBe("device_unreachable");
+    expect(getAlertPayload(firstResult).event_source).toBe("watchdog");
     expect(secondResult.messages).toEqual({});
   });
 
@@ -270,6 +294,8 @@ describe("LshLogicService - Watchdog & Health", () => {
       "Device 'dev1' is missing device details. Requesting details and state.",
     );
     expect(getAlertPayload(result).status).toBe("healthy");
+    expect(getAlertPayload(result).event_type).toBe("device_recovered");
+    expect(getAlertPayload(result).event_source).toBe("watchdog");
     expect(service.getDeviceRegistry().dev1.connected).toBe(true);
     expect(service.getDeviceRegistry().dev1.isHealthy).toBe(true);
     expect(getOutputMessages(result, Output.Lsh).map((message) => message.payload)).toEqual([

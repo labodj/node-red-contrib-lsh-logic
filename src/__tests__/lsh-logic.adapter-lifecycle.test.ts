@@ -56,6 +56,8 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
           [Output.Alerts]: {
             payload: {
               status: "healthy",
+              event_type: "device_recovered",
+              event_source: "live_telemetry",
               message: "✅ System Health Recovery...",
               devices: [],
             } as AlertPayload,
@@ -94,17 +96,31 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     await initializeNode(warmupNodeConfig);
     mockNodeInstance.send.mockClear();
 
+    const alertPayload: AlertPayload = {
+      status: "unhealthy",
+      event_type: "device_lifecycle_offline",
+      event_source: "homie_lifecycle",
+      message: "‼️ Device offline",
+      devices: [{ name: "j1", reason: "Device reported as 'lost' by Homie." }],
+    };
+
     await nodeInstance.processServiceResult(
       createServiceResult({
         messages: {
           [Output.Alerts]: {
-            payload: 123,
+            payload: alertPayload,
           },
         },
       }),
     );
 
-    expect(mockNodeInstance.send).toHaveBeenCalledWith([null, null, { payload: 123 }, null, null]);
+    expect(mockNodeInstance.send).toHaveBeenCalledWith([
+      null,
+      null,
+      { payload: alertPayload },
+      null,
+      null,
+    ]);
     expect(mockNodeInstance.log).not.toHaveBeenCalledWith(
       "Suppressing 'device recovered' alert during warm-up period.",
     );

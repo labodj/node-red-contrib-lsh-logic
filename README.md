@@ -89,7 +89,7 @@ The node has five distinct outputs for clear and organized flows:
 
 1.  **LSH Commands**: Commands targeting your LSH protocol devices (e.g., `SET_STATE`, `PING`, `CLICK_ACK`).
 2.  **Other Actor Commands**: Abstracted commands for controlling 3rd party devices (Tasmota, Zigbee) via other Node-RED flows. The payload contains the listing of target actors and the state to set.
-3.  **Alerts**: Human-readable health alerts (Markdown formatted) suitable for notifications (Telegram/Slack).
+3.  **Alerts**: Human-readable health alerts (Markdown formatted) suitable for notifications (Telegram/Slack). The payload also includes machine-readable `event_type` and `event_source` fields so flows can distinguish lifecycle/reboot alerts from true watchdog outages without parsing the formatted text.
 4.  **Configuration**: Dynamic control messages for the `mqtt-in` node.
 5.  **Debug**: Passthrough of original messages for debugging.
 

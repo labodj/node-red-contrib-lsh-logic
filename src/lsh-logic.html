@@ -514,8 +514,11 @@
     </li>
     <li>
       <b>Alerts:</b> Outputs formatted, human-readable alert messages when a device's health status
-      changes (e.g., goes offline or comes back online). Alerts for "back online" are suppressed
-      during the initial startup period to avoid notification noise.
+      changes (e.g., goes offline or comes back online). The alert payload also exposes
+      machine-readable <code>event_type</code> and <code>event_source</code> fields so flows can
+      distinguish lifecycle/reboot events from watchdog outages without parsing the message text.
+      Alerts for "back online" are suppressed during the initial startup period to avoid
+      notification noise.
     </li>
     <li>
       <b>Configuration:</b> Outputs specially crafted messages to dynamically control the

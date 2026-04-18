@@ -99,8 +99,12 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
       options,
     );
 
-  const sendHomieState = (deviceName: string, state: string): ServiceResult =>
-    service.processMessage(`${config.homieBasePath}${deviceName}/$state`, state);
+  const sendHomieState = (
+    deviceName: string,
+    state: string,
+    options: MessageOptions = {},
+  ): ServiceResult =>
+    service.processMessage(`${config.homieBasePath}${deviceName}/$state`, state, options);
 
   const setDeviceOnline = (
     deviceName: string,

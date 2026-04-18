@@ -442,6 +442,28 @@ export interface MqttUnsubscribeMsg {
 }
 
 /**
+ * Canonical alert categories emitted by the service.
+ * These machine-readable values let downstream flows distinguish lifecycle
+ * events, true watchdog outages and command validation failures without having
+ * to parse the human-readable `message` field.
+ */
+export type AlertEventType =
+  | "device_lifecycle_offline"
+  | "device_lifecycle_online"
+  | "device_unreachable"
+  | "device_recovered"
+  | "action_failed";
+
+/**
+ * Identifies which subsystem produced an alert.
+ */
+export type AlertEventSource =
+  | "homie_lifecycle"
+  | "watchdog"
+  | "live_telemetry"
+  | "action_validation";
+
+/**
  * Defines the structure of the message payload sent to the 'Alerts' output.
  */
 export interface AlertPayload {
@@ -449,6 +471,10 @@ export interface AlertPayload {
   message: string;
   /** The health status that triggered the alert. */
   status: "unhealthy" | "healthy";
+  /** Machine-readable alert category for downstream routing logic. */
+  event_type: AlertEventType;
+  /** Machine-readable producer identifier for downstream routing logic. */
+  event_source: AlertEventSource;
   /** The list of devices involved in the alert. */
   devices: { name: string; reason: string }[];
   /** Optional raw details of the event that triggered the alert. */

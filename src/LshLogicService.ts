@@ -15,6 +15,8 @@ import { ClickType, LSH_WIRE_PROTOCOL_MAJOR, LshProtocol, Output } from "./types
 import type {
   Actor,
   AlertPayload,
+  AlertEventSource,
+  AlertEventType,
   AnyMiscTopicPayload,
   BootPayload,
   DeviceActuatorsStatePayload,
@@ -421,7 +423,10 @@ export class LshLogicService {
           reason: `Device sent live ${trafficDescription} and is now healthy.`,
         },
       ];
-      Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
+      Object.assign(
+        result.messages,
+        this._prepareAlerts(alertInfo, "healthy", "device_recovered", "live_telemetry").messages,
+      );
     }
   }
 
@@ -585,7 +590,12 @@ export class LshLogicService {
     }
 
     if (actions.unhealthyDevicesForAlert.length > 0) {
-      const alertResult = this._prepareAlerts(actions.unhealthyDevicesForAlert, "unhealthy");
+      const alertResult = this._prepareAlerts(
+        actions.unhealthyDevicesForAlert,
+        "unhealthy",
+        "device_unreachable",
+        "watchdog",
+      );
       Object.assign(result.messages, alertResult.messages);
     }
     return result;
@@ -670,93 +680,184 @@ export class LshLogicService {
   ): ServiceResult {
     const result = this.createEmptyResult();
     const existingDevice = this.deviceManager.getDevice(deviceName);
+    const isConfiguredDevice = this.deviceConfigMap.has(deviceName);
+    const previousLifecycleState = existingDevice?.lastHomieState ?? null;
     const homieState = String(payload) as HomieLifecycleState;
 
-    // Retained Homie state alone is not enough to bootstrap reachability for a device
-    // we have never seen live in this Node-RED session. Once a device has produced live
-    // traffic, retained `$state` frames are still treated as metadata only: broker
-    // reconnects can replay stale retained lifecycle states that should not flip the
-    // live reachability model used by network-click validation.
-    if (isRetained && (!existingDevice || existingDevice.lastSeenTime === 0)) {
-      return result;
-    }
-
     if (isRetained) {
-      const { stateChanged: lifecycleChanged } = this.deviceManager.recordHomieLifecycleState(
+      // Homie publishes `$state` as retained. In practice this means the bridge-local
+      // runtime transitions `lost -> init -> ready` also reach Node-RED with
+      // `msg.retain === true`.
+      //
+      // We therefore use two different rules:
+      // 1. If the device has not produced any live session activity yet, a retained
+      //    `$state` is stored only as a silent baseline and must not emit alerts.
+      // 2. Once the device is already part of the live session, retained `$state`
+      //    transitions are treated as authoritative runtime events.
+      if (!existingDevice && !isConfiguredDevice) {
+        return result;
+      }
+
+      const lifecycleResult = this.deviceManager.recordHomieLifecycleState(
         deviceName,
         homieState,
         false,
       );
+      const lifecycleChanged = lifecycleResult.stateChanged;
+
+      if (!existingDevice || existingDevice.lastSeenTime === 0) {
+        return result;
+      }
+
       if (!lifecycleChanged) {
         return result;
       }
 
       result.stateChanged = true;
+
+      if (isDiagnosticOnlyHomieState(homieState)) {
+        result.logs.push(
+          `Device '${deviceName}' reported retained Homie lifecycle state '${homieState}'. Ignoring it for reachability, alerts and resync.`,
+        );
+        return result;
+      }
+
+      const retainedWentOffline = previousLifecycleState === "ready" && homieState === "lost";
+      const retainedCameOnline =
+        homieState === "ready" &&
+        (previousLifecycleState === "lost" ||
+          previousLifecycleState === "init" ||
+          previousLifecycleState === "sleeping");
+
+      if (retainedWentOffline) {
+        result.logs.push(
+          `Device '${deviceName}' reported retained Homie runtime transition 'ready -> lost'. Emitting an offline alert without changing reachability state.`,
+        );
+        Object.assign(
+          result.messages,
+          this._prepareAlerts(
+            [
+              {
+                name: deviceName,
+                reason: "Device reported as 'lost' by Homie.",
+              },
+            ],
+            "unhealthy",
+            "device_lifecycle_offline",
+            "homie_lifecycle",
+          ).messages,
+        );
+        return result;
+      }
+
+      if (retainedCameOnline) {
+        result.logs.push(
+          `Device '${deviceName}' reported retained Homie runtime transition '${previousLifecycleState} -> ready'. Emitting a recovery alert without changing reachability state.`,
+        );
+        Object.assign(
+          result.messages,
+          this._prepareAlerts(
+            [
+              {
+                name: deviceName,
+                reason: "Device reported recovery as 'ready' by Homie.",
+              },
+            ],
+            "healthy",
+            "device_lifecycle_online",
+            "homie_lifecycle",
+          ).messages,
+        );
+        return result;
+      }
+
       result.logs.push(
         `Device '${deviceName}' reported retained Homie lifecycle state '${homieState}'. Ignoring it for reachability, alerts and resync.`,
       );
       return result;
-    }
+    } else {
+      const lifecycleResult = this.deviceManager.recordHomieLifecycleState(
+        deviceName,
+        homieState,
+        true,
+      );
+      const lifecycleChanged = lifecycleResult.stateChanged;
 
-    const { stateChanged: lifecycleChanged } = this.deviceManager.recordHomieLifecycleState(
-      deviceName,
-      homieState,
-      true,
-    );
+      const { stateChanged, wasConnected, isConnected } = this.deviceManager.updateConnectionState(
+        deviceName,
+        homieState,
+      );
 
-    const { stateChanged, wasConnected, isConnected } = this.deviceManager.updateConnectionState(
-      deviceName,
-      homieState,
-    );
+      if (isDiagnosticOnlyHomieState(homieState)) {
+        if (!stateChanged && !lifecycleChanged) {
+          return result;
+        }
 
-    if (isDiagnosticOnlyHomieState(homieState)) {
-      if (!stateChanged && !lifecycleChanged) {
+        result.stateChanged = stateChanged || lifecycleChanged;
+        result.logs.push(
+          `Device '${deviceName}' reported Homie lifecycle state '${homieState}'. Ignoring it for alerts and resync.`,
+        );
+        return result;
+      }
+
+      // A retained `ready` recorded earlier is enough to tell us that a subsequent live
+      // `lost` means "device went offline", even if this Node-RED session never observed
+      // a live `ready` edge and the boolean `connected` flag therefore remained false.
+      const wentOfflineFromLifecycleBaseline =
+        !stateChanged && homieState === "lost" && previousLifecycleState === "ready";
+
+      if (!stateChanged && !wentOfflineFromLifecycleBaseline) {
         return result;
       }
 
       result.stateChanged = stateChanged || lifecycleChanged;
-      result.logs.push(
-        `Device '${deviceName}' reported Homie lifecycle state '${homieState}'. Ignoring it for alerts and resync.`,
-      );
+
+      if (stateChanged) {
+        result.logs.push(`Device '${deviceName}' connection state changed to '${homieState}'.`);
+      } else if (wentOfflineFromLifecycleBaseline) {
+        result.logs.push(
+          `Device '${deviceName}' reported a live Homie transition from retained 'ready' to live '${homieState}'. Treating it as an offline event.`,
+        );
+      }
+
+      const wentOffline = (wasConnected && !isConnected) || wentOfflineFromLifecycleBaseline;
+      const cameOnline = !wasConnected && isConnected;
+
+      if (wentOffline) {
+        const alertInfo = [
+          {
+            name: deviceName,
+            reason: `Device reported as '${homieState}' by Homie.`,
+          },
+        ];
+        Object.assign(
+          result.messages,
+          this._prepareAlerts(alertInfo, "unhealthy", "device_lifecycle_offline", "homie_lifecycle")
+            .messages,
+        );
+      } else if (cameOnline) {
+        result.logs.push(`Device '${deviceName}' came back online (Homie state: ready).`);
+        const alertInfo = [
+          {
+            name: deviceName,
+            reason: "Device is now connected and healthy.",
+          },
+        ];
+        Object.assign(
+          result.messages,
+          this._prepareAlerts(alertInfo, "healthy", "device_lifecycle_online", "homie_lifecycle")
+            .messages,
+        );
+        const recoveryCommands = this._buildSnapshotRecoveryCommands(deviceName);
+        if (recoveryCommands.length > 0) {
+          result.logs.push(
+            `Device '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
+          );
+          result.messages[Output.Lsh] = recoveryCommands;
+        }
+      }
       return result;
     }
-
-    if (!stateChanged) {
-      return result; // No change, nothing more to do.
-    }
-
-    result.stateChanged = true;
-    result.logs.push(`Device '${deviceName}' connection state changed to '${homieState}'.`);
-
-    const wentOffline = wasConnected && !isConnected;
-    const cameOnline = !wasConnected && isConnected;
-
-    if (wentOffline) {
-      const alertInfo = [
-        {
-          name: deviceName,
-          reason: `Device reported as '${homieState}' by Homie.`,
-        },
-      ];
-      Object.assign(result.messages, this._prepareAlerts(alertInfo, "unhealthy").messages);
-    } else if (cameOnline) {
-      result.logs.push(`Device '${deviceName}' came back online (Homie state: ready).`);
-      const alertInfo = [
-        {
-          name: deviceName,
-          reason: "Device is now connected and healthy.",
-        },
-      ];
-      Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
-      const recoveryCommands = this._buildSnapshotRecoveryCommands(deviceName);
-      if (recoveryCommands.length > 0) {
-        result.logs.push(
-          `Device '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
-        );
-        result.messages[Output.Lsh] = recoveryCommands;
-      }
-    }
-    return result;
   }
 
   private _handleLshConf(
@@ -797,7 +898,11 @@ export class LshLogicService {
               reason: "Device sent live details and is now healthy.",
             },
           ];
-          Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
+          Object.assign(
+            result.messages,
+            this._prepareAlerts(alertInfo, "healthy", "device_recovered", "live_telemetry")
+              .messages,
+          );
         }
       }
     }
@@ -870,7 +975,11 @@ export class LshLogicService {
                 reason: "Device sent live state and is now healthy.",
               },
             ];
-            Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
+            Object.assign(
+              result.messages,
+              this._prepareAlerts(alertInfo, "healthy", "device_recovered", "live_telemetry")
+                .messages,
+            );
           }
         }
       }
@@ -951,7 +1060,10 @@ export class LshLogicService {
                   reason: "Device responded to ping and is now healthy.",
                 },
               ];
-              Object.assign(result.messages, this._prepareAlerts(alertInfo, "healthy").messages);
+              Object.assign(
+                result.messages,
+                this._prepareAlerts(alertInfo, "healthy", "device_recovered", "watchdog").messages,
+              );
             }
           } else {
             result.logs.push(`Received ping response from '${deviceName}'.`);
@@ -1011,7 +1123,13 @@ export class LshLogicService {
     } catch (error) {
       if (error instanceof ClickValidationError) {
         const alertInfo = [{ name: deviceName, reason: `Action failed: ${error.reason}` }];
-        const alertResult = this._prepareAlerts(alertInfo, "unhealthy", payload);
+        const alertResult = this._prepareAlerts(
+          alertInfo,
+          "unhealthy",
+          "action_failed",
+          "action_validation",
+          payload,
+        );
         Object.assign(result.messages, alertResult.messages);
 
         if (error.failoverType === "general") {
@@ -1369,11 +1487,15 @@ export class LshLogicService {
   private _prepareAlerts(
     devices: { name: string; reason: string }[],
     status: "healthy" | "unhealthy",
-    details?: object,
+    eventType: AlertEventType,
+    eventSource: AlertEventSource,
+    details?: unknown,
   ): { messages: OutputMessages } {
     const payload: AlertPayload = {
       message: formatAlertMessage(devices, status, details),
       status,
+      event_type: eventType,
+      event_source: eventSource,
       devices,
       details,
     };
