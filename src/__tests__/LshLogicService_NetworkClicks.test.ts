@@ -453,6 +453,7 @@ describe("LshLogicService - Network Click Logic", () => {
       event: "service_ping_reply",
       controller_connected: true,
       runtime_synchronized: false,
+      bootstrap_phase: "waiting_for_state",
     });
 
     expect(getOutputMessages(desyncResult, Output.Lsh)).toEqual([

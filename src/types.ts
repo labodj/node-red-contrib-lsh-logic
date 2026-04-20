@@ -220,6 +220,8 @@ export interface ServicePingReplyPayload {
   event: "service_ping_reply";
   controller_connected: boolean;
   runtime_synchronized: boolean;
+  /** Optional bridge bootstrap phase reported for runtime diagnostics. */
+  bootstrap_phase?: string;
 }
 
 /**

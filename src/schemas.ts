@@ -349,6 +349,9 @@ const bridgeDiagnosticPayloadSchema = {
 
 /**
  * Schema for bridge-local service ping replies emitted on the `bridge` topic.
+ * Keep this tolerant to extra bridge-local diagnostics fields: Node-RED only
+ * relies on the reachability booleans, while the bridge may append more
+ * runtime metadata over time.
  */
 const servicePingReplyPayloadSchema = {
   type: "object",
@@ -365,9 +368,13 @@ const servicePingReplyPayloadSchema = {
       type: "boolean",
       description: "Whether the bridge runtime cache is synchronized with the controller.",
     },
+    bootstrap_phase: {
+      ...nonEmptyStringSchema,
+      description: "Optional current bridge bootstrap phase for runtime diagnostics.",
+    },
   },
   required: ["event", "controller_connected", "runtime_synchronized"],
-  additionalProperties: false,
+  additionalProperties: true,
 } as const;
 
 /**

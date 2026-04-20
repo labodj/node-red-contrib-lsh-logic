@@ -144,6 +144,8 @@ describe("schemas", () => {
       event: "service_ping_reply",
       controller_connected: true,
       runtime_synchronized: true,
+      bootstrap_phase: "runtime_ready",
+      extra_future_field: true,
     });
 
     expect(isValid).toBe(true);

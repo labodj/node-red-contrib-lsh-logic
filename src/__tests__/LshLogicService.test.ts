@@ -568,6 +568,7 @@ describe("LshLogicService - Core & Config", () => {
           event: "service_ping_reply",
           controller_connected: true,
           runtime_synchronized: true,
+          bootstrap_phase: "runtime_ready",
         },
         { retained: true },
       );
