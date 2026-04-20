@@ -51,7 +51,7 @@ This node acts as the central orchestrator for your protocol-compatible smart ho
 
 The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
 
-At startup the node uses retained LSH snapshots when available, but it does not trust retained Homie `$state` alone as proof of current reachability: that must come from a live Homie transition or live LSH traffic. After a short subscription-settle window, the node checks whether every configured device already has an authoritative `conf + state` snapshot. If yes, it skips the startup `BOOT` entirely. If not, it requests a single bridge-local `BOOT` replay, waits for the replay window, and then runs an active verification pass. During that verification, reachable devices receive only the missing snapshot requests, while still-unreachable devices are pinged directly. A later live `ready`, `conf`, `state`, `misc`, or `PING` response automatically recovers devices that were offline during startup. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
+At startup the node uses retained LSH snapshots when available, but it does not trust retained Homie `$state` alone as proof of current reachability: that must come from a live Homie transition or live controller-backed LSH traffic. After a short subscription-settle window, the node checks whether every configured device already has an authoritative `conf + state` snapshot. If yes, it skips the startup `BOOT` entirely. If not, it requests a single bridge-local `BOOT` replay, waits for the replay window, and then runs an active verification pass. During that verification, reachable devices receive only the missing snapshot requests, while still-unreachable devices are pinged directly. A later live `ready`, `conf`, `state`, `events`, or device-level `PING` response automatically recovers devices that were offline during startup. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
 
 The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
 
@@ -62,7 +62,8 @@ Operational simplifications:
 - Runtime config reloads do not restart the startup warm-up/verification cycle. Recovery after reload is best-effort through normal live traffic, retained MQTT data and later watchdog pings.
 - Distributed long-click logic requires an authoritative actuator snapshot for every targeted LSH device. If a target is reachable but still missing fresh state, the click fails fast and is retried naturally on the next user action.
 - Retained `conf` and `state` snapshots are treated as the last known authoritative topology/state, not as proof that the device is currently alive. Device health and reachability come only from live Homie transitions, live LSH traffic and watchdog ping responses.
-- Bridge-local diagnostics published by `lsh-bridge` on `misc` are accepted as informational runtime events, but they do not count as click traffic or proof of current device reachability.
+- Retained `events` and `bridge` payloads are ignored. They are runtime-only signals and never count as current activity, click traffic or bridge health.
+- Bridge-local diagnostics published by `lsh-bridge` on `bridge` are accepted as informational runtime events, but they do not count as controller traffic or proof of current controller reachability.
 - Extremely narrow timing races during startup or config reload are handled in best-effort mode rather than with complex transaction recovery logic.
 
 To verify that the Node-RED generated protocol files match the vendored source of truth:
@@ -78,7 +79,8 @@ The node accepts messages from an `mqtt-in` node. It processes:
 1.  **LSH Protocol Topics**:
     - `<lshBase>/<device>/conf`: Static configuration (actuators `a`, buttons `b`).
     - `<lshBase>/<device>/state`: Live actuator states (`s`).
-    - `<lshBase>/<device>/misc`: Events like Clicks, Pings, and bridge-local diagnostics.
+    - `<lshBase>/<device>/events`: Controller-backed runtime events like Clicks and device-level `PING` replies.
+    - `<lshBase>/<device>/bridge`: Bridge-local runtime events like service-level `PING` replies and diagnostics.
 2.  **Homie Topics**:
     - `<homieBase>/<device>/$state`: Connectivity status (`ready`, `lost`).
     - Homie attributes (`$mac`, `$fw/version`, etc.) for HA Discovery.

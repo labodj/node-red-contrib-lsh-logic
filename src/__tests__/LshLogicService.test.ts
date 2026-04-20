@@ -113,7 +113,7 @@ describe("LshLogicService - Core & Config", () => {
       setDeviceOnline("device-sender");
       setDeviceOnline("actor1");
 
-      service.processMessage("LSH/device-sender/misc", {
+      service.processMessage("LSH/device-sender/events", {
         p: LshProtocol.NETWORK_CLICK_REQUEST,
         c: 9,
         i: 1,
@@ -121,7 +121,7 @@ describe("LshLogicService - Core & Config", () => {
       });
 
       const logMessage = service.updateSystemConfig(createSystemConfig("actor1"));
-      const confirmResult = service.processMessage("LSH/device-sender/misc", {
+      const confirmResult = service.processMessage("LSH/device-sender/events", {
         p: LshProtocol.NETWORK_CLICK_CONFIRM,
         c: 9,
         i: 1,
@@ -155,7 +155,7 @@ describe("LshLogicService - Core & Config", () => {
       setDeviceOnline("device-sender");
       setDeviceOnline("actor1");
 
-      service.processMessage("LSH/device-sender/misc", {
+      service.processMessage("LSH/device-sender/events", {
         p: LshProtocol.NETWORK_CLICK_REQUEST,
         c: 9,
         i: 1,
@@ -163,7 +163,7 @@ describe("LshLogicService - Core & Config", () => {
       });
 
       const logMessage = service.updateSystemConfig(structuredClone(initialConfig));
-      const confirmResult = service.processMessage("LSH/device-sender/misc", {
+      const confirmResult = service.processMessage("LSH/device-sender/events", {
         p: LshProtocol.NETWORK_CLICK_CONFIRM,
         c: 9,
         i: 1,
@@ -438,15 +438,15 @@ describe("LshLogicService - Core & Config", () => {
       expect(result.warnings).toContain("Invalid 'state' payload from actor1: mock state error");
     });
 
-    it("should carry validation errors for invalid misc payloads", () => {
-      validators.validateAnyMiscTopic.mockReturnValue(false);
-      validators.validateAnyMiscTopic.errors = [createAjvError("mock misc error")];
+    it("should carry validation errors for invalid events payloads", () => {
+      validators.validateAnyEventsTopic.mockReturnValue(false);
+      validators.validateAnyEventsTopic.errors = [createAjvError("mock events error")];
 
-      const result = service.processMessage("LSH/actor1/misc", {
+      const result = service.processMessage("LSH/actor1/events", {
         p: LshProtocol.PING,
       });
 
-      expect(result.warnings).toContain("Invalid 'misc' payload from actor1: mock misc error");
+      expect(result.warnings).toContain("Invalid 'events' payload from actor1: mock events error");
     });
 
     it("should report actuator state length mismatches gracefully", () => {
@@ -538,6 +538,50 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry().actor1.isHealthy).toBe(false);
     });
 
+    it("should ignore retained LSH ping replies for reachability and recovery", () => {
+      setDeviceOnline("actor1");
+      service.processMessage("homie/actor1/$state", "lost");
+
+      const result = service.processMessage(
+        "LSH/actor1/events",
+        { p: LshProtocol.PING },
+        { retained: true },
+      );
+      const device = service.getDeviceRegistry().actor1;
+
+      expect(result.stateChanged).toBe(false);
+      expect(result.messages).toEqual({});
+      expect(result.logs).toContain(
+        "Ignoring retained 'events' payload from 'actor1' because only live runtime traffic can affect reachability, clicks or bridge health.",
+      );
+      expect(device.connected).toBe(false);
+      expect(device.isHealthy).toBe(false);
+    });
+
+    it("should ignore retained bridge service ping replies for bridge reachability", () => {
+      setDeviceOnline("actor1");
+      service.processMessage("homie/actor1/$state", "lost");
+
+      const result = service.processMessage(
+        "LSH/actor1/bridge",
+        {
+          event: "service_ping_reply",
+          controller_connected: true,
+          runtime_synchronized: true,
+        },
+        { retained: true },
+      );
+      const device = service.getDeviceRegistry().actor1;
+
+      expect(result.stateChanged).toBe(false);
+      expect(result.messages).toEqual({});
+      expect(result.logs).toContain(
+        "Ignoring retained 'bridge' payload from 'actor1' because only live runtime traffic can affect reachability, clicks or bridge health.",
+      );
+      expect(device.bridgeConnected).toBe(false);
+      expect(device.connected).toBe(false);
+    });
+
     it("should keep retained Homie ready as a silent baseline for devices known only from retained LSH snapshots", () => {
       service.processMessage(
         "LSH/actor1/conf",
@@ -604,7 +648,7 @@ describe("LshLogicService - Core & Config", () => {
       expect(device.connected).toBe(false);
       expect(device.isHealthy).toBe(false);
       expect(device.lastHomieState).toBe("init");
-      expect(device.lastSeenTime).toBeGreaterThan(0);
+      expect(device.bridgeLastSeenTime).toBeGreaterThan(0);
     });
 
     it("should treat Homie sleeping as diagnostic unavailability without alerting", () => {
@@ -763,8 +807,8 @@ describe("LshLogicService - Core & Config", () => {
       expect(second.logs).toEqual([]);
     });
 
-    it("should ignore unknown misc protocol payloads gracefully", () => {
-      const result = service.processMessage("LSH/actor1/misc", { p: 999 });
+    it("should ignore unknown events protocol payloads gracefully", () => {
+      const result = service.processMessage("LSH/actor1/events", { p: 999 });
 
       expect(result.messages).toEqual({});
       expect(result.logs).toEqual([]);
@@ -772,9 +816,10 @@ describe("LshLogicService - Core & Config", () => {
       expect(result.errors).toEqual([]);
     });
 
-    it("should accept bridge-local diagnostics on misc without treating them as device traffic", () => {
-      const result = service.processMessage("LSH/actor1/misc", {
-        bridge_diagnostic: "actuator_command_storm_dropped",
+    it("should accept bridge-local diagnostics on bridge without treating them as controller traffic", () => {
+      const result = service.processMessage("LSH/actor1/bridge", {
+        event: "diagnostic",
+        kind: "actuator_command_storm_dropped",
         pending_ms: 1000,
         mutation_count: 32,
       });
@@ -784,7 +829,7 @@ describe("LshLogicService - Core & Config", () => {
       expect(result.warnings).toEqual([]);
       expect(result.errors).toEqual([]);
       expect(result.logs).toContain(
-        "Bridge diagnostic from 'actor1': actuator_command_storm_dropped. Ignoring it for reachability and click logic.",
+        "Bridge diagnostic from 'actor1': actuator_command_storm_dropped. Ignoring it for controller reachability and click logic.",
       );
       expect(service.getDeviceRegistry().actor1).toBeUndefined();
     });

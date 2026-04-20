@@ -180,7 +180,7 @@ export interface NetworkClickRequestPayload {
   c: number;
 }
 
-/** Payload: Ping. A ping message for health checks, sent via the 'misc' topic. */
+/** Payload: Ping. A ping message for health checks, sent via the 'events' topic. */
 export interface PingPayload {
   p: LshProtocol.PING;
 }
@@ -191,14 +191,16 @@ export interface BootPayload {
 }
 
 /**
- * Payload: Bridge-local diagnostic published on a device `misc` topic.
+ * Payload: Bridge-local diagnostic published on a device `bridge` topic.
  * These events come from `lsh-bridge` itself, not from controller/device
- * business logic, so the Node-RED runtime accepts them but does not treat
- * them as click traffic or proof of current device reachability.
+ * business logic, so the Node-RED runtime accepts them but never treats
+ * them as proof of controller reachability.
  */
 export interface BridgeDiagnosticPayload {
+  /** Bridge-local event envelope. */
+  event: "diagnostic";
   /** Diagnostic kind emitted by the bridge runtime. */
-  bridge_diagnostic: string;
+  kind: string;
   /** Optional duration for an unstable pending actuator batch. */
   pending_ms?: number;
   /** Optional mutation count for a dropped unstable actuator batch. */
@@ -207,6 +209,17 @@ export interface BridgeDiagnosticPayload {
   dropped_device_commands?: number;
   /** Optional count of dropped service-topic commands caused by queue overflow. */
   dropped_service_commands?: number;
+}
+
+/**
+ * Payload: Bridge-local service ping response.
+ * This event proves that the MQTT-facing bridge runtime is alive, and also
+ * reports whether the downstream controller path is currently usable.
+ */
+export interface ServicePingReplyPayload {
+  event: "service_ping_reply";
+  controller_connected: boolean;
+  runtime_synchronized: boolean;
 }
 
 /**
@@ -220,15 +233,18 @@ export interface OtherActorsCommandPayload {
 }
 
 /**
- * A discriminated union of all possible payloads received on a device's 'misc' topic.
+ * A discriminated union of all possible controller-backed payloads received on
+ * a device's 'events' topic.
  * This powerful TypeScript pattern allows the type of the payload to be inferred
  * based on the value of the 'p' property.
  */
-export type AnyMiscTopicPayload =
+export type AnyEventsTopicPayload =
   | NetworkClickRequestPayload
   | NetworkClickConfirmPayload
-  | PingPayload
-  | BridgeDiagnosticPayload;
+  | PingPayload;
+
+/** A discriminated union of all bridge-local payloads received on `bridge`. */
+export type AnyBridgeTopicPayload = ServicePingReplyPayload | BridgeDiagnosticPayload;
 
 // --------------------------------------------------------------------------
 // Node -> Client Payloads (Controllino -> ESP)
@@ -385,14 +401,18 @@ export interface ActuatorIndexMap {
 export interface DeviceState {
   /** The unique name of the device, used as the primary key. */
   name: string;
-  /** The last known MQTT/bridge reachability state, proven by Homie `$state=ready` or live LSH traffic from the device. */
+  /** The last known controller-backed reachability state. */
   connected: boolean;
-  /** Overall LSH-level health status (`false` if unresponsive or never seen). Snapshot authoritativeness is tracked separately via `lastDetailsTime` and `lastStateTime`. */
+  /** Overall controller-side health flag for alerts and recovery. Ping-timeout staleness is tracked separately via `isStale`, while snapshot authoritativeness is tracked via `lastDetailsTime` and `lastStateTime`. */
   isHealthy: boolean;
-  /** `true` if a ping was sent but not yet answered within the timeout. A temporary warning state. */
+  /** `true` if a controller ping was sent but not yet answered within the timeout. A temporary warning state. */
   isStale: boolean;
-  /** Timestamp of the last message of any kind received from the device. */
+  /** Timestamp of the last controller-backed message received from the device. */
   lastSeenTime: number;
+  /** The last known bridge reachability state. */
+  bridgeConnected: boolean;
+  /** Timestamp of the last bridge-local or bridge-backed message observed from the device. */
+  bridgeLastSeenTime: number;
   /** Last raw Homie `$state` observed for the device, independent of availability semantics. */
   lastHomieState: HomieLifecycleState | null;
   /** Timestamp of the last observed raw Homie `$state` message. */

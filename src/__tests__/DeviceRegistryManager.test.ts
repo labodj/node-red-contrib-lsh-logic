@@ -75,35 +75,37 @@ describe("DeviceRegistryManager", () => {
   });
 
   describe("updateConnectionState (Homie)", () => {
-    it("should mark a device as connected on 'ready' and report a change", () => {
+    it("should mark a device bridge as connected on 'ready' and report a change", () => {
       manager.recordHomieLifecycleState("device-1", "init");
-      const { stateChanged } = manager.updateConnectionState("device-1", "ready");
+      const { stateChanged } = manager.updateBridgeConnectionState("device-1", "ready");
       const device = manager.getDevice("device-1");
 
       expect(stateChanged).toBe(true);
-      expect(device?.connected).toBe(true);
-      expect(device?.isHealthy).toBe(true);
+      expect(device?.bridgeConnected).toBe(true);
+      expect(device?.connected).toBe(false);
     });
 
-    it("should mark a device as disconnected on 'lost' and report a change", () => {
-      manager.updateConnectionState("device-1", "ready"); // Start as ready
-      const { stateChanged } = manager.updateConnectionState("device-1", "lost");
+    it("should mark a device bridge as disconnected on 'lost' and degrade controller health", () => {
+      manager.updateBridgeConnectionState("device-1", "ready");
+      manager.recordControllerActivity("device-1");
+      const { stateChanged } = manager.updateBridgeConnectionState("device-1", "lost");
       const device = manager.getDevice("device-1");
 
       expect(stateChanged).toBe(true);
+      expect(device?.bridgeConnected).toBe(false);
       expect(device?.connected).toBe(false);
       expect(device?.isHealthy).toBe(false);
     });
 
     it("should not report a change if the state is the same", () => {
-      manager.updateConnectionState("device-1", "ready");
-      const { stateChanged } = manager.updateConnectionState("device-1", "ready");
+      manager.updateBridgeConnectionState("device-1", "ready");
+      const { stateChanged } = manager.updateBridgeConnectionState("device-1", "ready");
       expect(stateChanged).toBe(false);
     });
   });
 
   describe("recordHomieLifecycleState", () => {
-    it("should store the raw Homie lifecycle state and update lastSeenTime for live messages", () => {
+    it("should store the raw Homie lifecycle state and update bridgeLastSeenTime for live messages", () => {
       const before = Date.now();
       const { stateChanged } = manager.recordHomieLifecycleState("device-1", "init");
       const device = manager.getDevice("device-1");
@@ -111,19 +113,19 @@ describe("DeviceRegistryManager", () => {
       expect(stateChanged).toBe(true);
       expect(device?.lastHomieState).toBe("init");
       expect(device?.lastHomieStateTime).toBeGreaterThanOrEqual(before);
-      expect(device?.lastSeenTime).toBe(device?.lastHomieStateTime);
+      expect(device?.bridgeLastSeenTime).toBe(device?.lastHomieStateTime);
     });
 
-    it("should update diagnostics without changing lastSeenTime for retained messages", () => {
+    it("should update diagnostics without changing bridgeLastSeenTime for retained messages", () => {
       manager.recordHomieLifecycleState("device-1", "ready");
-      const initialLastSeenTime = manager.getDevice("device-1")!.lastSeenTime;
+      const initialBridgeLastSeenTime = manager.getDevice("device-1")!.bridgeLastSeenTime;
 
       const { stateChanged } = manager.recordHomieLifecycleState("device-1", "sleeping", false);
       const device = manager.getDevice("device-1");
 
       expect(stateChanged).toBe(true);
       expect(device?.lastHomieState).toBe("sleeping");
-      expect(device?.lastSeenTime).toBe(initialLastSeenTime);
+      expect(device?.bridgeLastSeenTime).toBe(initialBridgeLastSeenTime);
     });
   });
 
@@ -320,23 +322,24 @@ describe("DeviceRegistryManager", () => {
     });
   });
 
-  describe("recordReachableActivity", () => {
+  describe("recordControllerActivity", () => {
     it("should report a state change for a previously unhealthy device", () => {
-      manager.updateConnectionState("offline-device", "lost"); // unhealthy
-      const { stateChanged } = manager.recordReachableActivity("offline-device");
+      manager.updateBridgeConnectionState("offline-device", "lost");
+      const { stateChanged } = manager.recordControllerActivity("offline-device");
       const device = manager.getDevice("offline-device")!;
       expect(stateChanged).toBe(true);
+      expect(device.bridgeConnected).toBe(true);
       expect(device.connected).toBe(true);
       expect(device.isHealthy).toBe(true);
     });
 
     it("should report a state change for a previously stale device", () => {
-      manager.updateConnectionState("stale-device", "ready");
+      manager.updateBridgeConnectionState("stale-device", "ready");
       const device = manager.getDevice("stale-device")!;
       device.isStale = true; // Make it stale
       device.isHealthy = true;
 
-      const { stateChanged } = manager.recordReachableActivity("stale-device");
+      const { stateChanged } = manager.recordControllerActivity("stale-device");
 
       expect(stateChanged).toBe(true);
       expect(device.connected).toBe(true);
@@ -354,15 +357,67 @@ describe("DeviceRegistryManager", () => {
       });
       manager.registerActuatorStates("ping-only-device", [false]);
 
-      const { stateChanged, becameConnected, becameHealthy } =
-        manager.recordReachableActivity("ping-only-device");
+      const { stateChanged, becameHealthy } = manager.recordControllerActivity("ping-only-device");
       const device = manager.getDevice("ping-only-device")!;
 
       expect(stateChanged).toBe(true);
-      expect(becameConnected).toBe(true);
       expect(becameHealthy).toBe(true);
       expect(device.connected).toBe(true);
       expect(device.isHealthy).toBe(true);
+    });
+  });
+
+  describe("recordBridgePingReply", () => {
+    it("should update bridge-only state without promoting controller reachability", () => {
+      const { stateChanged, bridgeBecameConnected, controllerDisconnected, snapshotInvalidated } =
+        manager.recordBridgePingReply("bridge-only-device", true, true);
+      const device = manager.getDevice("bridge-only-device")!;
+
+      expect(stateChanged).toBe(true);
+      expect(bridgeBecameConnected).toBe(true);
+      expect(controllerDisconnected).toBe(false);
+      expect(snapshotInvalidated).toBe(false);
+      expect(device.bridgeConnected).toBe(true);
+      expect(device.connected).toBe(false);
+    });
+
+    it("should degrade controller reachability when the bridge reports controller loss", () => {
+      manager.recordControllerActivity("device-1");
+
+      const { stateChanged, controllerDisconnected, snapshotInvalidated } =
+        manager.recordBridgePingReply("device-1", false, false);
+      const device = manager.getDevice("device-1")!;
+
+      expect(stateChanged).toBe(true);
+      expect(controllerDisconnected).toBe(true);
+      expect(snapshotInvalidated).toBe(false);
+      expect(device.bridgeConnected).toBe(true);
+      expect(device.connected).toBe(false);
+      expect(device.isHealthy).toBe(false);
+      expect(device.isStale).toBe(false);
+    });
+
+    it("should invalidate only the authoritative state snapshot when the bridge reports runtime desync", () => {
+      manager.registerDeviceDetails("device-1", {
+        p: LshProtocol.DEVICE_DETAILS,
+        v: LSH_WIRE_PROTOCOL_MAJOR,
+        n: "device-1",
+        a: [1],
+        b: [],
+      });
+      manager.registerActuatorStates("device-1", [false]);
+      manager.recordControllerActivity("device-1");
+
+      const { stateChanged, controllerDisconnected, snapshotInvalidated } =
+        manager.recordBridgePingReply("device-1", true, false);
+      const device = manager.getDevice("device-1")!;
+
+      expect(stateChanged).toBe(true);
+      expect(controllerDisconnected).toBe(false);
+      expect(snapshotInvalidated).toBe(true);
+      expect(device.connected).toBe(true);
+      expect(device.isHealthy).toBe(true);
+      expect(device.lastStateTime).toBe(0);
     });
   });
 

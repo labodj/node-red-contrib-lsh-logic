@@ -159,6 +159,8 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
       isHealthy: true,
       isStale: false,
       lastSeenTime: 1,
+      bridgeConnected: true,
+      bridgeLastSeenTime: 1,
       lastHomieState: "ready",
       lastHomieStateTime: 1,
       lastDetailsTime: 1,

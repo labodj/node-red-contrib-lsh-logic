@@ -4,7 +4,8 @@ import { LshLogicService } from "../../LshLogicService";
 import { LSH_WIRE_PROTOCOL_MAJOR, LshProtocol, Output } from "../../types";
 import type {
   AlertPayload,
-  AnyMiscTopicPayload,
+  AnyBridgeTopicPayload,
+  AnyEventsTopicPayload,
   DeviceDetailsPayload,
   OtherActorsCommandPayload,
   ServiceResult,
@@ -22,7 +23,8 @@ export const createMockValidator = (): ValidatorMock => {
 export const createMockValidators = () => ({
   validateDeviceDetails: createMockValidator(),
   validateActuatorStates: createMockValidator(),
-  validateAnyMiscTopic: createMockValidator(),
+  validateAnyEventsTopic: createMockValidator(),
+  validateAnyBridgeTopic: createMockValidator(),
 });
 
 type ServiceConfig = {
@@ -130,12 +132,19 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
       options,
     );
 
-  const sendMisc = (
+  const sendEvents = (
     deviceName: string,
-    payload: AnyMiscTopicPayload,
+    payload: AnyEventsTopicPayload,
     options: MessageOptions = {},
   ): ServiceResult =>
-    service.processMessage(`${config.lshBasePath}${deviceName}/misc`, payload, options);
+    service.processMessage(`${config.lshBasePath}${deviceName}/events`, payload, options);
+
+  const sendBridge = (
+    deviceName: string,
+    payload: AnyBridgeTopicPayload,
+    options: MessageOptions = {},
+  ): ServiceResult =>
+    service.processMessage(`${config.lshBasePath}${deviceName}/bridge`, payload, options);
 
   return {
     service,
@@ -147,7 +156,8 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
     sendHomieState,
     setDeviceOnline,
     sendLshState,
-    sendMisc,
+    sendEvents,
+    sendBridge,
   };
 }
 

@@ -10,6 +10,18 @@ import { DeviceRegistryManager } from "./DeviceRegistryManager";
 import { ClickTransactionManager } from "./ClickTransactionManager";
 import { HomieDiscoveryManager } from "./HomieDiscoveryManager";
 import { LshCodec } from "./LshCodec";
+import {
+  appendLshMessages,
+  BIT_MASK_8,
+  buildClickCorrelationKey,
+  buildClickSlotKey,
+  createEmptyServiceResult,
+  isBridgeDiagnosticPayload,
+  isDiagnosticOnlyHomieState,
+  mergeServiceResults,
+  parseDeviceScopedTopic,
+  prependLshMessages,
+} from "./LshLogicService.helpers";
 import { Watchdog } from "./Watchdog";
 import { ClickType, LSH_WIRE_PROTOCOL_MAJOR, LshProtocol, Output } from "./types";
 import type {
@@ -17,20 +29,20 @@ import type {
   AlertPayload,
   AlertEventSource,
   AlertEventType,
-  AnyMiscTopicPayload,
+  AnyBridgeTopicPayload,
+  AnyEventsTopicPayload,
   BootPayload,
   DeviceActuatorsStatePayload,
-  BridgeDiagnosticPayload,
   DeviceDetailsPayload,
   DeviceEntry,
-  HomieLifecycleState,
+  DeviceState,
   FailoverClickPayload,
   FailoverPayload,
+  HomieLifecycleState,
   NetworkClickAckPayload,
   NetworkClickConfirmPayload,
   NetworkClickRequestPayload,
   OtherActorsCommandPayload,
-  OutputMessages,
   PingPayload,
   ProcessMessageOptions,
   RequestDetailsPayload,
@@ -52,39 +64,8 @@ type WatchdogActions = {
   devicesToPing: Set<string>;
   unhealthyDevicesForAlert: Array<{ name: string; reason: string }>;
   stateChanged: boolean;
+  shouldProbeBridges: boolean;
 };
-
-const BIT_MASK_8 = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] as const;
-
-function buildClickSlotKey(deviceName: string, buttonId: number, clickType: ClickType): string {
-  return `${deviceName}.${buttonId}.${clickType}`;
-}
-
-function buildClickCorrelationKey(
-  deviceName: string,
-  buttonId: number,
-  clickType: ClickType,
-  correlationId: number,
-): string {
-  return `${buildClickSlotKey(deviceName, buttonId, clickType)}.${correlationId}`;
-}
-
-function isDiagnosticOnlyHomieState(
-  homieState: HomieLifecycleState,
-): homieState is "init" | "sleeping" {
-  return homieState === "init" || homieState === "sleeping";
-}
-
-function isBridgeDiagnosticPayload(
-  payload: AnyMiscTopicPayload,
-): payload is BridgeDiagnosticPayload {
-  return (
-    typeof payload === "object" &&
-    payload !== null &&
-    "bridge_diagnostic" in payload &&
-    typeof payload.bridge_diagnostic === "string"
-  );
-}
 
 /**
  * Custom error for handling click validation failures gracefully. This allows
@@ -125,7 +106,8 @@ export class LshLogicService {
   private readonly validators: {
     validateDeviceDetails: ValidateFunction;
     validateActuatorStates: ValidateFunction;
-    validateAnyMiscTopic: ValidateFunction;
+    validateAnyEventsTopic: ValidateFunction;
+    validateAnyBridgeTopic: ValidateFunction;
   };
 
   private systemConfig: SystemConfig | null = null;
@@ -155,7 +137,8 @@ export class LshLogicService {
     validators: {
       validateDeviceDetails: ValidateFunction;
       validateActuatorStates: ValidateFunction;
-      validateAnyMiscTopic: ValidateFunction;
+      validateAnyEventsTopic: ValidateFunction;
+      validateAnyBridgeTopic: ValidateFunction;
     },
   ) {
     this.lshBasePath = config.lshBasePath;
@@ -193,7 +176,7 @@ export class LshLogicService {
    * @returns A ServiceResult describing the startup recovery work.
    */
   public verifyInitialDeviceStates(): ServiceResult {
-    const result = this.createEmptyResult();
+    const result = createEmptyServiceResult();
     if (!this.systemConfig) {
       result.warnings.push("Cannot run initial state verification: config not loaded.");
       return result;
@@ -202,6 +185,7 @@ export class LshLogicService {
     const configuredDevices = this.getConfiguredDeviceNames() as string[];
     const unreachableDevices: string[] = [];
     const recoveryCommands: NodeMessage[] = [];
+    let devicesNeedingRecovery = 0;
 
     for (const deviceName of configuredDevices) {
       const deviceState = this.deviceManager.getDevice(deviceName);
@@ -210,50 +194,30 @@ export class LshLogicService {
         continue;
       }
 
-      if (!deviceState.connected) {
+      if (!deviceState.connected && !deviceState.bridgeConnected) {
         unreachableDevices.push(deviceName);
         continue;
       }
 
-      recoveryCommands.push(...this._buildSnapshotRecoveryCommands(deviceName));
+      const recoveryPlan = this._buildSnapshotRecoveryPlan(deviceName);
+      if (recoveryPlan.reason !== null) {
+        devicesNeedingRecovery++;
+        recoveryCommands.push(...recoveryPlan.commands);
+      }
     }
 
     if (recoveryCommands.length > 0) {
-      const devicesNeedingRepair = new Set(
-        recoveryCommands.map((command) => {
-          const topic = String(command.topic);
-          const baseLen = this.lshBasePath.length;
-          const slashIndex = topic.indexOf("/", baseLen);
-          return slashIndex === -1 ? topic : topic.substring(baseLen, slashIndex);
-        }),
-      );
       result.logs.push(
-        `Initial state verification: ${devicesNeedingRepair.size} reachable device(s) still need authoritative snapshot recovery.`,
+        `Initial state verification: ${devicesNeedingRecovery} reachable device(s) still need authoritative snapshot recovery.`,
       );
-      result.messages[Output.Lsh] = recoveryCommands;
+      appendLshMessages(result, recoveryCommands);
     }
 
     if (unreachableDevices.length > 0) {
       result.logs.push(
         `Initial state verification: ${unreachableDevices.length} device(s) are still unreachable. Pinging them directly.`,
       );
-
-      const pingCommands: NodeMessage[] = unreachableDevices.map((deviceName) =>
-        this._createLshCommand(
-          `${this.lshBasePath}${deviceName}/IN`,
-          { p: LshProtocol.PING } as PingPayload,
-          1,
-        ),
-      );
-
-      if (result.messages[Output.Lsh]) {
-        const existingMessages = Array.isArray(result.messages[Output.Lsh])
-          ? result.messages[Output.Lsh]
-          : [result.messages[Output.Lsh]];
-        result.messages[Output.Lsh] = [...existingMessages, ...pingCommands];
-      } else {
-        result.messages[Output.Lsh] = pingCommands;
-      }
+      appendLshMessages(result, this._buildDevicePingCommands(unreachableDevices));
     }
 
     if (recoveryCommands.length === 0 && unreachableDevices.length === 0) {
@@ -319,7 +283,7 @@ export class LshLogicService {
 
   public syncDiscoveryConfig(): ServiceResult {
     if (!this.haDiscovery) {
-      return this.createEmptyResult();
+      return createEmptyServiceResult();
     }
 
     return this.discoveryManager.regenerateDiscoveryPayloads();
@@ -350,7 +314,7 @@ export class LshLogicService {
    * @returns A ServiceResult containing the startup commands.
    */
   public getStartupCommands(): ServiceResult {
-    const result = this.createEmptyResult();
+    const result = createEmptyServiceResult();
     if (!this.systemConfig || this.systemConfig.devices.length === 0) {
       result.warnings.push("Cannot generate startup commands: config not loaded.");
       return result;
@@ -378,37 +342,31 @@ export class LshLogicService {
     return { topic, payload: encodedPayload, qos };
   }
 
-  /**
-   * Creates an empty ServiceResult object to be populated.
-   * @internal
-   */
-  private createEmptyResult(): ServiceResult {
-    return {
-      messages: {},
-      logs: [],
-      warnings: [],
-      errors: [],
-      stateChanged: false,
-    };
+  private _deviceCommandTopic(deviceName: string): string {
+    return `${this.lshBasePath}${deviceName}/IN`;
   }
 
-  private mergeServiceResult(target: ServiceResult, source: ServiceResult): void {
-    Object.assign(target.messages, source.messages);
-    target.logs.push(...source.logs);
-    target.warnings.push(...source.warnings);
-    target.errors.push(...source.errors);
-    target.stateChanged = target.stateChanged || source.stateChanged;
-    if (source.staggerLshMessages) {
-      target.staggerLshMessages = true;
-    }
+  private _buildDevicePingCommands(deviceNames: Iterable<string>): NodeMessage[] {
+    return Array.from(deviceNames, (deviceName) =>
+      this._createLshCommand(
+        this._deviceCommandTopic(deviceName),
+        { p: LshProtocol.PING } as PingPayload,
+        1,
+      ),
+    );
   }
 
-  private recordLiveDeviceReachability(
+  private _buildBridgeProbeCommand(): NodeMessage {
+    return this._createLshCommand(this.serviceTopic, { p: LshProtocol.PING } as PingPayload, 1);
+  }
+
+  private recordLiveControllerActivity(
     result: ServiceResult,
     deviceName: string,
     trafficDescription: string,
   ): void {
-    const { stateChanged, becameHealthy } = this.deviceManager.recordReachableActivity(deviceName);
+    this.watchdog.onDeviceActivity(deviceName);
+    const { stateChanged, becameHealthy } = this.deviceManager.recordControllerActivity(deviceName);
     if (!stateChanged) {
       return;
     }
@@ -417,17 +375,58 @@ export class LshLogicService {
     result.logs.push(`Device '${deviceName}' sent live ${trafficDescription} and is reachable.`);
 
     if (becameHealthy) {
-      const alertInfo = [
-        {
-          name: deviceName,
-          reason: `Device sent live ${trafficDescription} and is now healthy.`,
-        },
-      ];
-      Object.assign(
-        result.messages,
-        this._prepareAlerts(alertInfo, "healthy", "device_recovered", "live_telemetry").messages,
+      this._emitAlert(
+        result,
+        [
+          {
+            name: deviceName,
+            reason: `Device sent live ${trafficDescription} and is now healthy.`,
+          },
+        ],
+        "healthy",
+        "device_recovered",
+        "live_telemetry",
       );
     }
+  }
+
+  private recordControllerPingResponse(
+    result: ServiceResult,
+    deviceName: string,
+    isLiveTelemetry: boolean,
+  ): void {
+    if (isLiveTelemetry) {
+      this.watchdog.onDeviceActivity(deviceName);
+    }
+    const { stateChanged, becameHealthy } = this.deviceManager.recordControllerActivity(deviceName);
+
+    if (stateChanged) {
+      result.stateChanged = true;
+      result.logs.push(`Device '${deviceName}' is now responsive.`);
+
+      if (becameHealthy) {
+        result.logs.push(`Device '${deviceName}' is healthy again after ping response.`);
+        this._emitAlert(
+          result,
+          [
+            {
+              name: deviceName,
+              reason: "Device responded to ping and is now healthy.",
+            },
+          ],
+          "healthy",
+          "device_recovered",
+          "watchdog",
+        );
+      }
+    } else {
+      result.logs.push(`Received ping response from '${deviceName}'.`);
+    }
+
+    this.requestSnapshotRecovery(result, deviceName, {
+      detailsAndState: `Device '${deviceName}' is missing device details. Requesting details and state.`,
+      stateOnly: `Device '${deviceName}' is missing an authoritative actuator state. Requesting state.`,
+    });
   }
 
   /**
@@ -437,36 +436,73 @@ export class LshLogicService {
    * authoritative state is missing, request only state.
    * @internal
    */
-  private _buildSnapshotRecoveryCommands(deviceName: string): NodeMessage[] {
+  private _buildSnapshotRecoveryPlan(deviceName: string): {
+    commands: NodeMessage[];
+    reason: "details_and_state" | "state_only" | null;
+  } {
     const device = this.deviceManager.getDevice(deviceName);
-    const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
+    const commandTopic = this._deviceCommandTopic(deviceName);
 
     if (!device || device.lastDetailsTime === 0) {
-      return [
-        this._createLshCommand(
-          commandTopic,
-          { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
-          1,
-        ),
-        this._createLshCommand(
-          commandTopic,
-          { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
-          1,
-        ),
-      ];
+      return {
+        reason: "details_and_state",
+        commands: [
+          this._createLshCommand(
+            commandTopic,
+            { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
+            1,
+          ),
+          this._createLshCommand(
+            commandTopic,
+            { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
+            1,
+          ),
+        ],
+      };
     }
 
     if (device.lastStateTime === 0) {
-      return [
-        this._createLshCommand(
-          commandTopic,
-          { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
-          1,
-        ),
-      ];
+      return {
+        reason: "state_only",
+        commands: [
+          this._createLshCommand(
+            commandTopic,
+            { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
+            1,
+          ),
+        ],
+      };
     }
 
-    return [];
+    return { reason: null, commands: [] };
+  }
+
+  private requestSnapshotRecovery(
+    result: ServiceResult,
+    deviceName: string,
+    logMessages: {
+      detailsAndState?: string;
+      stateOnly?: string;
+    } = {},
+  ): boolean {
+    const recoveryPlan = this._buildSnapshotRecoveryPlan(deviceName);
+    if (recoveryPlan.reason === null) {
+      return false;
+    }
+
+    appendLshMessages(result, recoveryPlan.commands);
+
+    if (recoveryPlan.reason === "details_and_state") {
+      if (logMessages.detailsAndState) {
+        result.logs.push(logMessages.detailsAndState);
+      }
+      return true;
+    }
+
+    if (logMessages.stateOnly) {
+      result.logs.push(logMessages.stateOnly);
+    }
+    return true;
   }
 
   /**
@@ -483,70 +519,106 @@ export class LshLogicService {
     options: ProcessMessageOptions = {},
   ): ServiceResult {
     if (!this.systemConfig) {
-      const result = this.createEmptyResult();
+      const result = createEmptyServiceResult();
       result.warnings.push("Configuration not loaded, ignoring message.");
       return result;
     }
 
-    // --- HOMIE TOPICS ---
-    if (topic.startsWith(this.homieBasePath)) {
-      const baseLen = this.homieBasePath.length;
-      const slashIndex = topic.indexOf("/", baseLen);
-      const isRetained = options.retained === true;
-
-      if (slashIndex === -1) return this._handleUnhandledTopic(topic);
-
-      const deviceName = topic.substring(baseLen, slashIndex);
-
-      if (topic.endsWith("/$state")) {
-        // Only a live `$state` transition proves current Homie reachability.
-        // Retained discovery metadata must not reset watchdog ping tracking.
-        if (!isRetained) {
-          this.watchdog.onDeviceActivity(deviceName);
-        }
-        return this._handleHomieState(deviceName, payload, isRetained);
-      }
-
-      if (this.haDiscovery) {
-        const suffix = topic.substring(slashIndex);
-        if (suffix === "/$mac" || suffix === "/$fw/version" || suffix === "/$nodes") {
-          return this.discoveryManager.processDiscoveryMessage(deviceName, suffix, String(payload));
-        }
-      }
+    const isRetained = options.retained === true;
+    const homieResult = this._routeHomieTopic(topic, payload, isRetained);
+    if (homieResult) {
+      return homieResult;
     }
 
-    // --- LSH TOPICS ---
-    else if (topic.startsWith(this.lshBasePath)) {
-      const baseLen = this.lshBasePath.length;
-      const slashIndex = topic.indexOf("/", baseLen);
-      const isRetained = options.retained === true;
-
-      if (slashIndex === -1) return this._handleUnhandledTopic(topic);
-
-      const deviceName = topic.substring(baseLen, slashIndex);
-
-      if (!isRetained) {
-        this.watchdog.onDeviceActivity(deviceName);
-      }
-
-      if (topic.endsWith("/state")) {
-        return this._handleLshState(deviceName, payload, !isRetained);
-      } else if (topic.endsWith("/misc")) {
-        return this._handleLshMisc(deviceName, payload);
-      } else if (topic.endsWith("/conf")) {
-        return this._handleLshConf(deviceName, payload, !isRetained);
-      }
+    const lshResult = this._routeLshTopic(topic, payload, isRetained);
+    if (lshResult) {
+      return lshResult;
     }
 
     return this._handleUnhandledTopic(topic);
   }
 
+  private _routeHomieTopic(
+    topic: string,
+    payload: unknown,
+    isRetained: boolean,
+  ): ServiceResult | null {
+    if (!topic.startsWith(this.homieBasePath)) {
+      return null;
+    }
+
+    const parsedTopic = parseDeviceScopedTopic(topic, this.homieBasePath);
+    if (!parsedTopic) {
+      return this._handleUnhandledTopic(topic);
+    }
+
+    if (parsedTopic.suffix === "/$state") {
+      return this._handleHomieState(parsedTopic.deviceName, payload, isRetained);
+    }
+
+    if (
+      this.haDiscovery &&
+      (parsedTopic.suffix === "/$mac" ||
+        parsedTopic.suffix === "/$fw/version" ||
+        parsedTopic.suffix === "/$nodes")
+    ) {
+      return this.discoveryManager.processDiscoveryMessage(
+        parsedTopic.deviceName,
+        parsedTopic.suffix,
+        String(payload),
+      );
+    }
+
+    return this._handleUnhandledTopic(topic);
+  }
+
+  private _routeLshTopic(
+    topic: string,
+    payload: unknown,
+    isRetained: boolean,
+  ): ServiceResult | null {
+    if (!topic.startsWith(this.lshBasePath)) {
+      return null;
+    }
+
+    const parsedTopic = parseDeviceScopedTopic(topic, this.lshBasePath);
+    if (!parsedTopic) {
+      return this._handleUnhandledTopic(topic);
+    }
+
+    switch (parsedTopic.suffix) {
+      case "/state":
+        return this._handleLshState(parsedTopic.deviceName, payload, !isRetained);
+      case "/events":
+        return isRetained
+          ? this._ignoreRetainedLshRuntimeTopic(parsedTopic.deviceName, "events")
+          : this._handleLshEvents(parsedTopic.deviceName, payload, true);
+      case "/bridge":
+        return isRetained
+          ? this._ignoreRetainedLshRuntimeTopic(parsedTopic.deviceName, "bridge")
+          : this._handleLshBridge(parsedTopic.deviceName, payload);
+      case "/conf":
+        return this._handleLshConf(parsedTopic.deviceName, payload, !isRetained);
+      default:
+        return this._handleUnhandledTopic(topic);
+    }
+  }
+
+  private _ignoreRetainedLshRuntimeTopic(
+    deviceName: string,
+    topicKind: "events" | "bridge",
+  ): ServiceResult {
+    const result = createEmptyServiceResult();
+    result.logs.push(
+      `Ignoring retained '${topicKind}' payload from '${deviceName}' because only live runtime traffic can affect reachability, clicks or bridge health.`,
+    );
+    return result;
+  }
+
   private _handleUnhandledTopic(topic: string): ServiceResult {
-    const result = this.createEmptyResult();
-    // Only log if it's not a completely irrelevant topic?
-    // For now, keep behavior consistent with old regex fallback logic which logged everything unhandled.
-    // However, in a real env, we might receive many messages.
-    // Old logic: "Message on unhandled topic: ..."
+    const result = createEmptyServiceResult();
+    // Keep unhandled-topic logging explicit so unexpected broker traffic stays visible
+    // during commissioning and debugging.
     result.logs.push(`Message on unhandled topic: ${topic}`);
     return result;
   }
@@ -563,7 +635,7 @@ export class LshLogicService {
    * @returns A ServiceResult containing any pings or alerts to be sent.
    */
   public runWatchdogCheck(): ServiceResult {
-    const result = this.createEmptyResult();
+    const result = createEmptyServiceResult();
     if (!this.systemConfig || this.systemConfig.devices.length === 0) {
       return result;
     }
@@ -573,6 +645,7 @@ export class LshLogicService {
       devicesToPing: new Set<string>(),
       unhealthyDevicesForAlert: [],
       stateChanged: false,
+      shouldProbeBridges: false,
     };
 
     for (const deviceConfig of this.systemConfig.devices) {
@@ -581,22 +654,32 @@ export class LshLogicService {
 
     result.stateChanged = actions.stateChanged;
     if (actions.devicesToPing.size > 0) {
-      const { messages, logs, stagger } = this._preparePings(actions);
-      Object.assign(result.messages, messages);
+      const { commands, logs, stagger } = this._prepareControllerPings(actions.devicesToPing);
+      appendLshMessages(result, commands);
       result.logs.push(...logs);
       if (stagger) {
         result.staggerLshMessages = true;
       }
     }
 
+    if (actions.shouldProbeBridges) {
+      prependLshMessages(result, this._buildBridgeProbeCommand());
+      result.logs.push(
+        "Requesting one bridge-level service ping to distinguish bridge health from controller silence.",
+      );
+      if (result.messages[Output.Lsh] && Array.isArray(result.messages[Output.Lsh])) {
+        result.staggerLshMessages = true;
+      }
+    }
+
     if (actions.unhealthyDevicesForAlert.length > 0) {
-      const alertResult = this._prepareAlerts(
+      this._emitAlert(
+        result,
         actions.unhealthyDevicesForAlert,
         "unhealthy",
         "device_unreachable",
         "watchdog",
       );
-      Object.assign(result.messages, alertResult.messages);
     }
     return result;
   }
@@ -642,6 +725,7 @@ export class LshLogicService {
             reason: "No response to ping.",
           });
         }
+        actions.shouldProbeBridges = true;
         actions.devicesToPing.add(deviceName);
         break;
       case "unhealthy":
@@ -673,191 +757,203 @@ export class LshLogicService {
   /*                             TOPIC HANDLERS                                 */
   /* -------------------------------------------------------------------------- */
 
+  private _emitHomieLifecycleAlert(
+    result: ServiceResult,
+    deviceName: string,
+    status: "healthy" | "unhealthy",
+    eventType: "device_lifecycle_online" | "device_lifecycle_offline",
+    reason: string,
+  ): void {
+    this._emitAlert(result, [{ name: deviceName, reason }], status, eventType, "homie_lifecycle");
+  }
+
+  private _handleRetainedHomieState(
+    deviceName: string,
+    homieState: HomieLifecycleState,
+    existingDevice: DeviceState | undefined,
+    previousLifecycleState: HomieLifecycleState | null,
+    isConfiguredDevice: boolean,
+  ): ServiceResult {
+    const result = createEmptyServiceResult();
+
+    // Homie publishes `$state` as retained. In practice this means the bridge-local
+    // runtime transitions `lost -> init -> ready` also reach Node-RED with
+    // `msg.retain === true`.
+    //
+    // We therefore use two different rules:
+    // 1. If the device has not produced any live session activity yet, a retained
+    //    `$state` is stored only as a silent baseline and must not emit alerts.
+    // 2. Once the device is already part of the live session, retained `$state`
+    //    transitions are treated as authoritative runtime events.
+    if (!existingDevice && !isConfiguredDevice) {
+      return result;
+    }
+
+    const lifecycleChanged = this.deviceManager.recordHomieLifecycleState(
+      deviceName,
+      homieState,
+      false,
+    ).stateChanged;
+
+    if (!existingDevice || existingDevice.lastSeenTime === 0 || !lifecycleChanged) {
+      return result;
+    }
+
+    result.stateChanged = true;
+
+    if (isDiagnosticOnlyHomieState(homieState)) {
+      result.logs.push(
+        `Device '${deviceName}' reported retained Homie lifecycle state '${homieState}'. Ignoring it for reachability, alerts and resync.`,
+      );
+      return result;
+    }
+
+    const retainedWentOffline = previousLifecycleState === "ready" && homieState === "lost";
+    const retainedCameOnline =
+      homieState === "ready" &&
+      (previousLifecycleState === "lost" ||
+        previousLifecycleState === "init" ||
+        previousLifecycleState === "sleeping");
+
+    if (retainedWentOffline) {
+      result.logs.push(
+        `Device '${deviceName}' reported retained Homie runtime transition 'ready -> lost'. Emitting an offline alert without changing reachability state.`,
+      );
+      this._emitHomieLifecycleAlert(
+        result,
+        deviceName,
+        "unhealthy",
+        "device_lifecycle_offline",
+        "Device reported as 'lost' by Homie.",
+      );
+      return result;
+    }
+
+    if (retainedCameOnline) {
+      result.logs.push(
+        `Device '${deviceName}' reported retained Homie runtime transition '${previousLifecycleState} -> ready'. Emitting a recovery alert without changing reachability state.`,
+      );
+      this._emitHomieLifecycleAlert(
+        result,
+        deviceName,
+        "healthy",
+        "device_lifecycle_online",
+        "Device reported recovery as 'ready' by Homie.",
+      );
+      return result;
+    }
+
+    result.logs.push(
+      `Device '${deviceName}' reported retained Homie lifecycle state '${homieState}'. Ignoring it for reachability, alerts and resync.`,
+    );
+    return result;
+  }
+
+  private _handleLiveHomieState(
+    deviceName: string,
+    homieState: HomieLifecycleState,
+    previousLifecycleState: HomieLifecycleState | null,
+  ): ServiceResult {
+    const result = createEmptyServiceResult();
+    const lifecycleChanged = this.deviceManager.recordHomieLifecycleState(
+      deviceName,
+      homieState,
+      true,
+    ).stateChanged;
+    const bridgeConnectionResult = this.deviceManager.updateBridgeConnectionState(
+      deviceName,
+      homieState,
+    );
+
+    if (isDiagnosticOnlyHomieState(homieState)) {
+      if (!bridgeConnectionResult.stateChanged && !lifecycleChanged) {
+        return result;
+      }
+
+      result.stateChanged = bridgeConnectionResult.stateChanged || lifecycleChanged;
+      result.logs.push(
+        `Device '${deviceName}' reported Homie lifecycle state '${homieState}'. Ignoring it for alerts and resync.`,
+      );
+      return result;
+    }
+
+    // A retained `ready` recorded earlier is enough to tell us that a subsequent live
+    // `lost` means "device went offline", even if this Node-RED session never observed
+    // a live `ready` edge and the boolean `connected` flag therefore remained false.
+    const wentOfflineFromLifecycleBaseline =
+      !bridgeConnectionResult.stateChanged &&
+      homieState === "lost" &&
+      previousLifecycleState === "ready";
+
+    if (!bridgeConnectionResult.stateChanged && !wentOfflineFromLifecycleBaseline) {
+      return result;
+    }
+
+    result.stateChanged = bridgeConnectionResult.stateChanged || lifecycleChanged;
+
+    if (bridgeConnectionResult.stateChanged) {
+      result.logs.push(`Bridge '${deviceName}' connection state changed to '${homieState}'.`);
+    } else {
+      result.logs.push(
+        `Bridge '${deviceName}' reported a live Homie transition from retained 'ready' to live '${homieState}'. Treating it as an offline event.`,
+      );
+    }
+
+    const wentOffline =
+      (bridgeConnectionResult.wasConnected && !bridgeConnectionResult.isConnected) ||
+      wentOfflineFromLifecycleBaseline;
+    const cameOnline = !bridgeConnectionResult.wasConnected && bridgeConnectionResult.isConnected;
+
+    if (wentOffline) {
+      this._emitHomieLifecycleAlert(
+        result,
+        deviceName,
+        "unhealthy",
+        "device_lifecycle_offline",
+        `Bridge reported as '${homieState}' by Homie.`,
+      );
+      return result;
+    }
+
+    if (cameOnline) {
+      result.logs.push(`Bridge '${deviceName}' came back online (Homie state: ready).`);
+      this._emitHomieLifecycleAlert(
+        result,
+        deviceName,
+        "healthy",
+        "device_lifecycle_online",
+        "Bridge is now connected and ready to refresh controller state.",
+      );
+      this.requestSnapshotRecovery(result, deviceName, {
+        detailsAndState: `Bridge '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
+        stateOnly: `Bridge '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
+      });
+    }
+
+    return result;
+  }
+
   private _handleHomieState(
     deviceName: string,
     payload: unknown,
     isRetained: boolean,
   ): ServiceResult {
-    const result = this.createEmptyResult();
     const existingDevice = this.deviceManager.getDevice(deviceName);
     const isConfiguredDevice = this.deviceConfigMap.has(deviceName);
     const previousLifecycleState = existingDevice?.lastHomieState ?? null;
     const homieState = String(payload) as HomieLifecycleState;
 
     if (isRetained) {
-      // Homie publishes `$state` as retained. In practice this means the bridge-local
-      // runtime transitions `lost -> init -> ready` also reach Node-RED with
-      // `msg.retain === true`.
-      //
-      // We therefore use two different rules:
-      // 1. If the device has not produced any live session activity yet, a retained
-      //    `$state` is stored only as a silent baseline and must not emit alerts.
-      // 2. Once the device is already part of the live session, retained `$state`
-      //    transitions are treated as authoritative runtime events.
-      if (!existingDevice && !isConfiguredDevice) {
-        return result;
-      }
-
-      const lifecycleResult = this.deviceManager.recordHomieLifecycleState(
+      return this._handleRetainedHomieState(
         deviceName,
         homieState,
-        false,
+        existingDevice,
+        previousLifecycleState,
+        isConfiguredDevice,
       );
-      const lifecycleChanged = lifecycleResult.stateChanged;
-
-      if (!existingDevice || existingDevice.lastSeenTime === 0) {
-        return result;
-      }
-
-      if (!lifecycleChanged) {
-        return result;
-      }
-
-      result.stateChanged = true;
-
-      if (isDiagnosticOnlyHomieState(homieState)) {
-        result.logs.push(
-          `Device '${deviceName}' reported retained Homie lifecycle state '${homieState}'. Ignoring it for reachability, alerts and resync.`,
-        );
-        return result;
-      }
-
-      const retainedWentOffline = previousLifecycleState === "ready" && homieState === "lost";
-      const retainedCameOnline =
-        homieState === "ready" &&
-        (previousLifecycleState === "lost" ||
-          previousLifecycleState === "init" ||
-          previousLifecycleState === "sleeping");
-
-      if (retainedWentOffline) {
-        result.logs.push(
-          `Device '${deviceName}' reported retained Homie runtime transition 'ready -> lost'. Emitting an offline alert without changing reachability state.`,
-        );
-        Object.assign(
-          result.messages,
-          this._prepareAlerts(
-            [
-              {
-                name: deviceName,
-                reason: "Device reported as 'lost' by Homie.",
-              },
-            ],
-            "unhealthy",
-            "device_lifecycle_offline",
-            "homie_lifecycle",
-          ).messages,
-        );
-        return result;
-      }
-
-      if (retainedCameOnline) {
-        result.logs.push(
-          `Device '${deviceName}' reported retained Homie runtime transition '${previousLifecycleState} -> ready'. Emitting a recovery alert without changing reachability state.`,
-        );
-        Object.assign(
-          result.messages,
-          this._prepareAlerts(
-            [
-              {
-                name: deviceName,
-                reason: "Device reported recovery as 'ready' by Homie.",
-              },
-            ],
-            "healthy",
-            "device_lifecycle_online",
-            "homie_lifecycle",
-          ).messages,
-        );
-        return result;
-      }
-
-      result.logs.push(
-        `Device '${deviceName}' reported retained Homie lifecycle state '${homieState}'. Ignoring it for reachability, alerts and resync.`,
-      );
-      return result;
-    } else {
-      const lifecycleResult = this.deviceManager.recordHomieLifecycleState(
-        deviceName,
-        homieState,
-        true,
-      );
-      const lifecycleChanged = lifecycleResult.stateChanged;
-
-      const { stateChanged, wasConnected, isConnected } = this.deviceManager.updateConnectionState(
-        deviceName,
-        homieState,
-      );
-
-      if (isDiagnosticOnlyHomieState(homieState)) {
-        if (!stateChanged && !lifecycleChanged) {
-          return result;
-        }
-
-        result.stateChanged = stateChanged || lifecycleChanged;
-        result.logs.push(
-          `Device '${deviceName}' reported Homie lifecycle state '${homieState}'. Ignoring it for alerts and resync.`,
-        );
-        return result;
-      }
-
-      // A retained `ready` recorded earlier is enough to tell us that a subsequent live
-      // `lost` means "device went offline", even if this Node-RED session never observed
-      // a live `ready` edge and the boolean `connected` flag therefore remained false.
-      const wentOfflineFromLifecycleBaseline =
-        !stateChanged && homieState === "lost" && previousLifecycleState === "ready";
-
-      if (!stateChanged && !wentOfflineFromLifecycleBaseline) {
-        return result;
-      }
-
-      result.stateChanged = stateChanged || lifecycleChanged;
-
-      if (stateChanged) {
-        result.logs.push(`Device '${deviceName}' connection state changed to '${homieState}'.`);
-      } else if (wentOfflineFromLifecycleBaseline) {
-        result.logs.push(
-          `Device '${deviceName}' reported a live Homie transition from retained 'ready' to live '${homieState}'. Treating it as an offline event.`,
-        );
-      }
-
-      const wentOffline = (wasConnected && !isConnected) || wentOfflineFromLifecycleBaseline;
-      const cameOnline = !wasConnected && isConnected;
-
-      if (wentOffline) {
-        const alertInfo = [
-          {
-            name: deviceName,
-            reason: `Device reported as '${homieState}' by Homie.`,
-          },
-        ];
-        Object.assign(
-          result.messages,
-          this._prepareAlerts(alertInfo, "unhealthy", "device_lifecycle_offline", "homie_lifecycle")
-            .messages,
-        );
-      } else if (cameOnline) {
-        result.logs.push(`Device '${deviceName}' came back online (Homie state: ready).`);
-        const alertInfo = [
-          {
-            name: deviceName,
-            reason: "Device is now connected and healthy.",
-          },
-        ];
-        Object.assign(
-          result.messages,
-          this._prepareAlerts(alertInfo, "healthy", "device_lifecycle_online", "homie_lifecycle")
-            .messages,
-        );
-        const recoveryCommands = this._buildSnapshotRecoveryCommands(deviceName);
-        if (recoveryCommands.length > 0) {
-          result.logs.push(
-            `Device '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
-          );
-          result.messages[Output.Lsh] = recoveryCommands;
-        }
-      }
-      return result;
     }
+
+    return this._handleLiveHomieState(deviceName, homieState, previousLifecycleState);
   }
 
   private _handleLshConf(
@@ -865,7 +961,7 @@ export class LshLogicService {
     payload: unknown,
     isLiveTelemetry: boolean,
   ): ServiceResult {
-    const result = this.createEmptyResult();
+    const result = createEmptyServiceResult();
     if (!this.validators.validateDeviceDetails(payload)) {
       const errorText =
         this.validators.validateDeviceDetails.errors?.map((e) => e.message).join(", ") ||
@@ -886,25 +982,7 @@ export class LshLogicService {
       isLiveTelemetry,
     );
     if (isLiveTelemetry) {
-      const { stateChanged, becameHealthy } =
-        this.deviceManager.recordReachableActivity(deviceName);
-      if (stateChanged) {
-        result.stateChanged = true;
-        result.logs.push(`Device '${deviceName}' sent live details and is reachable.`);
-        if (becameHealthy) {
-          const alertInfo = [
-            {
-              name: deviceName,
-              reason: "Device sent live details and is now healthy.",
-            },
-          ];
-          Object.assign(
-            result.messages,
-            this._prepareAlerts(alertInfo, "healthy", "device_recovered", "live_telemetry")
-              .messages,
-          );
-        }
-      }
+      this.recordLiveControllerActivity(result, deviceName, "details");
     }
     if (changed) {
       result.logs.push(`Stored/Updated details for device '${deviceName}'.`);
@@ -918,7 +996,7 @@ export class LshLogicService {
     payload: unknown,
     isLiveTelemetry: boolean,
   ): ServiceResult {
-    const result = this.createEmptyResult();
+    const result = createEmptyServiceResult();
     if (!this.validators.validateActuatorStates(payload)) {
       const errorText =
         this.validators.validateActuatorStates.errors?.map((e) => e.message).join(", ") ||
@@ -963,25 +1041,7 @@ export class LshLogicService {
         isLiveTelemetry,
       );
       if (isLiveTelemetry) {
-        const { stateChanged, becameHealthy } =
-          this.deviceManager.recordReachableActivity(deviceName);
-        if (stateChanged) {
-          result.stateChanged = true;
-          result.logs.push(`Device '${deviceName}' sent live state and is reachable.`);
-          if (becameHealthy) {
-            const alertInfo = [
-              {
-                name: deviceName,
-                reason: "Device sent live state and is now healthy.",
-              },
-            ];
-            Object.assign(
-              result.messages,
-              this._prepareAlerts(alertInfo, "healthy", "device_recovered", "live_telemetry")
-                .messages,
-            );
-          }
-        }
+        this.recordLiveControllerActivity(result, deviceName, "state");
       }
       if (isNew)
         result.logs.push(`Received state for a new device: ${deviceName}. Creating partial entry.`);
@@ -995,7 +1055,7 @@ export class LshLogicService {
           `Device '${deviceName}' sent state but its configuration is unknown. Requesting details.`,
         );
         result.messages[Output.Lsh] = this._createLshCommand(
-          `${this.lshBasePath}${deviceName}/IN`,
+          this._deviceCommandTopic(deviceName),
           { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
           1,
         );
@@ -1006,87 +1066,114 @@ export class LshLogicService {
     return result;
   }
 
-  private _handleLshMisc(deviceName: string, payload: unknown): ServiceResult {
-    if (!this.validators.validateAnyMiscTopic(payload)) {
-      const result = this.createEmptyResult();
+  private _handleLshEvents(
+    deviceName: string,
+    payload: unknown,
+    isLiveTelemetry: boolean,
+  ): ServiceResult {
+    if (!this.validators.validateAnyEventsTopic(payload)) {
+      const result = createEmptyServiceResult();
       const errorText =
-        this.validators.validateAnyMiscTopic.errors?.map((e) => e.message).join(", ") ||
+        this.validators.validateAnyEventsTopic.errors?.map((e) => e.message).join(", ") ||
         "unknown validation error";
-      result.warnings.push(`Invalid 'misc' payload from ${deviceName}: ${errorText}`);
+      result.warnings.push(`Invalid 'events' payload from ${deviceName}: ${errorText}`);
       return result;
     }
-    const miscPayload = payload as AnyMiscTopicPayload;
-    const result = this.createEmptyResult();
+    const eventsPayload = payload as AnyEventsTopicPayload;
+    const result = createEmptyServiceResult();
 
-    if (isBridgeDiagnosticPayload(miscPayload)) {
-      // Bridge-local diagnostics share the `misc` topic for transport convenience,
-      // but they do not describe button logic or device-side reachability.
-      // Accept them silently as informational runtime events.
-      result.logs.push(
-        `Bridge diagnostic from '${deviceName}': ${miscPayload.bridge_diagnostic}. Ignoring it for reachability and click logic.`,
-      );
-      return result;
-    }
-
-    switch (miscPayload.p) {
+    switch (eventsPayload.p) {
       case LshProtocol.NETWORK_CLICK_REQUEST: {
-        this.recordLiveDeviceReachability(result, deviceName, "misc traffic");
-        this.mergeServiceResult(result, this._processNewClickRequest(deviceName, miscPayload));
+        if (isLiveTelemetry) {
+          this.recordLiveControllerActivity(result, deviceName, "events traffic");
+        }
+        mergeServiceResults(result, this._processNewClickRequest(deviceName, eventsPayload));
         return result;
       }
 
       case LshProtocol.NETWORK_CLICK_CONFIRM: {
-        this.recordLiveDeviceReachability(result, deviceName, "misc traffic");
-        this.mergeServiceResult(result, this._processClickConfirmation(deviceName, miscPayload));
+        if (isLiveTelemetry) {
+          this.recordLiveControllerActivity(result, deviceName, "events traffic");
+        }
+        mergeServiceResults(result, this._processClickConfirmation(deviceName, eventsPayload));
         return result;
       }
 
       case LshProtocol.PING:
-        {
-          const device = this.deviceManager.getDevice(deviceName);
-          const { stateChanged, becameHealthy } =
-            this.deviceManager.recordReachableActivity(deviceName);
-          const recoveryCommands = this._buildSnapshotRecoveryCommands(deviceName);
-
-          if (stateChanged) {
-            result.logs.push(`Device '${deviceName}' is now responsive.`);
-            result.stateChanged = true;
-
-            if (becameHealthy) {
-              result.logs.push(`Device '${deviceName}' is healthy again after ping response.`);
-              const alertInfo = [
-                {
-                  name: deviceName,
-                  reason: "Device responded to ping and is now healthy.",
-                },
-              ];
-              Object.assign(
-                result.messages,
-                this._prepareAlerts(alertInfo, "healthy", "device_recovered", "watchdog").messages,
-              );
-            }
-          } else {
-            result.logs.push(`Received ping response from '${deviceName}'.`);
-          }
-
-          if (recoveryCommands.length > 0) {
-            result.messages[Output.Lsh] = recoveryCommands;
-            if (!device || device.lastDetailsTime === 0) {
-              result.logs.push(
-                `Device '${deviceName}' is missing device details. Requesting details and state.`,
-              );
-            } else {
-              result.logs.push(
-                `Device '${deviceName}' is missing an authoritative actuator state. Requesting state.`,
-              );
-            }
-          }
-        }
+        this.recordControllerPingResponse(result, deviceName, isLiveTelemetry);
         break;
 
       default:
         return result;
     }
+    return result;
+  }
+
+  private _handleLshBridge(deviceName: string, payload: unknown): ServiceResult {
+    if (!this.validators.validateAnyBridgeTopic(payload)) {
+      const result = createEmptyServiceResult();
+      const errorText =
+        this.validators.validateAnyBridgeTopic.errors?.map((e) => e.message).join(", ") ||
+        "unknown validation error";
+      result.warnings.push(`Invalid 'bridge' payload from ${deviceName}: ${errorText}`);
+      return result;
+    }
+
+    const bridgePayload = payload as AnyBridgeTopicPayload;
+    const result = createEmptyServiceResult();
+
+    if (isBridgeDiagnosticPayload(bridgePayload)) {
+      result.logs.push(
+        `Bridge diagnostic from '${deviceName}': ${bridgePayload.kind}. Ignoring it for controller reachability and click logic.`,
+      );
+      return result;
+    }
+
+    const servicePingReply = bridgePayload;
+    const { stateChanged, bridgeBecameConnected, controllerDisconnected, snapshotInvalidated } =
+      this.deviceManager.recordBridgePingReply(
+        deviceName,
+        servicePingReply.controller_connected,
+        servicePingReply.runtime_synchronized,
+      );
+
+    if (stateChanged) {
+      result.stateChanged = true;
+    }
+
+    if (bridgeBecameConnected) {
+      result.logs.push(`Bridge '${deviceName}' replied to the service ping and is reachable.`);
+    } else {
+      result.logs.push(`Received bridge service ping reply from '${deviceName}'.`);
+    }
+
+    if (!servicePingReply.controller_connected) {
+      result.logs.push(
+        `Bridge '${deviceName}' reports that the downstream controller link is disconnected.`,
+      );
+    } else if (!servicePingReply.runtime_synchronized) {
+      result.logs.push(
+        `Bridge '${deviceName}' reports that the controller link is up but its runtime cache is not synchronized yet.`,
+      );
+    } else {
+      result.logs.push(
+        `Bridge '${deviceName}' reports a connected and synchronized downstream controller path.`,
+      );
+    }
+
+    if (controllerDisconnected) {
+      result.warnings.push(
+        `Device '${deviceName}' is no longer considered controller-reachable because the bridge reported controller_connected=false.`,
+      );
+    }
+
+    if (snapshotInvalidated) {
+      this.requestSnapshotRecovery(result, deviceName, {
+        detailsAndState: `Bridge '${deviceName}' reported an unsynchronized runtime cache. Requesting a fresh authoritative snapshot immediately.`,
+        stateOnly: `Bridge '${deviceName}' reported an unsynchronized runtime cache. Requesting a fresh authoritative state immediately.`,
+      });
+    }
+
     return result;
   }
 
@@ -1099,11 +1186,11 @@ export class LshLogicService {
     deviceName: string,
     payload: NetworkClickRequestPayload,
   ): ServiceResult {
-    const result = this.createEmptyResult();
+    const result = createEmptyServiceResult();
     const { c: correlationId, i: buttonId, t: clickType } = payload;
     const slotKey = buildClickSlotKey(deviceName, buttonId, clickType);
     const transactionKey = buildClickCorrelationKey(deviceName, buttonId, clickType, correlationId);
-    const commandTopic = `${this.lshBasePath}${deviceName}/IN`;
+    const commandTopic = this._deviceCommandTopic(deviceName);
 
     try {
       const { actors, otherActors } = this._validateClickRequest(deviceName, buttonId, clickType);
@@ -1122,15 +1209,14 @@ export class LshLogicService {
       result.logs.push(`Validation OK for ${transactionKey}. Sending ACK.`);
     } catch (error) {
       if (error instanceof ClickValidationError) {
-        const alertInfo = [{ name: deviceName, reason: `Action failed: ${error.reason}` }];
-        const alertResult = this._prepareAlerts(
-          alertInfo,
+        this._emitAlert(
+          result,
+          [{ name: deviceName, reason: `Action failed: ${error.reason}` }],
           "unhealthy",
           "action_failed",
           "action_validation",
           payload,
         );
-        Object.assign(result.messages, alertResult.messages);
 
         if (error.failoverType === "general") {
           result.errors.push(`System failure on click. Sending General Failover (c_gf).`);
@@ -1168,7 +1254,7 @@ export class LshLogicService {
     deviceName: string,
     payload: NetworkClickConfirmPayload,
   ): ServiceResult {
-    const result = this.createEmptyResult();
+    const result = createEmptyServiceResult();
     const { c: correlationId, i: buttonId, t: clickType } = payload;
     const transactionKey = buildClickCorrelationKey(deviceName, buttonId, clickType, correlationId);
 
@@ -1219,73 +1305,182 @@ export class LshLogicService {
       throw new ClickValidationError("Action configured with no targets.", "click");
 
     for (const actor of actors) {
-      const device = this.deviceManager.getDevice(actor.name);
-      if (!device) {
-        throw new ClickValidationError(
-          `Target actor '${actor.name}' is unknown to the registry.`,
-          "click",
-        );
-      }
-
-      if (!device.connected) {
-        throw new ClickValidationError(`Target actor '${actor.name}' is offline.`, "click");
-      }
-
-      if (device.isStale) {
-        throw new ClickValidationError(
-          `Target actor '${actor.name}' is stale after a timed-out ping.`,
-          "click",
-        );
-      }
-
-      if (!device.isHealthy) {
-        throw new ClickValidationError(`Target actor '${actor.name}' is unhealthy.`, "click");
-      }
-
-      if (device.lastDetailsTime === 0) {
-        throw new ClickValidationError(
-          `Target actor '${actor.name}' has unknown device details.`,
-          "click",
-        );
-      }
-
-      // Keep distributed click handling intentionally simple: if the action needs
-      // an authoritative local state snapshot, reject it before sending ACK rather
-      // than trying to recover mid-transaction.
-      const requiresAuthoritativeState =
-        clickType === ClickType.Long || actor.allActuators === false;
-      if (requiresAuthoritativeState && device.lastStateTime === 0) {
-        throw new ClickValidationError(
-          `Target actor '${actor.name}' has no authoritative actuator state yet.`,
-          "click",
-        );
-      }
-
-      if (device.actuatorsIDs.length === 0) {
-        throw new ClickValidationError(`Target actor '${actor.name}' has no actuators.`, "click");
-      }
-
-      if (!actor.allActuators) {
-        if (actor.actuators.length === 0) {
-          throw new ClickValidationError(
-            `Target actor '${actor.name}' has no actuator IDs configured.`,
-            "click",
-          );
-        }
-
-        const invalidActuatorIds = actor.actuators.filter(
-          (actuatorId) => device.actuatorIndexes[actuatorId] === undefined,
-        );
-        if (invalidActuatorIds.length > 0) {
-          throw new ClickValidationError(
-            `Target actor '${actor.name}' references unknown actuator ID(s): ${invalidActuatorIds.join(", ")}.`,
-            "click",
-          );
-        }
-      }
+      this._assertActorCanHandleClick(actor, clickType);
     }
 
     return { actors, otherActors };
+  }
+
+  private _assertActorCanHandleClick(actor: Actor, clickType: ClickType): void {
+    const device = this.deviceManager.getDevice(actor.name);
+    if (!device) {
+      throw new ClickValidationError(
+        `Target actor '${actor.name}' is unknown to the registry.`,
+        "click",
+      );
+    }
+
+    if (!device.bridgeConnected) {
+      throw new ClickValidationError(`Target actor '${actor.name}' bridge is offline.`, "click");
+    }
+
+    if (!device.connected) {
+      throw new ClickValidationError(
+        `Target actor '${actor.name}' controller is offline or not responding.`,
+        "click",
+      );
+    }
+
+    if (device.isStale) {
+      throw new ClickValidationError(
+        `Target actor '${actor.name}' is stale after a timed-out ping.`,
+        "click",
+      );
+    }
+
+    if (!device.isHealthy) {
+      throw new ClickValidationError(`Target actor '${actor.name}' is unhealthy.`, "click");
+    }
+
+    if (device.lastDetailsTime === 0) {
+      throw new ClickValidationError(
+        `Target actor '${actor.name}' has unknown device details.`,
+        "click",
+      );
+    }
+
+    // Keep distributed click handling intentionally simple: if the action needs
+    // an authoritative local state snapshot, reject it before sending ACK rather
+    // than trying to recover mid-transaction.
+    if (this._actorRequiresAuthoritativeState(actor, clickType) && device.lastStateTime === 0) {
+      throw new ClickValidationError(
+        `Target actor '${actor.name}' has no authoritative actuator state yet.`,
+        "click",
+      );
+    }
+
+    if (device.actuatorsIDs.length === 0) {
+      throw new ClickValidationError(`Target actor '${actor.name}' has no actuators.`, "click");
+    }
+
+    if (actor.allActuators) {
+      return;
+    }
+
+    if (actor.actuators.length === 0) {
+      throw new ClickValidationError(
+        `Target actor '${actor.name}' has no actuator IDs configured.`,
+        "click",
+      );
+    }
+
+    const invalidActuatorIds = actor.actuators.filter(
+      (actuatorId) => device.actuatorIndexes[actuatorId] === undefined,
+    );
+    if (invalidActuatorIds.length > 0) {
+      throw new ClickValidationError(
+        `Target actor '${actor.name}' references unknown actuator ID(s): ${invalidActuatorIds.join(", ")}.`,
+        "click",
+      );
+    }
+  }
+
+  private _actorRequiresAuthoritativeState(actor: Actor, clickType: ClickType): boolean {
+    return clickType === ClickType.Long || !actor.allActuators;
+  }
+
+  private _buildActorBooleanStates(
+    actor: Actor,
+    device: DeviceState,
+    stateToSet: boolean,
+  ): { states: boolean[] | null; warning?: string } {
+    if (actor.allActuators) {
+      return {
+        states: new Array<boolean>(device.actuatorsIDs.length).fill(stateToSet),
+      };
+    }
+
+    if (device.lastStateTime === 0) {
+      return {
+        states: null,
+        warning: `Skipping actor '${actor.name}' because its actuator state is not authoritative yet.`,
+      };
+    }
+
+    const states = device.actuatorStates.slice();
+    for (const actuatorId of actor.actuators) {
+      const index = device.actuatorIndexes[actuatorId];
+      if (index !== undefined) {
+        states[index] = stateToSet;
+      }
+    }
+
+    return { states };
+  }
+
+  private _packBooleanStates(booleanStates: boolean[]): number[] {
+    const packedBytes = new Array<number>(Math.ceil(booleanStates.length / 8)).fill(0);
+
+    for (let i = 0; i < booleanStates.length; i++) {
+      if (booleanStates[i]) {
+        const byteIndex = i >> 3; // i / 8
+        const bitIndex = i & 7; // i % 8
+        packedBytes[byteIndex] |= BIT_MASK_8[bitIndex];
+      }
+    }
+
+    return packedBytes;
+  }
+
+  private _resolveClickState(
+    result: Pick<ServiceResult, "logs" | "warnings">,
+    actors: Actor[],
+    otherActors: string[],
+    clickType: ClickType,
+  ): boolean | null {
+    if (clickType === ClickType.SuperLong) {
+      result.logs.push("Executing SLC logic: setting state to OFF.");
+      return false;
+    }
+
+    const toggleResult = this.deviceManager.getSmartToggleState(actors, otherActors);
+    if (toggleResult.warning) {
+      result.warnings.push(toggleResult.warning);
+    }
+    result.logs.push(
+      `Smart Toggle: ${toggleResult.active}/${toggleResult.total} active. Decision: ${
+        toggleResult.stateToSet ? "ON" : "OFF"
+      }`,
+    );
+
+    if (toggleResult.total === 0) {
+      if (!toggleResult.warning) {
+        result.warnings.push("Smart Toggle aborted because no authoritative state is available.");
+      }
+      result.logs.push(
+        "Skipping click execution because no authoritative actor state is available.",
+      );
+      return null;
+    }
+
+    return toggleResult.stateToSet;
+  }
+
+  private _emitOtherActorsCommand(
+    result: Pick<ServiceResult, "messages">,
+    otherActors: string[],
+    stateToSet: boolean,
+  ): void {
+    if (otherActors.length === 0) {
+      return;
+    }
+
+    const payload: OtherActorsCommandPayload = {
+      otherActors,
+      stateToSet,
+    };
+
+    result.messages[Output.OtherActors] = { payload };
   }
 
   /**
@@ -1305,31 +1500,9 @@ export class LshLogicService {
       logs: [],
       warnings: [],
     };
-    let stateToSet: boolean;
-
-    if (clickType === ClickType.SuperLong) {
-      stateToSet = false; // Super-long-click always turns devices off.
-      result.logs.push("Executing SLC logic: setting state to OFF.");
-    } else {
-      // Long-click uses the "smart toggle" logic.
-      const toggleResult = this.deviceManager.getSmartToggleState(actors, otherActors);
-      if (toggleResult.warning) result.warnings.push(toggleResult.warning);
-      result.logs.push(
-        `Smart Toggle: ${toggleResult.active}/${
-          toggleResult.total
-        } active. Decision: ${toggleResult.stateToSet ? "ON" : "OFF"}`,
-      );
-      stateToSet = toggleResult.stateToSet;
-
-      if (toggleResult.total === 0) {
-        if (!toggleResult.warning) {
-          result.warnings.push("Smart Toggle aborted because no authoritative state is available.");
-        }
-        result.logs.push(
-          "Skipping click execution because no authoritative actor state is available.",
-        );
-        return result;
-      }
+    const stateToSet = this._resolveClickState(result, actors, otherActors, clickType);
+    if (stateToSet === null) {
+      return result;
     }
 
     const { commands: lshCommands, warnings: commandWarnings } = this.buildStateCommands(
@@ -1341,14 +1514,7 @@ export class LshLogicService {
       result.messages[Output.Lsh] = lshCommands;
     }
 
-    if (otherActors.length > 0) {
-      const payload: OtherActorsCommandPayload = {
-        otherActors,
-        stateToSet,
-      };
-
-      result.messages[Output.OtherActors] = { payload };
-    }
+    this._emitOtherActorsCommand(result, otherActors, stateToSet);
     return result;
   }
 
@@ -1372,7 +1538,7 @@ export class LshLogicService {
         continue;
       }
 
-      const commandTopic = `${this.lshBasePath}${actor.name}/IN`;
+      const commandTopic = this._deviceCommandTopic(actor.name);
       // Optimization: use the more specific 'c_asas' command if only one actuator is targeted.
       const isSingleSpecificActuator = !actor.allActuators && actor.actuators.length === 1;
 
@@ -1388,109 +1554,61 @@ export class LshLogicService {
             2,
           ),
         );
-      } else {
-        let booleanStates: boolean[];
-        if (actor.allActuators) {
-          booleanStates = new Array<boolean>(device.actuatorsIDs.length).fill(stateToSet);
-        } else {
-          if (device.lastStateTime === 0) {
-            warnings.push(
-              `Skipping actor '${actor.name}' because its actuator state is not authoritative yet.`,
-            );
-            continue;
-          }
-
-          booleanStates = device.actuatorStates.slice();
-          for (const actuatorId of actor.actuators) {
-            const index = device.actuatorIndexes[actuatorId];
-            if (index !== undefined) booleanStates[index] = stateToSet;
-          }
-        }
-
-        // Pack boolean states into the current bitpacked LSH wire format.
-        const numBytes = Math.ceil(booleanStates.length / 8);
-        const packedBytes = new Array<number>(numBytes).fill(0);
-
-        for (let i = 0; i < booleanStates.length; i++) {
-          if (booleanStates[i]) {
-            const byteIndex = i >> 3; // i / 8
-            const bitIndex = i & 7; // i % 8
-            packedBytes[byteIndex] |= BIT_MASK_8[bitIndex];
-          }
-        }
-
-        commands.push(
-          this._createLshCommand(
-            commandTopic,
-            {
-              p: LshProtocol.SET_STATE,
-              s: packedBytes,
-            } as SetStatePayload,
-            2,
-          ),
-        );
+        continue;
       }
+
+      const stateBuildResult = this._buildActorBooleanStates(actor, device, stateToSet);
+      if (!stateBuildResult.states) {
+        warnings.push(stateBuildResult.warning!);
+        continue;
+      }
+
+      commands.push(
+        this._createLshCommand(
+          commandTopic,
+          {
+            p: LshProtocol.SET_STATE,
+            s: this._packBooleanStates(stateBuildResult.states),
+          } as SetStatePayload,
+          2,
+        ),
+      );
     }
     return { commands, warnings };
   }
 
   /**
-   * Prepares ping commands for a list of devices. It decides whether to use
-   * a single broadcast ping or staggered individual pings.
+   * Prepares controller-level ping commands for a list of devices.
+   * Multiple pings are staggered to avoid command bursts.
    * @internal
    */
-  private _preparePings(actions: WatchdogActions): {
-    messages: OutputMessages;
+  private _prepareControllerPings(devicesToPingSet: Set<string>): {
+    commands: NodeMessage | NodeMessage[];
     logs: string[];
     stagger: boolean;
   } {
-    const messages: OutputMessages = {};
     const logs: string[] = [];
-    const devicesToPing = Array.from(actions.devicesToPing);
-    const totalConfiguredDevices = this.systemConfig!.devices.length;
-    let stagger = false;
+    const devicesToPing = Array.from(devicesToPingSet);
 
-    if (devicesToPing.length === totalConfiguredDevices) {
-      logs.push(
-        `All ${totalConfiguredDevices} devices are silent. Preparing a single broadcast ping.`,
-      );
-      messages[Output.Lsh] = this._createLshCommand(
-        this.serviceTopic,
-        { p: LshProtocol.PING } as PingPayload,
-        1,
-      );
-    } else {
-      logs.push(`Preparing staggered pings for ${devicesToPing.length} device(s)...`);
-      if (devicesToPing.length > 1) {
-        stagger = true;
-      }
-      const pingCommands: NodeMessage[] = devicesToPing.map((deviceName) =>
-        this._createLshCommand(
-          `${this.lshBasePath}${deviceName}/IN`,
-          { p: LshProtocol.PING } as PingPayload,
-          1,
-        ),
-      );
-      messages[Output.Lsh] = pingCommands;
-    }
-    return { messages, logs, stagger };
+    logs.push(`Preparing controller-level pings for ${devicesToPing.length} device(s)...`);
+    const stagger = devicesToPing.length > 1;
+    const pingCommands = this._buildDevicePingCommands(devicesToPing);
+
+    return {
+      commands: pingCommands.length === 1 ? pingCommands[0] : pingCommands,
+      logs,
+      stagger,
+    };
   }
 
-  /**
-   * Formats and prepares an alert message for devices that have changed state.
-   * @internal
-   * @param devices - The list of devices to include in the alert.
-   * @param status - The health status to report ('healthy' or 'unhealthy').
-   * @param details - Optional details object to append to the message.
-   * @returns An object containing the formatted message for the Alerts output.
-   */
-  private _prepareAlerts(
+  private _emitAlert(
+    result: Pick<ServiceResult, "messages">,
     devices: { name: string; reason: string }[],
     status: "healthy" | "unhealthy",
     eventType: AlertEventType,
     eventSource: AlertEventSource,
     details?: unknown,
-  ): { messages: OutputMessages } {
+  ): void {
     const payload: AlertPayload = {
       message: formatAlertMessage(devices, status, details),
       status,
@@ -1499,12 +1617,6 @@ export class LshLogicService {
       devices,
       details,
     };
-    return {
-      messages: {
-        [Output.Alerts]: {
-          payload,
-        },
-      },
-    };
+    result.messages[Output.Alerts] = { payload };
   }
 }

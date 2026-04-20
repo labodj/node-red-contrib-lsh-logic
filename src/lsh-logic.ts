@@ -334,14 +334,8 @@ export class LshLogicNode {
     validateFn: ValidateFunction,
     scheduleStartupVerification: boolean,
   ): Promise<void> {
-    // Clear any pending verification timers from a previous load.
-    if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
-    if (this.startupBootTimer) clearTimeout(this.startupBootTimer);
-    if (this.warmupTimer) clearTimeout(this.warmupTimer);
-    this.initialVerificationTimer = null;
-    this.startupBootTimer = null;
-    this.warmupTimer = null;
-    this.isWarmingUp = false;
+    // Clear any pending startup timers from a previous load.
+    this.clearStartupTimers();
 
     try {
       this.node.log(`Loading config from: ${filePath}`);
@@ -399,6 +393,22 @@ export class LshLogicNode {
     return Number.isInteger(seconds) ? seconds.toFixed(0) : seconds.toFixed(1);
   }
 
+  private clearStartupTimers(): void {
+    if (this.startupBootTimer) {
+      clearTimeout(this.startupBootTimer);
+      this.startupBootTimer = null;
+    }
+    if (this.warmupTimer) {
+      clearTimeout(this.warmupTimer);
+      this.warmupTimer = null;
+    }
+    if (this.initialVerificationTimer) {
+      clearTimeout(this.initialVerificationTimer);
+      this.initialVerificationTimer = null;
+    }
+    this.isWarmingUp = false;
+  }
+
   private startWarmup(durationMs: number): void {
     if (this.warmupTimer) {
       clearTimeout(this.warmupTimer);
@@ -410,16 +420,6 @@ export class LshLogicNode {
       this.node.log("Warm-up period finished. Node is now fully operational.");
       this.warmupTimer = null;
     }, durationMs);
-  }
-
-  private scheduleInitialVerificationFromBoot(initialStateTimeoutMs: number): void {
-    if (this.initialVerificationTimer) {
-      clearTimeout(this.initialVerificationTimer);
-    }
-
-    this.initialVerificationTimer = setTimeout(() => {
-      void this.runInitialVerification();
-    }, initialStateTimeoutMs);
   }
 
   private async runStartupSequence(
@@ -440,16 +440,17 @@ export class LshLogicNode {
       return;
     }
 
-    await this.runStartupBootResync(
-      "after MQTT subscription settle because one or more configured devices are missing authoritative snapshots",
+    this.node.log(
+      "Requesting startup bridge-local BOOT resync after MQTT subscription settle because one or more configured devices are missing authoritative snapshots.",
     );
-    this.scheduleInitialVerificationFromBoot(initialStateTimeoutMs);
-  }
+    await this.processServiceResult(this.service.getStartupCommands());
 
-  private async runStartupBootResync(reason: string): Promise<void> {
-    this.node.log(`Requesting startup bridge-local BOOT resync ${reason}.`);
-    const startupResult = this.service.getStartupCommands();
-    await this.processServiceResult(startupResult);
+    if (this.initialVerificationTimer) {
+      clearTimeout(this.initialVerificationTimer);
+    }
+    this.initialVerificationTimer = setTimeout(() => {
+      void this.runInitialVerification();
+    }, initialStateTimeoutMs);
   }
 
   private async runInitialVerification(): Promise<void> {
@@ -518,7 +519,8 @@ export class LshLogicNode {
    * @param messages An object mapping an Output enum member to the message(s) to be sent.
    */
   private send(messages: OutputMessages): void {
-    // The number of outputs is now correctly determined from the enum's size.
+    // Derive the output count from the enum itself so the mapping stays correct
+    // if a future change adds or removes outputs.
     const numOutputs = Object.keys(Output).filter((k) => !isNaN(Number(k))).length;
     const outputArray = Array<
       | NodeMessage
@@ -549,9 +551,7 @@ export class LshLogicNode {
   public async _cleanupResources(): Promise<void> {
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
-    if (this.startupBootTimer) clearTimeout(this.startupBootTimer);
-    if (this.warmupTimer) clearTimeout(this.warmupTimer);
-    if (this.initialVerificationTimer) clearTimeout(this.initialVerificationTimer);
+    this.clearStartupTimers();
     if (this.configReloadTimer) clearTimeout(this.configReloadTimer);
     if (this.watcher) {
       await this.watcher.close();
@@ -605,7 +605,7 @@ export class LshLogicNode {
     const deviceNames = this.service.getConfiguredDeviceNames() || [];
 
     // Explicitly define the sub-topics to subscribe to for each LSH device, excluding '/IN'.
-    const lshSubTopics = ["conf", "state", "misc"];
+    const lshSubTopics = ["conf", "state", "events", "bridge"];
     const lshTopics = deviceNames.flatMap((name) =>
       lshSubTopics.map((subTopic) => `${lshBasePath}${name}/${subTopic}`),
     ); // These require QoS 2.

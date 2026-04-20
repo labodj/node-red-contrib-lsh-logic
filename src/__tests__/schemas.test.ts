@@ -58,7 +58,7 @@ describe("schemas", () => {
       extra: true,
     });
 
-    const miscValid = validators.validateAnyMiscTopic({
+    const eventsValid = validators.validateAnyEventsTopic({
       p: LshProtocol.NETWORK_CLICK_REQUEST,
       c: 1,
       i: 7,
@@ -67,7 +67,7 @@ describe("schemas", () => {
     });
 
     expect(detailsValid).toBe(false);
-    expect(miscValid).toBe(false);
+    expect(eventsValid).toBe(false);
   });
 
   it("rejects details payloads without the handshake protocol major", () => {
@@ -82,7 +82,7 @@ describe("schemas", () => {
   });
 
   it("rejects network click payloads without a correlation ID", () => {
-    const isValid = validators.validateAnyMiscTopic({
+    const isValid = validators.validateAnyEventsTopic({
       p: LshProtocol.NETWORK_CLICK_REQUEST,
       i: 7,
       t: ClickType.Long,
@@ -107,7 +107,7 @@ describe("schemas", () => {
       a: [0],
       b: [7],
     });
-    const miscValid = validators.validateAnyMiscTopic({
+    const eventsValid = validators.validateAnyEventsTopic({
       p: LshProtocol.NETWORK_CLICK_REQUEST,
       c: 0,
       i: 7,
@@ -116,7 +116,7 @@ describe("schemas", () => {
 
     expect(configValid).toBe(false);
     expect(detailsValid).toBe(false);
-    expect(miscValid).toBe(false);
+    expect(eventsValid).toBe(false);
   });
 
   it("accepts empty bitpacked state payloads for zero-actuator devices", () => {
@@ -128,11 +128,22 @@ describe("schemas", () => {
     expect(isValid).toBe(true);
   });
 
-  it("accepts bridge-local diagnostic payloads on the misc topic", () => {
-    const isValid = validators.validateAnyMiscTopic({
-      bridge_diagnostic: "mqtt_queue_overflow",
+  it("accepts bridge-local diagnostic payloads on the bridge topic", () => {
+    const isValid = validators.validateAnyBridgeTopic({
+      event: "diagnostic",
+      kind: "mqtt_queue_overflow",
       dropped_device_commands: 2,
       extra_future_field: true,
+    });
+
+    expect(isValid).toBe(true);
+  });
+
+  it("accepts service ping replies on the bridge topic", () => {
+    const isValid = validators.validateAnyBridgeTopic({
+      event: "service_ping_reply",
+      controller_connected: true,
+      runtime_synchronized: true,
     });
 
     expect(isValid).toBe(true);

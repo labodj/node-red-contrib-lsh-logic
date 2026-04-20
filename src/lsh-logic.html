@@ -494,9 +494,10 @@
     </dd>
   </dl>
   <p>
-    Device <code>misc</code> topics may also carry bridge-local diagnostics emitted by
-    <code>lsh-bridge</code>. The node accepts those payloads as informational runtime events, but it
-    does not treat them as click traffic or as proof that the device is currently reachable.
+    Device <code>events</code> topics carry controller-backed runtime traffic, while device
+    <code>bridge</code> topics carry bridge-local runtime events emitted by <code>lsh-bridge</code>.
+    The node accepts bridge-local payloads as informational runtime events, but it does not treat
+    them as click traffic or as proof that the controller is currently reachable.
   </p>
 
   <h3>Outputs</h3>
@@ -577,6 +578,11 @@
     <li>
       Retained snapshots do <strong>not</strong> mark a device as connected, healthy, or freshly
       reachable.
+    </li>
+    <li>
+      Retained <code>events</code> and <code>bridge</code> payloads are ignored completely. They are
+      runtime-only signals and are not replay-safe inputs for reachability, click handling, or
+      bridge health.
     </li>
     <li>
       Current reachability only comes from live Homie <code>$state=ready</code>, live LSH traffic,

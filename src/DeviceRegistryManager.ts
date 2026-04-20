@@ -54,13 +54,15 @@ export class DeviceRegistryManager {
     if (!this.registry[deviceName]) {
       this.registry[deviceName] = {
         name: deviceName,
-        // A new device is assumed to be disconnected and unhealthy until it
-        // proves it's reachable via Homie 'ready' or an LSH ping response.
+        // A new device is assumed to be bridge-disconnected and controller-unhealthy
+        // until telemetry proves otherwise.
         connected: false,
         isHealthy: false,
         isStale: false,
         alertSent: false,
         lastSeenTime: 0,
+        bridgeConnected: false,
+        bridgeLastSeenTime: 0,
         lastHomieState: null,
         lastHomieStateTime: 0,
         lastDetailsTime: 0,
@@ -113,7 +115,6 @@ export class DeviceRegistryManager {
 
   /**
    * Updates the registry with configuration details from a device's 'conf' message.
-   * Now uses the new protocol with keys 'n', 'a', 'b'.
    * @param deviceName - The name of the device.
    * @param details - The validated payload from the 'conf' topic.
    * @returns An object indicating if the device details have changed.
@@ -198,18 +199,19 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Updates a device's status based on Homie `$state` messages.
-   * This method is now only responsible for updating the internal state.
+   * Updates a device's bridge reachability status based on Homie `$state` messages.
+   * Homie lifecycle describes the MQTT-facing bridge runtime, not the downstream
+   * controller health.
    * @param deviceName - The name of the device.
    * @param homieState - The state string from the Homie topic (e.g., "ready", "lost").
-   * @returns An object indicating if the internal state was changed, and the old/new connection states.
+   * @returns An object indicating if the internal state was changed, and the old/new bridge connection states.
    */
-  public updateConnectionState(
+  public updateBridgeConnectionState(
     deviceName: string,
     homieState: HomieLifecycleState,
   ): { stateChanged: boolean; wasConnected: boolean; isConnected: boolean } {
     const device = this._ensureDeviceExists(deviceName);
-    const wasConnected = device.connected;
+    const wasConnected = device.bridgeConnected;
     const isConnected = homieState === "ready";
 
     if (wasConnected === isConnected) {
@@ -217,14 +219,13 @@ export class DeviceRegistryManager {
       return { stateChanged: false, wasConnected, isConnected };
     }
 
-    device.connected = isConnected;
-    device.lastSeenTime = Date.now();
+    const now = Date.now();
+    device.bridgeConnected = isConnected;
+    device.bridgeLastSeenTime = now;
 
-    if (isConnected) {
-      device.isHealthy = true;
-      device.isStale = false;
-      device.alertSent = false;
-    } else {
+    if (!isConnected) {
+      // Once the bridge is offline, the controller cannot be considered reachable.
+      device.connected = false;
       device.isHealthy = false;
       device.isStale = false;
     }
@@ -253,7 +254,7 @@ export class DeviceRegistryManager {
     device.lastHomieStateTime = now;
 
     if (markSeen) {
-      device.lastSeenTime = now;
+      device.bridgeLastSeenTime = now;
     }
 
     return { stateChanged: previousState !== homieState };
@@ -265,10 +266,9 @@ export class DeviceRegistryManager {
    * @param deviceName - The name of the device that emitted live traffic.
    * @returns Reachability transition details.
    */
-  public recordReachableActivity(deviceName: string): {
+  public recordControllerActivity(deviceName: string): {
     stateChanged: boolean;
     becameHealthy: boolean;
-    becameConnected: boolean;
   } {
     const device = this._ensureDeviceExists(deviceName);
 
@@ -277,10 +277,11 @@ export class DeviceRegistryManager {
     const wasConnected = device.connected;
 
     const becameHealthy = !wasHealthy || wasStale;
-    const becameConnected = !wasConnected;
 
     device.lastSeenTime = Date.now();
+    device.bridgeLastSeenTime = device.lastSeenTime;
     device.connected = true;
+    device.bridgeConnected = true;
 
     if (becameHealthy) {
       device.isHealthy = true;
@@ -289,9 +290,58 @@ export class DeviceRegistryManager {
     }
 
     return {
-      stateChanged: becameHealthy || becameConnected,
+      stateChanged: becameHealthy || !wasConnected,
       becameHealthy,
-      becameConnected,
+    };
+  }
+
+  /**
+   * Records a bridge-local service ping reply without promoting controller
+   * health from bridge-only traffic.
+   * @param deviceName - The device whose bridge replied.
+   * @param controllerConnected - Bridge-reported controller link status.
+   * @param runtimeSynchronized - Bridge-reported runtime sync status.
+   * @returns Transition details for exposed state updates and logging.
+   */
+  public recordBridgePingReply(
+    deviceName: string,
+    controllerConnected: boolean,
+    runtimeSynchronized: boolean,
+  ): {
+    stateChanged: boolean;
+    bridgeBecameConnected: boolean;
+    controllerDisconnected: boolean;
+    snapshotInvalidated: boolean;
+  } {
+    const device = this._ensureDeviceExists(deviceName);
+    const now = Date.now();
+    const bridgeBecameConnected = !device.bridgeConnected;
+    const controllerWasOperational = device.connected || device.isHealthy || device.isStale;
+    const snapshotInvalidated =
+      controllerConnected && !runtimeSynchronized && device.lastStateTime !== 0;
+
+    device.bridgeConnected = true;
+    device.bridgeLastSeenTime = now;
+
+    const controllerDisconnected = !controllerConnected && controllerWasOperational;
+
+    if (!controllerConnected) {
+      device.connected = false;
+      device.isHealthy = false;
+      device.isStale = false;
+    }
+
+    if (snapshotInvalidated) {
+      // The last state is still useful for diagnostics, but no longer
+      // authoritative for click logic until a fresh `state` arrives.
+      device.lastStateTime = 0;
+    }
+
+    return {
+      stateChanged: bridgeBecameConnected || controllerDisconnected || snapshotInvalidated,
+      bridgeBecameConnected,
+      controllerDisconnected,
+      snapshotInvalidated,
     };
   }
 

@@ -44,11 +44,12 @@ export class Watchdog {
   /**
    * Checks the health of a single device based on its state and the current time.
    * This method implements a multi-stage check:
-   * 1. It first checks whether the device is currently known to be reachable at the MQTT/bridge layer.
-   *    Reachability can be proven either by Homie `$state=ready` or by live LSH traffic from the device.
+   * 1. It first checks whether the device is currently known to be reachable at the controller layer.
+   *    Bridge-only reachability is tracked separately in the registry.
    * 2. If the device is reachable but has been silent beyond `interrogateThreshold`, it initiates a ping.
-   * 3. If a ping has been sent but no response is received within `pingTimeout`, it marks the device as 'stale'.
-   * 4. If the device has never been seen, it is immediately marked 'unhealthy'.
+   * 3. If the bridge is alive but controller reachability is unknown, it still initiates controller pings.
+   * 4. If a ping has been sent but no response is received within `pingTimeout`, it marks the device as 'stale'.
+   * 5. If the device has never been seen, it is immediately marked 'unhealthy'.
    * @param deviceState - The current state of the device to check, or `undefined` if never seen.
    * @param now - The current timestamp (e.g., from `Date.now()`).
    * @returns A `WatchdogResult` indicating the device's health status.
@@ -59,11 +60,8 @@ export class Watchdog {
       return { status: "unhealthy", reason: "Never seen on the network." };
     }
 
-    // GUARD 2: The device is not currently known to be MQTT/bridge-reachable.
-    // A device becomes reachable either via Homie `$state=ready` or a successful
-    // LSH ping response. If neither signal is available, there's no point in
-    // sending another LSH-level ping yet, so we avoid redundant alerts.
-    if (!deviceState.connected) {
+    // GUARD 2: The bridge is currently offline, so controller probes cannot succeed.
+    if (!deviceState.connected && !deviceState.bridgeConnected) {
       this.onDeviceActivity(deviceState.name); // Clear any pending pings for it.
       return { status: "ok" };
     }

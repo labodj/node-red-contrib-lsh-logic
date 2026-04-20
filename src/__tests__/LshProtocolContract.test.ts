@@ -89,15 +89,47 @@ const golden = hasCrossRepoWorkspace
   ? (JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as GoldenPayloads)
   : null;
 
-const toJsonByteLiteral = (value: number): string =>
+const MSGPACK_FRAME_END = 0xc0;
+const MSGPACK_FRAME_ESCAPE = 0xdb;
+const MSGPACK_FRAME_ESCAPED_END = 0xdc;
+const MSGPACK_FRAME_ESCAPED_ESCAPE = 0xdd;
+
+const toJsonRawByteLiteral = (value: number): string =>
+  Array.from(JSON.stringify({ p: value }))
+    .map((char) => (char === "\n" ? "'\\n'" : `'${char}'`))
+    .join(", ");
+
+const toJsonSerialByteLiteral = (value: number): string =>
   Array.from(JSON.stringify({ p: value }) + "\n")
     .map((char) => (char === "\n" ? "'\\n'" : `'${char}'`))
     .join(", ");
 
-const toMsgPackByteLiteral = (value: number): string =>
-  (value <= 0x7f ? [0x81, 0xa1, 0x70, value] : [0x81, 0xa1, 0x70, 0xcc, value])
-    .map((byte) => `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`)
-    .join(", ");
+const toMsgPackRawBytes = (value: number): number[] =>
+  value <= 0x7f ? [0x81, 0xa1, 0x70, value] : [0x81, 0xa1, 0x70, 0xcc, value];
+
+const frameMsgPackSerialBytes = (payload: number[]): number[] => {
+  const framed = [MSGPACK_FRAME_END];
+
+  for (const byte of payload) {
+    if (byte === MSGPACK_FRAME_END) {
+      framed.push(MSGPACK_FRAME_ESCAPE, MSGPACK_FRAME_ESCAPED_END);
+      continue;
+    }
+
+    if (byte === MSGPACK_FRAME_ESCAPE) {
+      framed.push(MSGPACK_FRAME_ESCAPE, MSGPACK_FRAME_ESCAPED_ESCAPE);
+      continue;
+    }
+
+    framed.push(byte);
+  }
+
+  framed.push(MSGPACK_FRAME_END);
+  return framed;
+};
+
+const toMsgPackByteLiteral = (payload: number[]): string =>
+  payload.map((byte) => `0x${byte.toString(16).toUpperCase().padStart(2, "0")}`).join(", ");
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -207,9 +239,17 @@ describeContract("LSH protocol contract", () => {
       for (const target of payload.targets) {
         const header = headersByTarget[target];
         expect(header).toMatch(new RegExp(`\\b${escapeRegExp(enumName)}\\b`));
-        expect(header).toContain(`JSON_${symbol}_BYTES = {${toJsonByteLiteral(commandValue!)}}`);
         expect(header).toContain(
-          `MSGPACK_${symbol}_BYTES = {${toMsgPackByteLiteral(commandValue!)}}`,
+          `JSON_RAW_${symbol}_BYTES = {${toJsonRawByteLiteral(commandValue!)}}`,
+        );
+        expect(header).toContain(
+          `JSON_SERIAL_${symbol}_BYTES = {${toJsonSerialByteLiteral(commandValue!)}}`,
+        );
+        expect(header).toContain(
+          `MSGPACK_RAW_${symbol}_BYTES = {${toMsgPackByteLiteral(toMsgPackRawBytes(commandValue!))}}`,
+        );
+        expect(header).toContain(
+          `MSGPACK_SERIAL_${symbol}_BYTES = {${toMsgPackByteLiteral(frameMsgPackSerialBytes(toMsgPackRawBytes(commandValue!)))}}`,
         );
       }
 
@@ -219,8 +259,10 @@ describeContract("LSH protocol contract", () => {
       for (const target of unsupportedTargets) {
         const header = headersByTarget[target];
         expect(header).not.toMatch(new RegExp(`\\b${escapeRegExp(enumName)}\\b`));
-        expect(header).not.toContain(`JSON_${symbol}_BYTES`);
-        expect(header).not.toContain(`MSGPACK_${symbol}_BYTES`);
+        expect(header).not.toContain(`JSON_RAW_${symbol}_BYTES`);
+        expect(header).not.toContain(`JSON_SERIAL_${symbol}_BYTES`);
+        expect(header).not.toContain(`MSGPACK_RAW_${symbol}_BYTES`);
+        expect(header).not.toContain(`MSGPACK_SERIAL_${symbol}_BYTES`);
       }
     }
   });

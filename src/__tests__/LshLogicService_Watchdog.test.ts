@@ -5,7 +5,6 @@ import {
   createSystemConfig,
   getAlertPayload,
   getOutputMessages,
-  getSingleOutputMessage,
 } from "./helpers/serviceTestUtils";
 
 describe("LshLogicService - Watchdog & Health", () => {
@@ -44,7 +43,7 @@ describe("LshLogicService - Watchdog & Health", () => {
 
     expect(payloads).toEqual([{ p: LshProtocol.REQUEST_STATE }]);
     expect(result.logs).toContain(
-      "Device 'actor1' is online. Requesting the missing authoritative snapshot data.",
+      "Bridge 'actor1' is online. Requesting the missing authoritative snapshot data.",
     );
   });
 
@@ -68,29 +67,38 @@ describe("LshLogicService - Watchdog & Health", () => {
     expect(retainedReadyResult.stateChanged).toBe(false);
     expect(retainedReadyResult.messages[Output.Alerts]).toBeUndefined();
     expect(liveLostResult.logs).toContain(
-      "Device 'actor1' reported a live Homie transition from retained 'ready' to live 'lost'. Treating it as an offline event.",
+      "Bridge 'actor1' reported a live Homie transition from retained 'ready' to live 'lost'. Treating it as an offline event.",
     );
     expect(getAlertPayload(liveLostResult).status).toBe("unhealthy");
     expect(getAlertPayload(liveLostResult).event_type).toBe("device_lifecycle_offline");
     expect(getAlertPayload(liveLostResult).event_source).toBe("homie_lifecycle");
   });
 
-  it("should prepare a broadcast ping when every configured device is silent", () => {
+  it("should prepare controller-level pings for every configured device when all are silent", () => {
     const nowSpy = mockNow();
     nowSpy.mockReturnValue(START_TIME);
 
-    const { setDeviceOnline, service, config } = createLoadedServiceHarness();
+    const { setDeviceOnline, service } = createLoadedServiceHarness();
     setDeviceOnline("device-sender");
     setDeviceOnline("actor1");
     setDeviceOnline("device-silent");
 
     nowSpy.mockReturnValue(START_TIME + 4000);
     const result = service.runWatchdogCheck();
-    const message = getSingleOutputMessage<{ p: number }>(result, Output.Lsh);
+    const messages = getOutputMessages(result, Output.Lsh);
 
-    expect(message.topic).toBe(config.serviceTopic);
-    expect(message.payload.p).toBe(LshProtocol.PING);
-    expect(result.staggerLshMessages).toBeUndefined();
+    expect(messages).toHaveLength(3);
+    expect(messages.map((message) => message.topic)).toEqual([
+      "LSH/device-sender/IN",
+      "LSH/actor1/IN",
+      "LSH/device-silent/IN",
+    ]);
+    expect(messages.map((message) => (message.payload as { p: number }).p)).toEqual([
+      LshProtocol.PING,
+      LshProtocol.PING,
+      LshProtocol.PING,
+    ]);
+    expect(result.staggerLshMessages).toBe(true);
   });
 
   it("should do nothing when watchdog runs with no configured devices", () => {
@@ -111,13 +119,13 @@ describe("LshLogicService - Watchdog & Health", () => {
     const nowSpy = mockNow();
     nowSpy.mockReturnValue(START_TIME);
 
-    const { setDeviceOnline, sendMisc, service } = createLoadedServiceHarness();
+    const { setDeviceOnline, sendEvents, service } = createLoadedServiceHarness();
     setDeviceOnline("device-sender");
     setDeviceOnline("actor1");
     setDeviceOnline("device-silent");
 
     nowSpy.mockReturnValue(START_TIME + 3500);
-    sendMisc("actor1", { p: LshProtocol.PING });
+    sendEvents("actor1", { p: LshProtocol.PING });
 
     nowSpy.mockReturnValue(START_TIME + 4001);
     const result = service.runWatchdogCheck();
@@ -135,14 +143,14 @@ describe("LshLogicService - Watchdog & Health", () => {
     const nowSpy = mockNow();
     nowSpy.mockReturnValue(START_TIME);
 
-    const { setDeviceOnline, sendMisc, service } = createLoadedServiceHarness({
+    const { setDeviceOnline, sendEvents, service } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1", "dev2"),
     });
     setDeviceOnline("dev1");
     setDeviceOnline("dev2");
 
     nowSpy.mockReturnValue(START_TIME + 3500);
-    sendMisc("dev1", { p: LshProtocol.PING });
+    sendEvents("dev1", { p: LshProtocol.PING });
 
     nowSpy.mockReturnValue(START_TIME + 4001);
     const result = service.runWatchdogCheck();
@@ -169,13 +177,18 @@ describe("LshLogicService - Watchdog & Health", () => {
       START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
     );
     const result = service.runWatchdogCheck();
+    const messages = getOutputMessages(result, Output.Lsh);
 
     expect(getAlertPayload(result).message).toContain("No response to ping");
     expect(getAlertPayload(result).event_type).toBe("device_unreachable");
     expect(getAlertPayload(result).event_source).toBe("watchdog");
-    expect(getSingleOutputMessage<{ p: number }>(result, Output.Lsh).payload.p).toBe(
+    expect(messages).toHaveLength(2);
+    expect(messages.map((message) => message.topic)).toEqual([config.serviceTopic, "LSH/dev1/IN"]);
+    expect(messages.map((message) => (message.payload as { p: number }).p)).toEqual([
       LshProtocol.PING,
-    );
+      LshProtocol.PING,
+    ]);
+    expect(result.staggerLshMessages).toBe(true);
   });
 
   it("should not treat retained Homie discovery topics as live watchdog activity", () => {
@@ -200,6 +213,64 @@ describe("LshLogicService - Watchdog & Health", () => {
     expect(getAlertPayload(result).message).toContain("No response to ping");
   });
 
+  it("should not treat bridge diagnostics as live watchdog activity", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, sendBridge, service, config } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1"),
+    });
+    setDeviceOnline("dev1");
+
+    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
+    service.runWatchdogCheck();
+
+    sendBridge("dev1", {
+      event: "diagnostic",
+      kind: "mqtt_queue_overflow",
+      dropped_device_commands: 1,
+    });
+
+    nowSpy.mockReturnValue(
+      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
+    );
+    const result = service.runWatchdogCheck();
+
+    expect(getAlertPayload(result).message).toContain("No response to ping");
+    expect(getOutputMessages(result, Output.Lsh).map((message) => message.topic)).toEqual([
+      config.serviceTopic,
+      "LSH/dev1/IN",
+    ]);
+  });
+
+  it("should not treat invalid live events payloads as watchdog activity", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, service, config, validators } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1"),
+    });
+    setDeviceOnline("dev1");
+
+    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
+    service.runWatchdogCheck();
+
+    validators.validateAnyEventsTopic.mockReturnValue(false);
+    validators.validateAnyEventsTopic.errors = [createAjvError("must match schema")];
+    service.processMessage("LSH/dev1/events", { p: 999 });
+
+    nowSpy.mockReturnValue(
+      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
+    );
+    const result = service.runWatchdogCheck();
+
+    expect(getAlertPayload(result).message).toContain("No response to ping");
+    expect(getOutputMessages(result, Output.Lsh).map((message) => message.topic)).toEqual([
+      config.serviceTopic,
+      "LSH/dev1/IN",
+    ]);
+  });
+
   it("should not emit the stale alert again while the device remains stale", () => {
     const nowSpy = mockNow();
     nowSpy.mockReturnValue(START_TIME);
@@ -221,12 +292,48 @@ describe("LshLogicService - Watchdog & Health", () => {
       START_TIME + (config.interrogateThreshold + 2 * config.pingTimeout + 4) * 1000,
     );
     const secondStaleResult = service.runWatchdogCheck();
+    const secondStaleMessages = getOutputMessages(secondStaleResult, Output.Lsh);
 
     expect(getAlertPayload(firstStaleResult).message).toContain("No response to ping");
     expect(secondStaleResult.messages[Output.Alerts]).toBeUndefined();
-    expect(getSingleOutputMessage<{ p: number }>(secondStaleResult, Output.Lsh).payload.p).toBe(
+    expect(secondStaleMessages).toHaveLength(2);
+    expect(secondStaleMessages.map((message) => message.topic)).toEqual([
+      config.serviceTopic,
+      "LSH/dev1/IN",
+    ]);
+    expect(secondStaleMessages.map((message) => (message.payload as { p: number }).p)).toEqual([
       LshProtocol.PING,
+      LshProtocol.PING,
+    ]);
+    expect(secondStaleResult.staggerLshMessages).toBe(true);
+  });
+
+  it("should emit only one bridge probe even when multiple devices become stale together", () => {
+    const nowSpy = mockNow();
+    nowSpy.mockReturnValue(START_TIME);
+
+    const { setDeviceOnline, service, config } = createLoadedServiceHarness({
+      systemConfig: createSystemConfig("dev1", "dev2"),
+    });
+    setDeviceOnline("dev1");
+    setDeviceOnline("dev2");
+
+    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
+    service.runWatchdogCheck();
+
+    nowSpy.mockReturnValue(
+      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
     );
+    const result = service.runWatchdogCheck();
+    const messages = getOutputMessages(result, Output.Lsh);
+
+    expect(messages).toHaveLength(3);
+    expect(messages.map((message) => message.topic)).toEqual([
+      config.serviceTopic,
+      "LSH/dev1/IN",
+      "LSH/dev2/IN",
+    ]);
+    expect(result.staggerLshMessages).toBe(true);
   });
 
   it("should not re-mark a recently disconnected device as healthy during watchdog checks", () => {
@@ -266,11 +373,11 @@ describe("LshLogicService - Watchdog & Health", () => {
     const nowSpy = mockNow();
     nowSpy.mockReturnValue(START_TIME);
 
-    const { setDeviceOnline, sendMisc } = createLoadedServiceHarness();
+    const { setDeviceOnline, sendEvents } = createLoadedServiceHarness();
     setDeviceOnline("device-sender");
 
     nowSpy.mockReturnValue(START_TIME + 1000);
-    const result = sendMisc("device-sender", { p: LshProtocol.PING });
+    const result = sendEvents("device-sender", { p: LshProtocol.PING });
 
     expect(result.logs).toContain("Received ping response from 'device-sender'.");
     expect(result.messages[Output.Alerts]).toBeUndefined();
@@ -281,11 +388,11 @@ describe("LshLogicService - Watchdog & Health", () => {
     const nowSpy = mockNow();
     nowSpy.mockReturnValue(START_TIME);
 
-    const { sendMisc, service } = createLoadedServiceHarness({
+    const { sendEvents, service } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
 
-    const result = sendMisc("dev1", { p: LshProtocol.PING });
+    const result = sendEvents("dev1", { p: LshProtocol.PING });
 
     expect(result.stateChanged).toBe(true);
     expect(result.logs).toContain("Device 'dev1' is now responsive.");
@@ -305,12 +412,12 @@ describe("LshLogicService - Watchdog & Health", () => {
   });
 
   it("should request only state when a ping response arrives after details but before state", () => {
-    const { sendDeviceDetails, sendMisc, service } = createLoadedServiceHarness({
+    const { sendDeviceDetails, sendEvents, service } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
     sendDeviceDetails("dev1", { a: [1, 2] });
 
-    const result = sendMisc("dev1", { p: LshProtocol.PING });
+    const result = sendEvents("dev1", { p: LshProtocol.PING });
 
     expect(service.getDeviceRegistry().dev1.connected).toBe(true);
     expect(result.logs).toContain(
@@ -321,19 +428,19 @@ describe("LshLogicService - Watchdog & Health", () => {
     ]);
   });
 
-  it("should reject a boot payload on the misc topic", () => {
+  it("should reject a boot payload on the events topic", () => {
     const { config, service, validators } = createLoadedServiceHarness();
     const invalidBootPayload: unknown = {
       p: LshProtocol.BOOT_NOTIFICATION,
     };
-    validators.validateAnyMiscTopic.mockReturnValue(false);
-    validators.validateAnyMiscTopic.errors = [
+    validators.validateAnyEventsTopic.mockReturnValue(false);
+    validators.validateAnyEventsTopic.errors = [
       createAjvError("must match exactly one schema in oneOf"),
     ];
 
-    const result = service.processMessage(`${config.lshBasePath}actor1/misc`, invalidBootPayload);
+    const result = service.processMessage(`${config.lshBasePath}actor1/events`, invalidBootPayload);
 
-    expect(result.warnings[0]).toContain("Invalid 'misc' payload from actor1:");
+    expect(result.warnings[0]).toContain("Invalid 'events' payload from actor1:");
     expect(result.warnings[0]).toContain("must match exactly one schema in oneOf");
     expect(result.stateChanged).toBe(false);
     expect(result.messages).toEqual({});

@@ -8,7 +8,8 @@
 import type { ValidateFunction } from "ajv";
 import Ajv from "ajv";
 import type {
-  AnyMiscTopicPayload,
+  AnyBridgeTopicPayload,
+  AnyEventsTopicPayload,
   DeviceActuatorsStatePayload,
   DeviceDetailsPayload,
   SystemConfig,
@@ -304,7 +305,7 @@ const pingPayloadSchema = {
 } as const;
 
 /**
- * Schema for bridge-local diagnostics emitted by `lsh-bridge` on the `misc`
+ * Schema for bridge-local diagnostics emitted by `lsh-bridge` on the `bridge`
  * topic.
  * Keep this intentionally permissive: the diagnostic kind string is the
  * stable contract, while extra numeric fields may grow over time without
@@ -313,9 +314,13 @@ const pingPayloadSchema = {
 const bridgeDiagnosticPayloadSchema = {
   type: "object",
   properties: {
-    bridge_diagnostic: {
+    event: {
+      const: "diagnostic",
+      description: "Bridge-local diagnostic envelope.",
+    },
+    kind: {
       ...nonEmptyStringSchema,
-      description: "Bridge-local diagnostic kind emitted on the misc topic.",
+      description: "Bridge-local diagnostic kind emitted on the bridge topic.",
     },
     pending_ms: {
       type: "integer",
@@ -338,25 +343,53 @@ const bridgeDiagnosticPayloadSchema = {
       description: "Optional count of dropped service-topic commands.",
     },
   },
-  required: ["bridge_diagnostic"],
+  required: ["event", "kind"],
   additionalProperties: true,
 } as const;
 
 /**
- * A "super-schema" that validates any valid 'misc' topic payload.
- * It uses a `oneOf` keyword to ensure the payload matches exactly one of the
- * valid misc schemas. This replaces the `discriminator` which required string values.
+ * Schema for bridge-local service ping replies emitted on the `bridge` topic.
  */
-export const anyMiscTopicPayloadSchema = {
-  $id: "AnyMiscTopicPayload",
-  description: "Schema for any valid 'misc' topic payload.",
+const servicePingReplyPayloadSchema = {
   type: "object",
-  oneOf: [
-    networkClickRequestPayloadSchema,
-    networkClickConfirmPayloadSchema,
-    pingPayloadSchema,
-    bridgeDiagnosticPayloadSchema,
-  ],
+  properties: {
+    event: {
+      const: "service_ping_reply",
+      description: "Bridge-local response to a service topic ping.",
+    },
+    controller_connected: {
+      type: "boolean",
+      description: "Whether the bridge currently sees the downstream controller link as alive.",
+    },
+    runtime_synchronized: {
+      type: "boolean",
+      description: "Whether the bridge runtime cache is synchronized with the controller.",
+    },
+  },
+  required: ["event", "controller_connected", "runtime_synchronized"],
+  additionalProperties: false,
+} as const;
+
+/**
+ * A "super-schema" that validates any valid 'events' topic payload.
+ * It uses a `oneOf` keyword to ensure the payload matches exactly one of the
+ * valid event schemas. This replaces the `discriminator` which required string values.
+ */
+export const anyEventsTopicPayloadSchema = {
+  $id: "AnyEventsTopicPayload",
+  description: "Schema for any valid 'events' topic payload.",
+  type: "object",
+  oneOf: [networkClickRequestPayloadSchema, networkClickConfirmPayloadSchema, pingPayloadSchema],
+};
+
+/**
+ * A "super-schema" that validates any valid `bridge` topic payload.
+ */
+export const anyBridgeTopicPayloadSchema = {
+  $id: "AnyBridgeTopicPayload",
+  description: "Schema for any valid 'bridge' topic payload.",
+  type: "object",
+  oneOf: [servicePingReplyPayloadSchema, bridgeDiagnosticPayloadSchema],
 };
 
 /** An interface describing the collection of all validation functions for the app. */
@@ -364,7 +397,8 @@ export interface AppValidators {
   validateSystemConfig: ValidateFunction<SystemConfig>;
   validateDeviceDetails: ValidateFunction<DeviceDetailsPayload>;
   validateActuatorStates: ValidateFunction<DeviceActuatorsStatePayload>;
-  validateAnyMiscTopic: ValidateFunction<AnyMiscTopicPayload>;
+  validateAnyEventsTopic: ValidateFunction<AnyEventsTopicPayload>;
+  validateAnyBridgeTopic: ValidateFunction<AnyBridgeTopicPayload>;
 }
 
 /**
@@ -389,6 +423,7 @@ export function createAppValidators(): AppValidators {
     validateActuatorStates: ajv.compile<DeviceActuatorsStatePayload>(
       deviceActuatorsStatePayloadSchema,
     ),
-    validateAnyMiscTopic: ajv.compile<AnyMiscTopicPayload>(anyMiscTopicPayloadSchema),
+    validateAnyEventsTopic: ajv.compile<AnyEventsTopicPayload>(anyEventsTopicPayloadSchema),
+    validateAnyBridgeTopic: ajv.compile<AnyBridgeTopicPayload>(anyBridgeTopicPayloadSchema),
   };
 }

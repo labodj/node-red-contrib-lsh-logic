@@ -133,7 +133,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
     await getInputHandler(mockNodeInstance)(
       {
-        topic: "LSH/device-1/misc",
+        topic: "LSH/device-1/events",
         payload,
       },
       jest.fn(),
@@ -141,10 +141,10 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     );
 
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Decoded MsgPack payload from topic: LSH/device-1/misc",
+      "Decoded MsgPack payload from topic: LSH/device-1/events",
     );
     expect(processMessageSpy).toHaveBeenCalledWith(
-      "LSH/device-1/misc",
+      "LSH/device-1/events",
       {
         p: 6,
         i: 1,
@@ -163,7 +163,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
     await getInputHandler(mockNodeInstance)(
       {
-        topic: "LSH/device-1/misc",
+        topic: "LSH/device-1/events",
         payload: Buffer.from([0xc1]),
       },
       jest.fn(),
@@ -171,7 +171,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     );
 
     expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to decode payload on topic LSH/device-1/misc:"),
+      expect.stringContaining("Failed to decode payload on topic LSH/device-1/events:"),
     );
     expect(done.mock.calls[0][0]).toBeInstanceOf(Error);
     expect(mockNodeInstance.send).not.toHaveBeenCalled();
@@ -250,7 +250,12 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     expect(mockNodeInstance.__context.flow.set).toHaveBeenCalledWith(
       "lsh_topics",
       expect.objectContaining({
-        lsh: ["LSH/test-device/conf", "LSH/test-device/state", "LSH/test-device/misc"],
+        lsh: [
+          "LSH/test-device/conf",
+          "LSH/test-device/state",
+          "LSH/test-device/events",
+          "LSH/test-device/bridge",
+        ],
         homie: ["homie/test-device/$state"],
       }),
     );

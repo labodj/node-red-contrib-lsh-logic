@@ -17,6 +17,8 @@ describe("Watchdog", () => {
     isHealthy: true,
     isStale: false,
     lastSeenTime: 0,
+    bridgeConnected: true,
+    bridgeLastSeenTime: 0,
     lastHomieState: null,
     lastHomieStateTime: 0,
     lastDetailsTime: 1, // Mark as configured to avoid edge cases
@@ -117,7 +119,7 @@ describe("Watchdog", () => {
     expect(result2.status).toBe("ok");
   });
 
-  it("clears a pending ping when a device is explicitly disconnected", () => {
+  it("clears a pending ping when both bridge and controller are explicitly disconnected", () => {
     const staleConnectedDevice: DeviceState = {
       ...mockDevice,
       connected: true,
@@ -126,12 +128,27 @@ describe("Watchdog", () => {
 
     expect(watchdog.checkDeviceHealth(staleConnectedDevice, NOW).status).toBe("needs_ping");
 
-    const disconnectedDevice = { ...staleConnectedDevice, connected: false };
+    const disconnectedDevice = {
+      ...staleConnectedDevice,
+      connected: false,
+      bridgeConnected: false,
+    };
     expect(watchdog.checkDeviceHealth(disconnectedDevice, NOW + 1000).status).toBe("ok");
 
     const reconnectedStaleDevice = { ...staleConnectedDevice, connected: true };
     expect(watchdog.checkDeviceHealth(reconnectedStaleDevice, NOW + 1001).status).toBe(
       "needs_ping",
     );
+  });
+
+  it("keeps probing the controller when the bridge is alive but controller reachability is false", () => {
+    const bridgeOnlyDevice: DeviceState = {
+      ...mockDevice,
+      connected: false,
+      bridgeConnected: true,
+      lastSeenTime: NOW - (INTERROGATE_SEC + 10) * 1000,
+    };
+
+    expect(watchdog.checkDeviceHealth(bridgeOnlyDevice, NOW).status).toBe("needs_ping");
   });
 });
