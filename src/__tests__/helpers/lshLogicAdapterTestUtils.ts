@@ -91,6 +91,7 @@ export const createServiceResult = (overrides: Partial<ServiceResult> = {}): Ser
   warnings: [],
   errors: [],
   stateChanged: false,
+  registryChanged: false,
   ...overrides,
 });
 

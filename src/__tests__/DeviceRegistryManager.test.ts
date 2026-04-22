@@ -47,6 +47,46 @@ describe("DeviceRegistryManager", () => {
     expect(deviceState?.actuatorIndexes).toEqual({ 1: 0, 2: 1 });
   });
 
+  it("returns a stable snapshot that is not mutated by later internal updates", () => {
+    manager.registerDeviceDetails("snap-device", {
+      p: LshProtocol.DEVICE_DETAILS,
+      v: LSH_WIRE_PROTOCOL_MAJOR,
+      n: "snap-device",
+      a: [1],
+      b: [],
+    });
+    manager.registerActuatorStates("snap-device", [false]);
+
+    const firstSnapshot = manager.getRegistry();
+
+    manager.registerActuatorStates("snap-device", [true]);
+
+    expect(firstSnapshot["snap-device"].actuatorStates).toEqual([false]);
+    expect(manager.getRegistry()["snap-device"].actuatorStates).toEqual([true]);
+  });
+
+  it("returns frozen nested snapshot collections so exposed registry reads stay detached", () => {
+    manager.registerDeviceDetails("snap-device", {
+      p: LshProtocol.DEVICE_DETAILS,
+      v: LSH_WIRE_PROTOCOL_MAJOR,
+      n: "snap-device",
+      a: [1],
+      b: [],
+    });
+    manager.registerActuatorStates("snap-device", [false]);
+
+    const snapshot = manager.getRegistry()["snap-device"];
+
+    expect(Object.isFrozen(snapshot.actuatorStates)).toBe(true);
+    expect(Object.isFrozen(snapshot.actuatorIndexes)).toBe(true);
+    expect(Reflect.set(snapshot.actuatorStates, 0, true)).toBe(false);
+    expect(Reflect.set(snapshot.actuatorIndexes, 1, 99)).toBe(false);
+
+    const freshSnapshot = manager.getRegistry()["snap-device"];
+    expect(freshSnapshot.actuatorStates).toEqual([false]);
+    expect(freshSnapshot.actuatorIndexes).toEqual({ 1: 0 });
+  });
+
   it("should throw an error if actuator state length mismatches config", () => {
     manager.registerDeviceDetails("device-1", {
       p: LshProtocol.DEVICE_DETAILS,
@@ -75,26 +115,25 @@ describe("DeviceRegistryManager", () => {
   });
 
   describe("updateConnectionState (Homie)", () => {
-    it("should mark a device bridge as connected on 'ready' and report a change", () => {
+    it("should update bridge reachability on ready/lost transitions and report changes", () => {
       manager.recordHomieLifecycleState("device-1", "init");
-      const { stateChanged } = manager.updateBridgeConnectionState("device-1", "ready");
-      const device = manager.getDevice("device-1");
 
-      expect(stateChanged).toBe(true);
-      expect(device?.bridgeConnected).toBe(true);
-      expect(device?.connected).toBe(false);
-    });
+      const readyResult = manager.updateBridgeConnectionState("device-1", "ready");
+      const readyDevice = manager.getDevice("device-1");
 
-    it("should mark a device bridge as disconnected on 'lost' and degrade controller health", () => {
-      manager.updateBridgeConnectionState("device-1", "ready");
+      expect(readyResult.stateChanged).toBe(true);
+      expect(readyDevice?.bridgeConnected).toBe(true);
+      expect(readyDevice?.connected).toBe(false);
+
       manager.recordControllerActivity("device-1");
-      const { stateChanged } = manager.updateBridgeConnectionState("device-1", "lost");
-      const device = manager.getDevice("device-1");
 
-      expect(stateChanged).toBe(true);
-      expect(device?.bridgeConnected).toBe(false);
-      expect(device?.connected).toBe(false);
-      expect(device?.isHealthy).toBe(false);
+      const lostResult = manager.updateBridgeConnectionState("device-1", "lost");
+      const lostDevice = manager.getDevice("device-1");
+
+      expect(lostResult.stateChanged).toBe(true);
+      expect(lostDevice?.bridgeConnected).toBe(false);
+      expect(lostDevice?.connected).toBe(false);
+      expect(lostDevice?.isHealthy).toBe(false);
     });
 
     it("should not report a change if the state is the same", () => {
@@ -140,51 +179,87 @@ describe("DeviceRegistryManager", () => {
       });
     });
 
-    it("should update health to OK and clear stale flag", () => {
-      const device = manager.getDevice("health-test-dev")!;
-      device.isHealthy = false;
-      device.isStale = true;
-      const result: WatchdogResult = { status: "ok" };
-      const { stateChanged } = manager.updateHealthFromResult("health-test-dev", result);
-      expect(stateChanged).toBe(true);
-      expect(device.isHealthy).toBe(true);
-      expect(device.isStale).toBe(false);
-    });
+    it("should update health state transitions from watchdog results", () => {
+      const cases: Array<{
+        setup: (device: DeviceState) => void;
+        result: WatchdogResult;
+        expectedStateChanged: boolean;
+        assert: (device: DeviceState) => void;
+      }> = [
+        {
+          setup: (device) => {
+            device.isHealthy = false;
+            device.isStale = true;
+          },
+          result: { status: "ok" },
+          expectedStateChanged: true,
+          assert: (device) => {
+            expect(device.isHealthy).toBe(true);
+            expect(device.isStale).toBe(false);
+          },
+        },
+        {
+          setup: () => {},
+          result: { status: "stale" },
+          expectedStateChanged: true,
+          assert: (device) => {
+            expect(device.isStale).toBe(true);
+          },
+        },
+        {
+          setup: (device) => {
+            device.isStale = true;
+          },
+          result: { status: "stale" },
+          expectedStateChanged: false,
+          assert: (device) => {
+            expect(device.isStale).toBe(true);
+          },
+        },
+        {
+          setup: (device) => {
+            device.isHealthy = true;
+            device.isStale = true;
+          },
+          result: { status: "unhealthy", reason: "test" },
+          expectedStateChanged: true,
+          assert: (device) => {
+            expect(device.isHealthy).toBe(false);
+            expect(device.isStale).toBe(false);
+          },
+        },
+        {
+          setup: (device) => {
+            device.isHealthy = false;
+            device.isStale = false;
+          },
+          result: { status: "unhealthy", reason: "test" },
+          expectedStateChanged: false,
+          assert: (device) => {
+            expect(device.isHealthy).toBe(false);
+            expect(device.isStale).toBe(false);
+          },
+        },
+      ];
 
-    it("should update state to STALE", () => {
-      const device = manager.getDevice("health-test-dev")!;
-      const result: WatchdogResult = { status: "stale" };
-      const { stateChanged } = manager.updateHealthFromResult("health-test-dev", result);
-      expect(stateChanged).toBe(true);
-      expect(device.isStale).toBe(true);
-    });
+      for (const testCase of cases) {
+        manager.reset();
+        manager.registerDeviceDetails("health-test-dev", {
+          p: LshProtocol.DEVICE_DETAILS,
+          v: LSH_WIRE_PROTOCOL_MAJOR,
+          n: "d",
+          a: [],
+          b: [],
+        });
 
-    it("should not change state if already stale", () => {
-      const device = manager.getDevice("health-test-dev")!;
-      device.isStale = true;
-      const result: WatchdogResult = { status: "stale" };
-      const { stateChanged } = manager.updateHealthFromResult("health-test-dev", result);
-      expect(stateChanged).toBe(false);
-    });
+        const device = manager.getDevice("health-test-dev")!;
+        testCase.setup(device);
 
-    it("should update health to UNHEALTHY and clear stale flag", () => {
-      const device = manager.getDevice("health-test-dev")!;
-      device.isHealthy = true;
-      device.isStale = true;
-      const result: WatchdogResult = { status: "unhealthy", reason: "test" };
-      const { stateChanged } = manager.updateHealthFromResult("health-test-dev", result);
-      expect(stateChanged).toBe(true);
-      expect(device.isHealthy).toBe(false);
-      expect(device.isStale).toBe(false);
-    });
+        const { stateChanged } = manager.updateHealthFromResult("health-test-dev", testCase.result);
 
-    it("should not change state if already unhealthy", () => {
-      const device = manager.getDevice("health-test-dev")!;
-      device.isHealthy = false;
-      device.isStale = false;
-      const result: WatchdogResult = { status: "unhealthy", reason: "test" };
-      const { stateChanged } = manager.updateHealthFromResult("health-test-dev", result);
-      expect(stateChanged).toBe(false);
+        expect(stateChanged).toBe(testCase.expectedStateChanged);
+        testCase.assert(device);
+      }
     });
 
     it("should not change state for 'needs_ping'", () => {
@@ -313,6 +388,20 @@ describe("DeviceRegistryManager", () => {
       );
     });
 
+    it("should count duplicate actors on the same device only once", () => {
+      manager.registerActuatorStates("light-group", [true, false, false, false]);
+      const actors: Actor[] = [
+        { name: "light-group", allActuators: false, actuators: [1, 2] },
+        { name: "light-group", allActuators: false, actuators: [2, 3] },
+      ];
+
+      const result = manager.getSmartToggleState(actors, []);
+
+      expect(result.stateToSet).toBe(true);
+      expect(result.total).toBe(3);
+      expect(result.active).toBe(1);
+    });
+
     it("should return false with a warning if no valid actuators are found at all", () => {
       const actors: Actor[] = [{ name: "non-existent-device", allActuators: true, actuators: [] }];
       const result = manager.getSmartToggleState(actors, []);
@@ -422,24 +511,17 @@ describe("DeviceRegistryManager", () => {
   });
 
   describe("recordAlertSent", () => {
-    it("should mark a new device as unhealthy and with alert sent", () => {
-      const { stateChanged } = manager.recordAlertSent("alert-device");
+    it("should record the first alert only once", () => {
+      const firstResult = manager.recordAlertSent("alert-device");
       const device = manager.getDevice("alert-device")!;
 
-      expect(stateChanged).toBe(true);
+      expect(firstResult.stateChanged).toBe(true);
       expect(device.isHealthy).toBe(false);
       expect(device.alertSent).toBe(true);
-    });
 
-    it("should return stateChanged: false if an alert has already been sent", () => {
-      // First call, the state changes
-      manager.recordAlertSent("alert-device");
+      const secondResult = manager.recordAlertSent("alert-device");
 
-      // Second call, on the same device
-      const { stateChanged } = manager.recordAlertSent("alert-device");
-
-      // The state should not change
-      expect(stateChanged).toBe(false);
+      expect(secondResult.stateChanged).toBe(false);
     });
   });
 });

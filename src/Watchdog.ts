@@ -107,4 +107,30 @@ export class Watchdog {
   public onDeviceActivity(deviceName: string): void {
     this.pingTimestamps.delete(deviceName);
   }
+
+  /**
+   * Removes pending ping bookkeeping for devices that are no longer configured.
+   * @param configuredDeviceNames - The devices that should remain tracked.
+   * @returns The removed device names, for optional diagnostics.
+   */
+  public pruneDevices(configuredDeviceNames: Iterable<string>): string[] {
+    const configuredDevices = new Set(configuredDeviceNames);
+    const prunedDeviceNames: string[] = [];
+
+    for (const deviceName of this.pingTimestamps.keys()) {
+      if (!configuredDevices.has(deviceName)) {
+        this.pingTimestamps.delete(deviceName);
+        prunedDeviceNames.push(deviceName);
+      }
+    }
+
+    return prunedDeviceNames;
+  }
+
+  /**
+   * Clears all pending ping bookkeeping, typically when configuration is reset.
+   */
+  public reset(): void {
+    this.pingTimestamps.clear();
+  }
 }

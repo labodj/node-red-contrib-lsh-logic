@@ -47,31 +47,39 @@ describe("LshLogicService - Watchdog & Health", () => {
     );
   });
 
-  it("should emit an unhealthy alert on Homie lost", () => {
-    const { sendHomieState } = createLoadedServiceHarness();
-    sendHomieState("actor1", "ready");
+  it("should emit an unhealthy alert on Homie lost across live and retained-bootstrap paths", () => {
+    const cases = [
+      {
+        setup: ({ sendHomieState }: ReturnType<typeof createLoadedServiceHarness>) => {
+          sendHomieState("actor1", "ready");
+        },
+      },
+      {
+        setup: ({ sendHomieState }: ReturnType<typeof createLoadedServiceHarness>) => {
+          const retainedReadyResult = sendHomieState("actor1", "ready", { retained: true });
+          expect(retainedReadyResult.stateChanged).toBe(false);
+          expect(retainedReadyResult.messages[Output.Alerts]).toBeUndefined();
+        },
+        expectedLog:
+          "Bridge 'actor1' reported a live Homie transition from retained 'ready' to live 'lost'. Treating it as an offline event.",
+      },
+    ];
 
-    const result = sendHomieState("actor1", "lost");
+    for (const { setup, expectedLog } of cases) {
+      const harness = createLoadedServiceHarness();
+      setup(harness);
 
-    expect(getAlertPayload(result).message).toContain("Alert");
-    expect(getAlertPayload(result).event_type).toBe("device_lifecycle_offline");
-    expect(getAlertPayload(result).event_source).toBe("homie_lifecycle");
-  });
+      const result = harness.sendHomieState("actor1", "lost");
 
-  it("should emit an unhealthy alert when the first live transition after startup is Homie lost", () => {
-    const { sendHomieState } = createLoadedServiceHarness();
-
-    const retainedReadyResult = sendHomieState("actor1", "ready", { retained: true });
-    const liveLostResult = sendHomieState("actor1", "lost");
-
-    expect(retainedReadyResult.stateChanged).toBe(false);
-    expect(retainedReadyResult.messages[Output.Alerts]).toBeUndefined();
-    expect(liveLostResult.logs).toContain(
-      "Bridge 'actor1' reported a live Homie transition from retained 'ready' to live 'lost'. Treating it as an offline event.",
-    );
-    expect(getAlertPayload(liveLostResult).status).toBe("unhealthy");
-    expect(getAlertPayload(liveLostResult).event_type).toBe("device_lifecycle_offline");
-    expect(getAlertPayload(liveLostResult).event_source).toBe("homie_lifecycle");
+      if (expectedLog) {
+        expect(result.logs).toContain(expectedLog);
+        expect(getAlertPayload(result).status).toBe("unhealthy");
+      } else {
+        expect(getAlertPayload(result).message).toContain("Alert");
+      }
+      expect(getAlertPayload(result).event_type).toBe("device_lifecycle_offline");
+      expect(getAlertPayload(result).event_source).toBe("homie_lifecycle");
+    }
   });
 
   it("should prepare controller-level pings for every configured device when all are silent", () => {
@@ -111,6 +119,7 @@ describe("LshLogicService - Watchdog & Health", () => {
       logs: [],
       warnings: [],
       errors: [],
+      registryChanged: false,
       stateChanged: false,
     });
   });
@@ -191,59 +200,55 @@ describe("LshLogicService - Watchdog & Health", () => {
     expect(result.staggerLshMessages).toBe(true);
   });
 
-  it("should not treat retained Homie discovery topics as live watchdog activity", () => {
-    const nowSpy = mockNow();
-    nowSpy.mockReturnValue(START_TIME);
+  it("should not treat non-liveness traffic as live watchdog activity", () => {
+    const cases = [
+      ({ service }: ReturnType<typeof createLoadedServiceHarness>) => {
+        service.processMessage("homie/dev1/$nodes", "relay", { retained: true });
+      },
+      ({ sendBridge }: ReturnType<typeof createLoadedServiceHarness>) => {
+        sendBridge("dev1", {
+          event: "diagnostic",
+          kind: "mqtt_queue_overflow",
+          dropped_device_commands: 1,
+        });
+      },
+      ({ service, validators }: ReturnType<typeof createLoadedServiceHarness>) => {
+        validators.validateAnyEventsTopic.mockReturnValue(false);
+        validators.validateAnyEventsTopic.errors = [createAjvError("must match schema")];
+        service.processMessage("LSH/dev1/events", { p: 999 });
+      },
+    ];
 
-    const { setDeviceOnline, service, config } = createLoadedServiceHarness({
-      systemConfig: createSystemConfig("dev1"),
-    });
-    setDeviceOnline("dev1");
+    for (const touch of cases) {
+      const nowSpy = mockNow();
+      nowSpy.mockReturnValue(START_TIME);
 
-    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
-    service.runWatchdogCheck();
+      const harness = createLoadedServiceHarness({
+        systemConfig: createSystemConfig("dev1"),
+      });
+      harness.setDeviceOnline("dev1");
 
-    service.processMessage("homie/dev1/$nodes", "relay", { retained: true });
+      nowSpy.mockReturnValue(START_TIME + (harness.config.interrogateThreshold + 1) * 1000);
+      harness.service.runWatchdogCheck();
 
-    nowSpy.mockReturnValue(
-      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
-    );
-    const result = service.runWatchdogCheck();
+      touch(harness);
 
-    expect(getAlertPayload(result).message).toContain("No response to ping");
+      nowSpy.mockReturnValue(
+        START_TIME + (harness.config.interrogateThreshold + harness.config.pingTimeout + 2) * 1000,
+      );
+      const result = harness.service.runWatchdogCheck();
+
+      expect(getAlertPayload(result).message).toContain("No response to ping");
+      expect(getOutputMessages(result, Output.Lsh).map((message) => message.topic)).toEqual([
+        harness.config.serviceTopic,
+        "LSH/dev1/IN",
+      ]);
+
+      nowSpy.mockRestore();
+    }
   });
 
-  it("should not treat bridge diagnostics as live watchdog activity", () => {
-    const nowSpy = mockNow();
-    nowSpy.mockReturnValue(START_TIME);
-
-    const { setDeviceOnline, sendBridge, service, config } = createLoadedServiceHarness({
-      systemConfig: createSystemConfig("dev1"),
-    });
-    setDeviceOnline("dev1");
-
-    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
-    service.runWatchdogCheck();
-
-    sendBridge("dev1", {
-      event: "diagnostic",
-      kind: "mqtt_queue_overflow",
-      dropped_device_commands: 1,
-    });
-
-    nowSpy.mockReturnValue(
-      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
-    );
-    const result = service.runWatchdogCheck();
-
-    expect(getAlertPayload(result).message).toContain("No response to ping");
-    expect(getOutputMessages(result, Output.Lsh).map((message) => message.topic)).toEqual([
-      config.serviceTopic,
-      "LSH/dev1/IN",
-    ]);
-  });
-
-  it("should not treat invalid live events payloads as watchdog activity", () => {
+  it("should warn about unhandled but valid live events without silently swallowing them", () => {
     const nowSpy = mockNow();
     nowSpy.mockReturnValue(START_TIME);
 
@@ -255,9 +260,12 @@ describe("LshLogicService - Watchdog & Health", () => {
     nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
     service.runWatchdogCheck();
 
-    validators.validateAnyEventsTopic.mockReturnValue(false);
-    validators.validateAnyEventsTopic.errors = [createAjvError("must match schema")];
-    service.processMessage("LSH/dev1/events", { p: 999 });
+    validators.validateAnyEventsTopic.mockReturnValue(true);
+    const eventResult = service.processMessage("LSH/dev1/events", { p: 999 });
+
+    expect(eventResult.warnings).toContain(
+      "Unhandled 'events' payload from dev1: protocol id '999'.",
+    );
 
     nowSpy.mockReturnValue(
       START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,

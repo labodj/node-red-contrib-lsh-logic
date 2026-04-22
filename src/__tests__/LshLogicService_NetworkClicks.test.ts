@@ -7,6 +7,7 @@ import {
   createLoadedServiceHarness,
   createServiceHarness,
   getAlertPayload,
+  getAlertPayloads,
   getOtherActorsPayload,
   getOutputMessages,
   getSingleOutputMessage,
@@ -220,6 +221,84 @@ describe("LshLogicService - Network Click Logic", () => {
     expect(command.payload.s).toEqual([5]);
   });
 
+  it("should merge overlapping subsets on the same device into one deterministic command", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [
+                { name: "actor1", allActuators: false, actuators: [1, 2] },
+                { name: "actor1", allActuators: false, actuators: [2, 3] },
+              ],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "actor1" },
+      ],
+    };
+
+    const { setDeviceOnline, sendLshState, sendEvents } = createClickHarness(systemConfig);
+    setDeviceOnline("sender");
+    setDeviceOnline("actor1", { a: [1, 2, 3, 4] });
+    sendLshState("actor1", [0]);
+
+    startClick(sendEvents, "sender");
+    const result = confirmClick(sendEvents, "sender");
+
+    const commands = getOutputMessages(result, Output.Lsh) as Array<{
+      payload: { p: number; s: number[] };
+    }>;
+    expect(commands).toHaveLength(1);
+    expect(commands[0].payload).toEqual({
+      p: LshProtocol.SET_STATE,
+      s: [7],
+    });
+    expect(result.logs).toContain("Smart Toggle: 0/3 active. Decision: ON");
+  });
+
+  it("should collapse allActuators and subset duplicates on the same device to one command", () => {
+    const systemConfig: SystemConfig = {
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [
+                { name: "actor1", allActuators: false, actuators: [2] },
+                { name: "actor1", allActuators: true, actuators: [] },
+              ],
+              otherActors: [],
+            },
+          ],
+        },
+        { name: "actor1" },
+      ],
+    };
+
+    const { setDeviceOnline, sendLshState, sendEvents } = createClickHarness(systemConfig);
+    setDeviceOnline("sender");
+    setDeviceOnline("actor1", { a: [1, 2, 3, 4] });
+    sendLshState("actor1", [0b00000001]);
+
+    startClick(sendEvents, "sender");
+    const result = confirmClick(sendEvents, "sender");
+
+    const commands = getOutputMessages(result, Output.Lsh) as Array<{
+      payload: { p: number; s: number[] };
+    }>;
+    expect(commands).toHaveLength(1);
+    expect(commands[0].payload).toEqual({
+      p: LshProtocol.SET_STATE,
+      s: [15],
+    });
+    expect(result.logs).toContain("Smart Toggle: 1/4 active. Decision: ON");
+  });
+
   it("should use SET_SINGLE_ACTUATOR when a single actuator is targeted", () => {
     const systemConfig: SystemConfig = {
       devices: [
@@ -351,72 +430,268 @@ describe("LshLogicService - Network Click Logic", () => {
     );
   });
 
-  it("should send failover when target actors are offline", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          longClickButtons: [
-            {
-              id: 1,
-              actors: [{ name: "offline_act", allActuators: true, actuators: [] }],
-              otherActors: [],
-            },
-          ],
+  it("should emit action-validation failover for unreachable or invalid click targets", () => {
+    const cases: Array<{
+      expectedButtonId?: number;
+      expectedMessage?: string;
+      run: () => ReturnType<ServiceHarness["sendEvents"]>;
+    }> = [
+      {
+        expectedMessage: "Target actor 'offline_act' bridge is offline.",
+        run: () => {
+          const systemConfig: SystemConfig = {
+            devices: [
+              {
+                name: "sender",
+                longClickButtons: [
+                  {
+                    id: 1,
+                    actors: [{ name: "offline_act", allActuators: true, actuators: [] }],
+                    otherActors: [],
+                  },
+                ],
+              },
+              { name: "offline_act" },
+            ],
+          };
+          const { setDeviceOnline, sendEvents, sendHomieState } = createClickHarness(systemConfig);
+          setDeviceOnline("sender");
+          sendHomieState("offline_act", "lost");
+          return startClick(sendEvents, "sender");
         },
-        { name: "offline_act" },
-      ],
-    };
-
-    const { setDeviceOnline, sendEvents, sendHomieState } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-    sendHomieState("offline_act", "lost");
-
-    const result = startClick(sendEvents, "sender");
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-    expect(getAlertPayload(result).message).toContain(
-      "Target actor 'offline_act' bridge is offline.",
-    );
-    expect(getAlertPayload(result).event_type).toBe("action_failed");
-    expect(getAlertPayload(result).event_source).toBe("action_validation");
-  });
-
-  it("should send click-specific failover when target actor is unknown to the registry", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          longClickButtons: [
-            {
-              id: 1,
-              actors: [{ name: "ghost", allActuators: true, actuators: [] }],
-              otherActors: [],
-            },
-          ],
+      },
+      {
+        expectedMessage: "Target actor 'ghost' is unknown to the registry.",
+        run: () => {
+          const systemConfig: SystemConfig = {
+            devices: [
+              {
+                name: "sender",
+                longClickButtons: [
+                  {
+                    id: 1,
+                    actors: [{ name: "ghost", allActuators: true, actuators: [] }],
+                    otherActors: [],
+                  },
+                ],
+              },
+            ],
+          };
+          const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
+          setDeviceOnline("sender");
+          return startClick(sendEvents, "sender");
         },
-      ],
-    };
+      },
+      {
+        expectedMessage: "Target actor 'actor1' has no authoritative actuator state yet.",
+        run: () => {
+          const { setDeviceOnline, sendDeviceDetails, sendEvents } = createClickHarness();
+          setDeviceOnline("device-sender");
+          sendDeviceDetails("actor1", { a: [1] });
+          return startClick(sendEvents, "device-sender");
+        },
+      },
+      {
+        expectedMessage: "Target actor 'actor1' is stale after a timed-out ping.",
+        run: () => {
+          const nowSpy = jest.spyOn(Date, "now");
+          const START_TIME = 1_000_000;
+          nowSpy.mockReturnValue(START_TIME);
 
-    const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
+          const { setDeviceOnline, sendEvents, service, config } = createClickHarness();
+          setDeviceOnline("device-sender");
+          setDeviceOnline("actor1");
 
-    const result = startClick(sendEvents, "sender");
+          nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
+          service.runWatchdogCheck();
 
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-    expect(getAlertPayload(result).message).toContain(
-      "Target actor 'ghost' is unknown to the registry.",
-    );
+          nowSpy.mockReturnValue(
+            START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
+          );
+          service.runWatchdogCheck();
+
+          const result = startClick(sendEvents, "device-sender");
+          nowSpy.mockRestore();
+          return result;
+        },
+      },
+      {
+        expectedMessage: "Target actor 'actor1' is unhealthy.",
+        run: () => {
+          const { setDeviceOnline, sendEvents, service } = createClickHarness();
+          setDeviceOnline("device-sender");
+          setDeviceOnline("actor1");
+
+          const actorState = (
+            service as unknown as {
+              deviceManager: {
+                getDevice(
+                  name: string,
+                ): { connected: boolean; isHealthy: boolean; isStale: boolean } | undefined;
+              };
+            }
+          ).deviceManager.getDevice("actor1");
+          if (!actorState) {
+            throw new Error("Expected actor1 to exist in the registry.");
+          }
+          actorState.connected = true;
+          actorState.isStale = false;
+          actorState.isHealthy = false;
+
+          return startClick(sendEvents, "device-sender");
+        },
+      },
+      {
+        expectedMessage: "Target actor 'actor1' has no actuator IDs configured.",
+        run: () => {
+          const systemConfig: SystemConfig = {
+            devices: [
+              {
+                name: "sender",
+                longClickButtons: [
+                  {
+                    id: 1,
+                    actors: [{ name: "actor1", allActuators: false, actuators: [] }],
+                    otherActors: [],
+                  },
+                ],
+              },
+              { name: "actor1" },
+            ],
+          };
+          const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
+          setDeviceOnline("sender");
+          setDeviceOnline("actor1", { a: [1, 2] });
+          return startClick(sendEvents, "sender");
+        },
+      },
+      {
+        expectedButtonId: 99,
+        run: () => {
+          const systemConfig: SystemConfig = {
+            devices: [{ name: "sender", longClickButtons: [] }],
+          };
+          const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
+          setDeviceOnline("sender");
+          return startClick(sendEvents, "sender", ClickType.Long, 99);
+        },
+      },
+      {
+        run: () => {
+          const systemConfig: SystemConfig = {
+            devices: [
+              {
+                name: "sender",
+                longClickButtons: [{ id: 1, actors: [], otherActors: [] }],
+              },
+            ],
+          };
+          const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
+          setDeviceOnline("sender");
+          return startClick(sendEvents, "sender");
+        },
+      },
+      {
+        expectedMessage: "Target actor 'actor1' controller is offline or not responding.",
+        run: () => {
+          const systemConfig: SystemConfig = {
+            devices: [
+              {
+                name: "sender",
+                longClickButtons: [
+                  {
+                    id: 1,
+                    actors: [{ name: "actor1", allActuators: true, actuators: [] }],
+                    otherActors: [],
+                  },
+                ],
+              },
+              { name: "actor1" },
+            ],
+          };
+          const { setDeviceOnline, sendEvents, sendHomieState } = createClickHarness(systemConfig);
+          setDeviceOnline("sender");
+          sendHomieState("actor1", "ready");
+          return startClick(sendEvents, "sender");
+        },
+      },
+      {
+        expectedMessage: "Target actor 'actor1' has no actuators.",
+        run: () => {
+          const systemConfig: SystemConfig = {
+            devices: [
+              {
+                name: "sender",
+                longClickButtons: [
+                  {
+                    id: 1,
+                    actors: [{ name: "actor1", allActuators: true, actuators: [] }],
+                    otherActors: [],
+                  },
+                ],
+              },
+              { name: "actor1" },
+            ],
+          };
+          const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
+          setDeviceOnline("sender");
+          setDeviceOnline("actor1", { a: [] });
+          return startClick(sendEvents, "sender");
+        },
+      },
+      {
+        run: () => {
+          const systemConfig: SystemConfig = {
+            devices: [
+              {
+                name: "sender",
+                longClickButtons: [
+                  {
+                    id: 1,
+                    actors: [{ name: "actor1", allActuators: false, actuators: [99] }],
+                    otherActors: [],
+                  },
+                ],
+              },
+              { name: "actor1" },
+            ],
+          };
+          const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
+          setDeviceOnline("sender");
+          setDeviceOnline("actor1", { a: [1, 2, 3] });
+          return startClick(sendEvents, "sender");
+        },
+      },
+    ];
+
+    for (const { expectedButtonId = 1, expectedMessage, run } of cases) {
+      const result = run();
+
+      expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
+        p: LshProtocol.FAILOVER_CLICK,
+        c: 1,
+        i: expectedButtonId,
+        t: ClickType.Long,
+      });
+      if (expectedMessage) {
+        expect(
+          getAlertPayloads(result).some(
+            (alert) =>
+              alert.event_type === "action_failed" &&
+              alert.event_source === "action_validation" &&
+              alert.message.includes(expectedMessage),
+          ),
+        ).toBe(true);
+      } else {
+        expect(result.messages[Output.Alerts]).toBeDefined();
+      }
+      expect(
+        getAlertPayloads(result).some(
+          (alert) =>
+            alert.event_type === "action_failed" && alert.event_source === "action_validation",
+        ),
+      ).toBe(true);
+    }
   });
 
   it("should accept a target recovered via ping even without a retained Homie ready state", () => {
@@ -530,313 +805,60 @@ describe("LshLogicService - Network Click Logic", () => {
     });
   });
 
-  it("should fail fast when a long-click target is reachable but still missing authoritative state", () => {
-    const { setDeviceOnline, sendDeviceDetails, sendEvents } = createClickHarness();
-    setDeviceOnline("device-sender");
-    sendDeviceDetails("actor1", { a: [1] });
-
-    const result = startClick(sendEvents, "device-sender");
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-    expect(getAlertPayload(result).message).toContain(
-      "Target actor 'actor1' has no authoritative actuator state yet.",
-    );
-  });
-
-  it("should skip a specific super-long-click target if its state becomes non-authoritative before confirmation", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          superLongClickButtons: [
-            {
-              id: 1,
-              actors: [{ name: "actor1", allActuators: false, actuators: [1, 2] }],
-              otherActors: [],
-            },
-          ],
+  it("should skip super-long click targets that become invalid before confirmation executes", () => {
+    const cases: Array<{
+      expectedWarning: string;
+      setup: (harness: ReturnType<typeof createClickHarness>) => void;
+    }> = [
+      {
+        expectedWarning:
+          "Skipping actor 'actor1' because its actuator state is not authoritative yet.",
+        setup: ({ sendDeviceDetails }) => {
+          sendDeviceDetails("actor1", { a: [3, 4] });
         },
-        { name: "actor1" },
-      ],
-    };
+      },
+      {
+        expectedWarning: "Skipping actor 'actor1' because it disappeared before command execution.",
+        setup: ({ service }) => {
+          (
+            service as unknown as {
+              deviceManager: { pruneDevice(deviceName: string): void };
+            }
+          ).deviceManager.pruneDevice("actor1");
+        },
+      },
+    ];
 
-    const { setDeviceOnline, sendDeviceDetails, sendLshState, sendEvents } =
-      createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-    setDeviceOnline("actor1", { a: [1, 2] });
-    sendLshState("actor1", [0]);
+    for (const { expectedWarning, setup } of cases) {
+      const systemConfig: SystemConfig = {
+        devices: [
+          {
+            name: "sender",
+            superLongClickButtons: [
+              {
+                id: 1,
+                actors: [{ name: "actor1", allActuators: false, actuators: [1, 2] }],
+                otherActors: [],
+              },
+            ],
+          },
+          { name: "actor1" },
+        ],
+      };
 
-    startClick(sendEvents, "sender", ClickType.SuperLong);
+      const harness = createClickHarness(systemConfig);
+      harness.setDeviceOnline("sender");
+      harness.setDeviceOnline("actor1", { a: [1, 2] });
+      harness.sendLshState("actor1", [0]);
 
-    sendDeviceDetails("actor1", { a: [3, 4] });
+      startClick(harness.sendEvents, "sender", ClickType.SuperLong);
+      setup(harness);
 
-    const result = confirmClick(sendEvents, "sender", ClickType.SuperLong);
+      const result = confirmClick(harness.sendEvents, "sender", ClickType.SuperLong);
 
-    expect(result.messages[Output.Lsh]).toBeUndefined();
-    expect(result.warnings).toContain(
-      "Skipping actor 'actor1' because its actuator state is not authoritative yet.",
-    );
-  });
-
-  it("should send failover when the target actor is stale after a timed-out ping", () => {
-    const nowSpy = jest.spyOn(Date, "now");
-    const START_TIME = 1_000_000;
-    nowSpy.mockReturnValue(START_TIME);
-
-    const { setDeviceOnline, sendEvents, service, config } = createClickHarness();
-    setDeviceOnline("device-sender");
-    setDeviceOnline("actor1");
-
-    nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
-    service.runWatchdogCheck();
-
-    nowSpy.mockReturnValue(
-      START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
-    );
-    service.runWatchdogCheck();
-
-    const result = startClick(sendEvents, "device-sender");
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-    expect(getAlertPayload(result).message).toContain(
-      "Target actor 'actor1' is stale after a timed-out ping.",
-    );
-  });
-
-  it("should send failover when the target actor is connected but unhealthy", () => {
-    const { setDeviceOnline, sendEvents, service } = createClickHarness();
-    setDeviceOnline("device-sender");
-    setDeviceOnline("actor1");
-
-    const actorState = (
-      service as unknown as {
-        deviceManager: {
-          getDevice(
-            name: string,
-          ): { connected: boolean; isHealthy: boolean; isStale: boolean } | undefined;
-        };
-      }
-    ).deviceManager.getDevice("actor1");
-    if (!actorState) {
-      throw new Error("Expected actor1 to exist in the registry.");
+      expect(result.messages[Output.Lsh]).toBeUndefined();
+      expect(result.warnings).toContain(expectedWarning);
     }
-    actorState.connected = true;
-    actorState.isStale = false;
-    actorState.isHealthy = false;
-
-    const result = startClick(sendEvents, "device-sender");
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-    expect(getAlertPayload(result).message).toContain("Target actor 'actor1' is unhealthy.");
-  });
-
-  it("should send failover when a specific target is configured with no actuator IDs", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          longClickButtons: [
-            {
-              id: 1,
-              actors: [{ name: "actor1", allActuators: false, actuators: [] }],
-              otherActors: [],
-            },
-          ],
-        },
-        { name: "actor1" },
-      ],
-    };
-
-    const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-    setDeviceOnline("actor1", { a: [1, 2] });
-
-    const result = startClick(sendEvents, "sender");
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-    expect(getAlertPayload(result).message).toContain(
-      "Target actor 'actor1' has no actuator IDs configured.",
-    );
-  });
-
-  it("should skip a target that disappears before click confirmation executes", () => {
-    const { setDeviceOnline, sendEvents, service } = createClickHarness();
-    setDeviceOnline("device-sender");
-    setDeviceOnline("actor1");
-
-    startClick(sendEvents, "device-sender", ClickType.SuperLong);
-
-    (
-      service as unknown as {
-        deviceManager: { pruneDevice(deviceName: string): void };
-      }
-    ).deviceManager.pruneDevice("actor1");
-
-    const result = confirmClick(sendEvents, "device-sender", ClickType.SuperLong);
-
-    expect(result.messages[Output.Lsh]).toBeUndefined();
-    expect(result.warnings).toContain(
-      "Skipping actor 'actor1' because it disappeared before command execution.",
-    );
-  });
-
-  it("should send click-specific failover when no action is configured for a button", () => {
-    const systemConfig: SystemConfig = {
-      devices: [{ name: "sender", longClickButtons: [] }],
-    };
-
-    const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-
-    const result = startClick(sendEvents, "sender", ClickType.Long, 99);
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 99,
-      t: ClickType.Long,
-    });
-  });
-
-  it("should send click-specific failover when an action has no targets", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          longClickButtons: [{ id: 1, actors: [], otherActors: [] }],
-        },
-      ],
-    };
-
-    const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-
-    const result = startClick(sendEvents, "sender");
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-  });
-
-  it("should send click-specific failover when target details are unknown", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          longClickButtons: [
-            {
-              id: 1,
-              actors: [{ name: "actor1", allActuators: true, actuators: [] }],
-              otherActors: [],
-            },
-          ],
-        },
-        { name: "actor1" },
-      ],
-    };
-
-    const { setDeviceOnline, sendEvents, sendHomieState } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-    sendHomieState("actor1", "ready");
-
-    const result = startClick(sendEvents, "sender");
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-    expect(getAlertPayload(result).message).toContain(
-      "Target actor 'actor1' controller is offline or not responding.",
-    );
-  });
-
-  it("should send click-specific failover when the target device reports no actuators", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          longClickButtons: [
-            {
-              id: 1,
-              actors: [{ name: "actor1", allActuators: true, actuators: [] }],
-              otherActors: [],
-            },
-          ],
-        },
-        { name: "actor1" },
-      ],
-    };
-
-    const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-    setDeviceOnline("actor1", { a: [] });
-
-    const result = startClick(sendEvents, "sender");
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-    expect(getAlertPayload(result).message).toContain("Target actor 'actor1' has no actuators.");
-  });
-
-  it("should send click-specific failover when a configured actuator ID is unknown", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          longClickButtons: [
-            {
-              id: 1,
-              actors: [{ name: "actor1", allActuators: false, actuators: [99] }],
-              otherActors: [],
-            },
-          ],
-        },
-        { name: "actor1" },
-      ],
-    };
-
-    const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-    setDeviceOnline("actor1", { a: [1, 2, 3] });
-
-    const result = startClick(sendEvents, "sender");
-
-    expect(getSingleOutputMessage(result, Output.Lsh).payload).toEqual({
-      p: LshProtocol.FAILOVER_CLICK,
-      c: 1,
-      i: 1,
-      t: ClickType.Long,
-    });
-    expect(result.messages[Output.Alerts]).toBeDefined();
   });
 
   it("should keep general failover mapped to the protocol general failover command", () => {

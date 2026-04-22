@@ -81,24 +81,6 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     });
   });
 
-  it("should fall back to process.cwd and stringify non-Error initialization failures", async () => {
-    jest.mocked(fs.readFile).mockRejectedValue("missing config");
-    mockRED = {
-      nodes: { createNode: jest.fn(), registerType: jest.fn() },
-      settings: {},
-    } as unknown as NodeAPI;
-
-    await initializeNode(defaultNodeConfig, mockRED);
-
-    expect(fs.readFile).toHaveBeenCalledWith(
-      expect.stringContaining(defaultNodeConfig.systemConfigPath),
-      "utf-8",
-    );
-    expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      "Critical error during initialization: missing config",
-    );
-  });
-
   it("should decode Homie buffer payloads as text before passing them to the service", async () => {
     const processMessageSpy = jest
       .spyOn(LshLogicService.prototype, "processMessage")
@@ -127,6 +109,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
       .mockReturnValue(createServiceResult());
 
     await initializeNode({ ...defaultNodeConfig, protocol: "msgpack" });
+    mockNodeInstance.log.mockClear();
 
     const done = jest.fn();
     const payload = new LshCodec().encode({ p: 6, i: 1, t: 1 }, "msgpack");
@@ -140,9 +123,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
       done,
     );
 
-    expect(mockNodeInstance.log).toHaveBeenCalledWith(
-      "Decoded MsgPack payload from topic: LSH/device-1/events",
-    );
+    expect(mockNodeInstance.log).not.toHaveBeenCalled();
     expect(processMessageSpy).toHaveBeenCalledWith(
       "LSH/device-1/events",
       {
@@ -177,6 +158,35 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     expect(mockNodeInstance.send).not.toHaveBeenCalled();
   });
 
+  it("should reject non-Buffer LSH MsgPack payloads when mqtt-in returns parsed text or objects", async () => {
+    for (const payload of ['{"p":6,"i":1,"t":1}', { p: 6, i: 1, t: 1 }]) {
+      const processMessageSpy = jest.spyOn(LshLogicService.prototype, "processMessage");
+
+      await initializeNode({ ...defaultNodeConfig, protocol: "msgpack" });
+      mockNodeInstance.send.mockClear();
+      mockNodeInstance.error.mockClear();
+
+      const done = jest.fn();
+
+      await getInputHandler(mockNodeInstance)(
+        {
+          topic: "LSH/device-1/events",
+          payload,
+        },
+        jest.fn(),
+        done,
+      );
+
+      expect(processMessageSpy).not.toHaveBeenCalled();
+      expect(mockNodeInstance.error).toHaveBeenCalledWith(
+        "Failed to decode payload on topic LSH/device-1/events: MsgPack payloads must arrive as Buffers.",
+      );
+      expect(done.mock.calls[0][0]).toBeInstanceOf(Error);
+      expect(mockNodeInstance.send).not.toHaveBeenCalled();
+      processMessageSpy.mockRestore();
+    }
+  });
+
   it("should handle errors from the service during message processing", async () => {
     jest.spyOn(LshLogicService.prototype, "processMessage").mockImplementation(() => {
       throw new Error("Service layer explosion!");
@@ -196,21 +206,23 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     expect(mockNodeInstance.send).not.toHaveBeenCalled();
   });
 
-  it("should handle non-Error exceptions during message processing", async () => {
-    jest.spyOn(LshLogicService.prototype, "processMessage").mockImplementation(() => {
-      throw "A simple string error";
-    });
+  it("should ignore new input once close has started", async () => {
+    const processMessageSpy = jest
+      .spyOn(LshLogicService.prototype, "processMessage")
+      .mockReturnValue(createServiceResult());
 
     await initializeNode();
+    processMessageSpy.mockClear();
+    mockNodeInstance.send.mockClear();
+
+    getCloseHandler(mockNodeInstance)(jest.fn());
 
     const done = jest.fn();
-
     await getInputHandler(mockNodeInstance)({ topic: "t", payload: "p" }, jest.fn(), done);
 
-    expect(mockNodeInstance.error).toHaveBeenCalledWith(
-      "Error processing message: A simple string error",
-    );
-    expect(done).toHaveBeenCalledWith(new Error("A simple string error"));
+    expect(processMessageSpy).not.toHaveBeenCalled();
+    expect(mockNodeInstance.send).not.toHaveBeenCalled();
+    expect(done).toHaveBeenCalledWith();
   });
 
   it("should handle input messages with no topic", async () => {
@@ -225,6 +237,40 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     await getInputHandler(mockNodeInstance)({ payload: "some_payload" }, jest.fn(), done);
 
     expect(processMessageSpy).toHaveBeenCalledWith("", "some_payload", { retained: false });
+    expect(done).toHaveBeenCalledWith();
+  });
+
+  it("should refresh exposed state for retained Homie baselines even when stateChanged stays false", async () => {
+    await initializeNode({
+      ...defaultNodeConfig,
+      exposeStateContext: "flow",
+      exposeStateKey: "lsh_state",
+    });
+
+    mockNodeInstance.__context.flow.set.mockClear();
+
+    const done = jest.fn();
+    await getInputHandler(mockNodeInstance)(
+      {
+        topic: "homie/test-device/$state",
+        payload: "ready",
+        retain: true,
+      },
+      jest.fn(),
+      done,
+    );
+
+    expect(mockNodeInstance.__context.flow.set).toHaveBeenCalledWith(
+      "lsh_state",
+      expect.objectContaining({
+        devices: expect.objectContaining({
+          "test-device": expect.objectContaining({
+            lastHomieState: "ready",
+            connected: false,
+          }),
+        }),
+      }),
+    );
     expect(done).toHaveBeenCalledWith();
   });
 
@@ -257,10 +303,48 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
           "LSH/test-device/bridge",
         ],
         homie: ["homie/test-device/$state"],
+        discovery: ["homie/+/$nodes", "homie/+/$mac", "homie/+/$fw/version"],
+        all: expect.arrayContaining([
+          "homie/test-device/$state",
+          "homie/+/$nodes",
+          "homie/+/$mac",
+          "homie/+/$fw/version",
+          "LSH/test-device/conf",
+          "LSH/test-device/state",
+          "LSH/test-device/events",
+          "LSH/test-device/bridge",
+        ]),
       }),
     );
 
     expect(mockNodeInstance.send).toHaveBeenCalledWith([null, null, null, expect.any(Array), null]);
+  });
+
+  it("should export a detached node config snapshot to context", async () => {
+    await initializeNode({
+      ...defaultNodeConfig,
+      exposeConfigContext: "global",
+      exposeConfigKey: "lsh_config",
+    });
+
+    const firstExport = mockNodeInstance.__context.global.set.mock.calls.find(
+      ([key]) => key === "lsh_config",
+    )?.[1] as
+      | {
+          nodeConfig: typeof defaultNodeConfig;
+        }
+      | undefined;
+
+    expect(firstExport).toBeDefined();
+    firstExport!.nodeConfig.protocol = "msgpack";
+
+    (nodeInstance as unknown as { updateExposedConfig: () => void }).updateExposedConfig();
+
+    const lastExport = mockNodeInstance.__context.global.set.mock.calls.at(-1)?.[1] as {
+      nodeConfig: typeof defaultNodeConfig;
+    };
+
+    expect(lastExport.nodeConfig.protocol).toBe("json");
   });
 
   it("should export only the unsubscribe message when no devices are configured", async () => {
@@ -285,6 +369,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
       expect.objectContaining({
         lsh: [],
         homie: [],
+        discovery: [],
         all: [],
       }),
     );

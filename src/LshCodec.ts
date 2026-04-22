@@ -4,7 +4,7 @@ import { decode, encode } from "@msgpack/msgpack";
  * Supported serialization protocols.
  */
 export type Protocol = "json" | "msgpack";
-export type DecodeProtocol = Protocol | "text" | "auto";
+export type DecodeProtocol = Protocol | "text";
 
 /**
  * Handles the encoding and decoding of messages between the node and devices.
@@ -13,26 +13,26 @@ export type DecodeProtocol = Protocol | "text" | "auto";
 export class LshCodec {
   /**
    * Decodes an incoming payload.
-   * Automatically detects MsgPack (Buffer) vs JSON (Object/String).
+   * Buffer payloads must be decoded using the explicit transport protocol
+   * selected by the caller. Requiring the protocol at the API boundary keeps
+   * future call sites from accidentally falling back to the text path.
    *
    * @param payload - The raw payload from the Node-RED message.
+   * @param protocol - The transport protocol expected for this MQTT topic.
    * @returns The decoded JavaScript object.
    * @throws Error if decoding fails.
    */
-  public decode(payload: unknown, protocol: DecodeProtocol = "auto"): unknown {
+  public decode(payload: unknown, protocol: DecodeProtocol): unknown {
     if (Buffer.isBuffer(payload)) {
-      if (protocol === "msgpack" || protocol === "auto") {
-        try {
-          return decode(payload);
-        } catch (error) {
-          const text = payload.toString("utf8");
-          if (this.isTextPayload(text)) {
-            return this.decodeText(text);
-          }
-          throw error;
-        }
+      if (protocol === "msgpack") {
+        return decode(payload);
       }
+
       return this.decodeText(payload.toString("utf8"));
+    }
+
+    if (protocol === "msgpack") {
+      throw new Error("MsgPack payloads must arrive as Buffers.");
     }
 
     // It's not a buffer. Node-RED 'mqtt in' node automatically parses JSON
@@ -54,12 +54,6 @@ export class LshCodec {
     } catch {
       return payload;
     }
-  }
-
-  private isTextPayload(payload: string): boolean {
-    return (
-      payload.length === 0 || (!payload.includes("\uFFFD") && /^[\t\n\r\x20-\x7E]*$/.test(payload))
-    );
   }
 
   /**

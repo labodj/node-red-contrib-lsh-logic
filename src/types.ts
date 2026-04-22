@@ -120,6 +120,8 @@ export interface ServiceResult {
   errors: string[];
   /** Flag indicating if the public-facing state has changed and should be exposed. */
   stateChanged: boolean;
+  /** Flag indicating if the exported registry snapshot changed without a semantic runtime transition. */
+  registryChanged?: boolean;
   /** If true, indicates that an array of LSH messages should be sent with a delay between them. */
   staggerLshMessages?: boolean;
 }
@@ -438,6 +440,25 @@ export interface DeviceState {
 /** The in-memory "database" of all known devices and their current states. */
 export interface DeviceRegistry {
   [deviceName: string]: DeviceState;
+}
+
+/**
+ * Immutable snapshot shape exposed outside the registry manager.
+ * Nested collections are read-only so consumers cannot mutate future reads.
+ */
+export interface DeviceStateSnapshot extends Omit<
+  DeviceState,
+  "actuatorsIDs" | "buttonsIDs" | "actuatorStates" | "actuatorIndexes"
+> {
+  actuatorsIDs: readonly number[];
+  buttonsIDs: readonly number[];
+  actuatorStates: readonly boolean[];
+  actuatorIndexes: Readonly<ActuatorIndexMap>;
+}
+
+/** Read-only snapshot of the exposed device registry. */
+export interface DeviceRegistrySnapshot {
+  [deviceName: string]: DeviceStateSnapshot;
 }
 
 /** Defines the data stored for a pending network click transaction. */

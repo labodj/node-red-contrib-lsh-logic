@@ -6,13 +6,15 @@
  */
 import type {
   DeviceRegistry,
+  DeviceRegistrySnapshot,
   DeviceState,
+  DeviceStateSnapshot,
   DeviceDetailsPayload,
   Actor,
   ActuatorIndexMap,
   HomieLifecycleState,
 } from "./types";
-import { areSameArray } from "./utils";
+import { areSameArray, normalizeActors } from "./utils";
 import type { WatchdogResult } from "./Watchdog";
 
 /**
@@ -29,6 +31,11 @@ interface ContextReader {
 export class DeviceRegistryManager {
   /** The main in-memory database of all device states, keyed by device name. */
   private registry: DeviceRegistry = {};
+  /**
+   * Incremental read-optimized snapshot used for exposure outside the manager.
+   * Each device entry is cloned only when that device changes.
+   */
+  private registrySnapshot: DeviceRegistrySnapshot = {};
   /** The prefix used to construct context keys for reading external device states. */
   private readonly otherDevicesPrefix: string;
   /** A reference to the context reader for fetching external states (e.g., from flow or global context). */
@@ -41,6 +48,27 @@ export class DeviceRegistryManager {
   constructor(otherDevicesPrefix: string, otherActorsContext: ContextReader) {
     this.otherDevicesPrefix = otherDevicesPrefix;
     this.otherActorsContext = otherActorsContext;
+  }
+
+  private _createDeviceSnapshot(device: DeviceState): DeviceStateSnapshot {
+    const snapshot: DeviceStateSnapshot = {
+      ...device,
+      actuatorsIDs: Object.freeze([...device.actuatorsIDs]),
+      buttonsIDs: Object.freeze([...device.buttonsIDs]),
+      actuatorStates: Object.freeze([...device.actuatorStates]),
+      actuatorIndexes: Object.freeze({ ...device.actuatorIndexes }),
+    };
+    return Object.freeze(snapshot);
+  }
+
+  private _publishDeviceSnapshot(deviceName: string): void {
+    const device = this.registry[deviceName];
+    if (!device) {
+      delete this.registrySnapshot[deviceName];
+      return;
+    }
+
+    this.registrySnapshot[deviceName] = this._createDeviceSnapshot(device);
   }
 
   /**
@@ -72,18 +100,19 @@ export class DeviceRegistryManager {
         actuatorStates: [],
         actuatorIndexes: {},
       };
+      this._publishDeviceSnapshot(deviceName);
     }
     return this.registry[deviceName];
   }
 
   /**
-   * Returns a deep copy of the entire device registry.
-   * This prevents external code from accidentally modifying the internal state.
-   * Uses the modern, robust `structuredClone` function.
-   * @returns A deep copy of the current device registry object.
+   * Returns a snapshot of the entire device registry.
+   * The snapshot is incrementally maintained per-device so callers can inspect
+   * state without paying for a full deep clone on every read.
+   * @returns A detached top-level object containing frozen device snapshots.
    */
-  public getRegistry(): DeviceRegistry {
-    return structuredClone(this.registry);
+  public getRegistry(): DeviceRegistrySnapshot {
+    return { ...this.registrySnapshot };
   }
 
   /**
@@ -111,6 +140,16 @@ export class DeviceRegistryManager {
    */
   public pruneDevice(deviceName: string): void {
     delete this.registry[deviceName];
+    delete this.registrySnapshot[deviceName];
+  }
+
+  /**
+   * Clears the entire registry and its detached snapshot.
+   * Used when the runtime configuration is fully reset.
+   */
+  public reset(): void {
+    this.registry = {};
+    this.registrySnapshot = {};
   }
 
   /**
@@ -123,13 +162,15 @@ export class DeviceRegistryManager {
     deviceName: string,
     details: DeviceDetailsPayload,
     markSeen = true,
-  ): { changed: boolean } {
+  ): { changed: boolean; registryChanged: boolean } {
     const device = this._ensureDeviceExists(deviceName);
+    const actuatorIds = [...details.a];
+    const buttonIds = [...details.b];
 
     const oldActuatorIDs = [...device.actuatorsIDs];
     const oldButtonIDs = [...device.buttonsIDs];
-    const actuatorIdsChanged = !areSameArray(oldActuatorIDs, details.a);
-    const buttonIdsChanged = !areSameArray(oldButtonIDs, details.b);
+    const actuatorIdsChanged = !areSameArray(oldActuatorIDs, actuatorIds);
+    const buttonIdsChanged = !areSameArray(oldButtonIDs, buttonIds);
     let changed = false;
 
     // Use the new keys 'a' and 'b' from the details object
@@ -137,7 +178,7 @@ export class DeviceRegistryManager {
       changed = true;
     }
 
-    const actuatorIndexes: ActuatorIndexMap = details.a.reduce((acc, id, index) => {
+    const actuatorIndexes: ActuatorIndexMap = actuatorIds.reduce((acc, id, index) => {
       acc[id] = index;
       return acc;
     }, {} as ActuatorIndexMap);
@@ -149,8 +190,10 @@ export class DeviceRegistryManager {
     }
     Object.assign(device, {
       lastDetailsTime: now,
-      actuatorsIDs: details.a,
-      buttonsIDs: details.b,
+      // Store detached copies so downstream mutations of the validated payload
+      // cannot leak back into the runtime registry.
+      actuatorsIDs: actuatorIds,
+      buttonsIDs: buttonIds,
       actuatorIndexes,
     });
 
@@ -159,7 +202,9 @@ export class DeviceRegistryManager {
       device.actuatorStates = [];
     }
 
-    return { changed };
+    this._publishDeviceSnapshot(deviceName);
+
+    return { changed, registryChanged: true };
   }
 
   /**
@@ -173,7 +218,7 @@ export class DeviceRegistryManager {
     deviceName: string,
     newStates: boolean[],
     markSeen = true,
-  ): { isNew: boolean; changed: boolean; configIsMissing: boolean } {
+  ): { isNew: boolean; changed: boolean; configIsMissing: boolean; registryChanged: boolean } {
     const isNew = !this.registry[deviceName];
     const device = this._ensureDeviceExists(deviceName);
 
@@ -188,14 +233,18 @@ export class DeviceRegistryManager {
     const hasChanged = !areSameArray(device.actuatorStates, newStates);
 
     if (hasChanged) {
-      device.actuatorStates = newStates;
+      // Keep the registry detached from caller-owned arrays. This function is
+      // hot enough to stay simple, but not so hot that a tiny defensive copy is
+      // a problem on Node.js.
+      device.actuatorStates = [...newStates];
     }
     const now = Date.now();
     if (markSeen) {
       device.lastSeenTime = now;
     }
     device.lastStateTime = now;
-    return { isNew, changed: hasChanged, configIsMissing };
+    this._publishDeviceSnapshot(deviceName);
+    return { isNew, changed: hasChanged, configIsMissing, registryChanged: true };
   }
 
   /**
@@ -229,6 +278,7 @@ export class DeviceRegistryManager {
       device.isHealthy = false;
       device.isStale = false;
     }
+    this._publishDeviceSnapshot(deviceName);
     return { stateChanged: true, wasConnected, isConnected };
   }
 
@@ -245,7 +295,7 @@ export class DeviceRegistryManager {
     deviceName: string,
     homieState: HomieLifecycleState,
     markSeen = true,
-  ): { stateChanged: boolean } {
+  ): { stateChanged: boolean; registryChanged: boolean } {
     const device = this._ensureDeviceExists(deviceName);
     const previousState = device.lastHomieState;
     const now = Date.now();
@@ -257,7 +307,9 @@ export class DeviceRegistryManager {
       device.bridgeLastSeenTime = now;
     }
 
-    return { stateChanged: previousState !== homieState };
+    this._publishDeviceSnapshot(deviceName);
+
+    return { stateChanged: previousState !== homieState, registryChanged: true };
   }
 
   /**
@@ -269,6 +321,7 @@ export class DeviceRegistryManager {
   public recordControllerActivity(deviceName: string): {
     stateChanged: boolean;
     becameHealthy: boolean;
+    registryChanged: boolean;
   } {
     const device = this._ensureDeviceExists(deviceName);
 
@@ -289,9 +342,12 @@ export class DeviceRegistryManager {
       device.alertSent = false;
     }
 
+    this._publishDeviceSnapshot(deviceName);
+
     return {
       stateChanged: becameHealthy || !wasConnected,
       becameHealthy,
+      registryChanged: true,
     };
   }
 
@@ -312,6 +368,7 @@ export class DeviceRegistryManager {
     bridgeBecameConnected: boolean;
     controllerDisconnected: boolean;
     snapshotInvalidated: boolean;
+    registryChanged: boolean;
   } {
     const device = this._ensureDeviceExists(deviceName);
     const now = Date.now();
@@ -337,11 +394,14 @@ export class DeviceRegistryManager {
       device.lastStateTime = 0;
     }
 
+    this._publishDeviceSnapshot(deviceName);
+
     return {
       stateChanged: bridgeBecameConnected || controllerDisconnected || snapshotInvalidated,
       bridgeBecameConnected,
       controllerDisconnected,
       snapshotInvalidated,
+      registryChanged: true,
     };
   }
 
@@ -394,6 +454,10 @@ export class DeviceRegistryManager {
         break;
     }
 
+    if (stateChanged) {
+      this._publishDeviceSnapshot(deviceName);
+    }
+
     return { stateChanged };
   }
 
@@ -410,6 +474,7 @@ export class DeviceRegistryManager {
     }
     device.isHealthy = false; // A device with an alert is not healthy
     device.alertSent = true;
+    this._publishDeviceSnapshot(deviceName);
     return { stateChanged: true };
   }
 
@@ -427,7 +492,7 @@ export class DeviceRegistryManager {
     otherActors: string[],
   ): { stateToSet: boolean; active: number; total: number; warning?: string } {
     const lshWarnings: string[] = [];
-    const lshCounts = actors.reduce(
+    const lshCounts = normalizeActors(actors).reduce(
       (acc, actor) => {
         const device = this.registry[actor.name];
         if (!device) return acc;

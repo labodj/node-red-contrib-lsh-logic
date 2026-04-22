@@ -1,11 +1,16 @@
 /**
  * @file Unit tests for the HomieDiscoveryManager class.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { HomieDiscoveryManager } from "../HomieDiscoveryManager";
 import { Output } from "../types";
+import { PACKAGE_VERSION } from "../version";
 import type { NodeMessage } from "node-red";
 
 type DiscoveryPlatform = "light" | "switch" | "fan" | "sensor" | "binary_sensor";
+const UNCONFIGURED_DISCOVERY_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 
 type DiscoveryComponent = {
   platform: DiscoveryPlatform;
@@ -25,6 +30,7 @@ type DiscoveryPayload = {
     name?: string;
   };
   origin: {
+    sw_version: string;
     support_url: string;
   };
   availability_topic?: string;
@@ -55,11 +61,13 @@ const getDiscoveryMessages = (
 
 describe("HomieDiscoveryManager", () => {
   let manager: HomieDiscoveryManager;
+  let now: number;
   const homieBasePath = "homie/";
   const discoveryPrefix = "homeassistant";
 
   beforeEach(() => {
-    manager = new HomieDiscoveryManager(homieBasePath, discoveryPrefix);
+    now = 0;
+    manager = new HomieDiscoveryManager(homieBasePath, discoveryPrefix, () => now);
   });
 
   const getMessageByTopic = (
@@ -100,6 +108,7 @@ describe("HomieDiscoveryManager", () => {
     expect(deviceMessage.payload.origin.support_url).toBe(
       "https://github.com/labodj/node-red-contrib-lsh-logic",
     );
+    expect(deviceMessage.payload.origin.sw_version).toBe(PACKAGE_VERSION);
 
     expect(deviceMessage.payload.components?.lsh_device01_light1).toEqual(
       expect.objectContaining({
@@ -241,6 +250,76 @@ describe("HomieDiscoveryManager", () => {
     expect(messages).toHaveLength(2);
     expect(lightComponents).toHaveLength(1);
     expect(lightComponents[0][0]).toBe("lsh_device04_light1");
+  });
+
+  it("should trim valid node IDs and warn when invalid $nodes entries are discarded", () => {
+    const deviceId = "device04b";
+
+    manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    const result = manager.processDiscoveryMessage(
+      deviceId,
+      "/$nodes",
+      " relay ,bad node,@oops,KitchenLight,valid_2,topic/evil ",
+    );
+
+    const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
+    const deviceMessage = getMessageByTopic(messages, "homeassistant/device/lsh_device04b/config");
+
+    expect(result.warnings).toContain(
+      "Ignored invalid Homie node id(s) for 'device04b': bad node, @oops, topic/evil.",
+    );
+    expect(deviceMessage.payload.components).toHaveProperty("lsh_device04b_relay");
+    expect(deviceMessage.payload.components).toHaveProperty("lsh_device04b_kitchenlight");
+    expect(deviceMessage.payload.components).toHaveProperty("lsh_device04b_valid_2");
+    expect(deviceMessage.payload.components).not.toHaveProperty("lsh_device04b_bad node");
+    expect(deviceMessage.payload.components?.lsh_device04b_relay).toEqual(
+      expect.objectContaining({
+        state_topic: "homie/device04b/relay/state",
+        command_topic: "homie/device04b/relay/state/set",
+      }),
+    );
+  });
+
+  it("should ignore empty or fully invalid $nodes payloads without removing existing actuator discovery", () => {
+    const deviceId = "device04c";
+
+    manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    manager.processDiscoveryMessage(deviceId, "/$nodes", "relay");
+
+    const malformed = manager.processDiscoveryMessage(deviceId, "/$nodes", "bad node,@oops");
+    const empty = manager.processDiscoveryMessage(deviceId, "/$nodes", "   ,  ");
+    const regenerated = manager.regenerateDiscoveryPayloads();
+    const regeneratedMessages = getDiscoveryMessages(regenerated.messages[Output.Lsh]);
+    const deviceMessage = getMessageByTopic(
+      regeneratedMessages,
+      "homeassistant/device/lsh_device04c/config",
+    );
+
+    expect(malformed.messages[Output.Lsh]).toBeUndefined();
+    expect(malformed.warnings).toEqual([
+      "Ignored invalid Homie node id(s) for 'device04c': bad node, @oops.",
+      "Ignored Homie $nodes payload for 'device04c' because it contained no valid node ids.",
+    ]);
+    expect(empty.messages[Output.Lsh]).toBeUndefined();
+    expect(empty.warnings).toEqual([
+      "Ignored Homie $nodes payload for 'device04c' because it contained no valid node ids.",
+    ]);
+    expect(deviceMessage.payload.components).toHaveProperty("lsh_device04c_relay");
+  });
+
+  it("should canonicalize $nodes ordering and duplicates to avoid redundant discovery regeneration", () => {
+    const deviceId = "device04d";
+
+    manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    manager.processDiscoveryMessage(deviceId, "/$nodes", "relay,lamp");
+
+    const reordered = manager.processDiscoveryMessage(deviceId, "/$nodes", "lamp,relay,relay");
+
+    expect(reordered.messages[Output.Lsh]).toBeUndefined();
+    expect(reordered.warnings).toEqual([]);
   });
 
   it("should emit a component-removal update before the final payload when the node list shrinks", () => {
@@ -400,5 +479,167 @@ describe("HomieDiscoveryManager", () => {
         platform: "switch",
       }),
     );
+  });
+
+  it("prunes discovery state for devices removed from configured overrides", () => {
+    manager.setDiscoveryConfig(
+      new Map([
+        [
+          "device09",
+          {
+            name: "device09",
+            haDiscovery: {
+              deviceName: "Configured Device",
+            },
+          },
+        ],
+      ]),
+    );
+
+    manager.processDiscoveryMessage("device09", "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage("device09", "/$fw/version", "1.0.0");
+    manager.processDiscoveryMessage("device09", "/$nodes", "relay");
+
+    manager.setDiscoveryConfig(new Map());
+    const regenerated = manager.regenerateDiscoveryPayloads();
+    const messages = Array.isArray(regenerated.messages[Output.Lsh])
+      ? regenerated.messages[Output.Lsh]
+      : regenerated.messages[Output.Lsh]
+        ? [regenerated.messages[Output.Lsh]]
+        : [];
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        topic: "homeassistant/device/lsh_device09/config",
+        payload: "",
+        qos: 1,
+        retain: true,
+      }),
+      expect.objectContaining({
+        topic: "homeassistant/sensor/lsh_device09_homie_state/config",
+        payload: "",
+        qos: 1,
+        retain: true,
+      }),
+    ]);
+  });
+
+  it("keeps the published discovery origin version aligned with package.json", () => {
+    const packageJson = JSON.parse(
+      readFileSync(resolve(__dirname, "../../package.json"), "utf8"),
+    ) as { version: string };
+
+    expect(PACKAGE_VERSION).toBe(packageJson.version);
+  });
+
+  it("prunes stale wildcard discovery state after the retention window", () => {
+    manager.processDiscoveryMessage("wildcard-device", "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage("wildcard-device", "/$fw/version", "1.0.0");
+    manager.processDiscoveryMessage("wildcard-device", "/$nodes", "relay");
+
+    now += UNCONFIGURED_DISCOVERY_STATE_TTL_MS + 1;
+    const regenerated = manager.regenerateDiscoveryPayloads();
+    const messages = Array.isArray(regenerated.messages[Output.Lsh])
+      ? regenerated.messages[Output.Lsh]
+      : regenerated.messages[Output.Lsh]
+        ? [regenerated.messages[Output.Lsh]]
+        : [];
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        topic: "homeassistant/device/lsh_wildcard-device/config",
+        payload: "",
+        qos: 1,
+        retain: true,
+      }),
+      expect.objectContaining({
+        topic: "homeassistant/sensor/lsh_wildcard-device_homie_state/config",
+        payload: "",
+        qos: 1,
+        retain: true,
+      }),
+    ]);
+  });
+
+  it("cancels pending cleanup when a wildcard device reappears before cleanup is flushed", () => {
+    manager.processDiscoveryMessage("wildcard-device", "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage("wildcard-device", "/$fw/version", "1.0.0");
+    manager.processDiscoveryMessage("wildcard-device", "/$nodes", "relay");
+
+    now += UNCONFIGURED_DISCOVERY_STATE_TTL_MS + 1;
+    manager.processDiscoveryMessage("wildcard-device", "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage("wildcard-device", "/$fw/version", "1.1.0");
+    manager.processDiscoveryMessage("wildcard-device", "/$nodes", "relay");
+
+    const regenerated = manager.regenerateDiscoveryPayloads();
+    const messages = Array.isArray(regenerated.messages[Output.Lsh])
+      ? regenerated.messages[Output.Lsh]
+      : regenerated.messages[Output.Lsh]
+        ? [regenerated.messages[Output.Lsh]]
+        : [];
+
+    expect(messages).toHaveLength(2);
+    expect(messages).toEqual([
+      expect.objectContaining({
+        topic: "homeassistant/device/lsh_wildcard-device/config",
+        payload: expect.any(Object),
+        qos: 1,
+        retain: true,
+      }),
+      expect.objectContaining({
+        topic: "homeassistant/sensor/lsh_wildcard-device_homie_state/config",
+        payload: expect.any(Object),
+        qos: 1,
+        retain: true,
+      }),
+    ]);
+  });
+
+  it("retains configured devices without discovery overrides while pruning wildcard state", () => {
+    manager.setDiscoveryConfig(
+      new Map([
+        [
+          "device11",
+          {
+            name: "device11",
+          },
+        ],
+      ]),
+    );
+
+    manager.processDiscoveryMessage("device11", "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage("device11", "/$fw/version", "1.0.0");
+    manager.processDiscoveryMessage("device11", "/$nodes", "relay");
+
+    now += UNCONFIGURED_DISCOVERY_STATE_TTL_MS + 1;
+    const regenerated = manager.regenerateDiscoveryPayloads();
+    const messages = getDiscoveryMessages(regenerated.messages[Output.Lsh]);
+
+    expect(getMessageByTopic(messages, "homeassistant/device/lsh_device11/config")).toBeDefined();
+  });
+
+  it("resets both discovery overrides and discovery state", () => {
+    manager.setDiscoveryConfig(
+      new Map([
+        [
+          "device10",
+          {
+            name: "device10",
+            haDiscovery: {
+              deviceName: "Configured Device",
+            },
+          },
+        ],
+      ]),
+    );
+
+    manager.processDiscoveryMessage("device10", "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage("device10", "/$fw/version", "1.0.0");
+    manager.processDiscoveryMessage("device10", "/$nodes", "relay");
+
+    manager.reset();
+    const regenerated = manager.regenerateDiscoveryPayloads();
+
+    expect(regenerated.messages[Output.Lsh]).toBeUndefined();
   });
 });

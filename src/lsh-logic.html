@@ -449,6 +449,20 @@
     Home) style system. It replaces a complex flow of function nodes with a single, robust, and
     maintainable component built with TypeScript.
   </p>
+  <p>
+    If you are new to the public LSH stack, read the
+    <a href="https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md"
+      >reference stack</a
+    >
+    first. Keep the
+    <a href="https://github.com/labodj/labo-smart-home/blob/main/GLOSSARY.md">glossary</a>
+    nearby if the terminology is unfamiliar. For adoption questions, skim the
+    <a href="https://github.com/labodj/labo-smart-home/blob/main/FAQ.md">FAQ</a>. If startup or
+    click behavior looks wrong during bring-up, use the
+    <a href="https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md"
+      >troubleshooting guide</a
+    >. This help page focuses on the Node-RED layer.
+  </p>
 
   <h3>Core Features</h3>
   <ul>
@@ -659,8 +673,11 @@
   </p>
   <p><b>Receiving Messages (Input):</b></p>
   <p>
-    The node automatically detects and decodes incoming MsgPack payloads. To make this work, you
-    must configure the <code>mqtt-in</code> node that feeds messages into this node:
+    The node decodes incoming payloads on LSH topics according to the <b>LSH Protocol</b> selected
+    in the node configuration. When you choose "MsgPack", the inbound <code>mqtt-in</code> payloads
+    for LSH topics must arrive as Buffers so they can be decoded as MsgPack. Non-Buffer inputs are
+    rejected in this mode. There is no automatic payload sniffing, so you must configure the
+    <code>mqtt-in</code> node that feeds messages into this node accordingly:
   </p>
   <ul>
     <li>

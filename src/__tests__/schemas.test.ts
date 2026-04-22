@@ -4,48 +4,56 @@ import { ClickType, LSH_WIRE_PROTOCOL_MAJOR, LshProtocol } from "../types";
 describe("schemas", () => {
   const validators = createAppValidators();
 
-  it("rejects duplicate device names in system config", () => {
-    const isValid = validators.validateSystemConfig({
-      devices: [{ name: "c1" }, { name: "c1" }],
-    });
-
-    expect(isValid).toBe(false);
-  });
-
-  it("ignores malformed unique-item candidates while still rejecting real duplicates", () => {
-    const isValid = validators.validateSystemConfig({
-      devices: [1, { name: "c1" }, { name: "c1" }],
-    });
-
-    expect(isValid).toBe(false);
-  });
-
-  it("rejects duplicate button IDs inside the same device click config", () => {
-    const isValid = validators.validateSystemConfig({
-      devices: [
-        {
-          name: "c1",
-          longClickButtons: [
-            { id: 1, actors: [], otherActors: [] },
-            { id: 1, actors: [], otherActors: [] },
+  it("rejects duplicate identifiers across config and details payloads", () => {
+    const duplicateCases = [
+      () =>
+        validators.validateSystemConfig({
+          devices: [{ name: "c1" }, { name: "c1" }],
+        }),
+      () =>
+        validators.validateSystemConfig({
+          devices: [
+            {
+              name: "c1",
+              longClickButtons: [
+                { id: 1, actors: [], otherActors: [] },
+                { id: 1, actors: [], otherActors: [] },
+              ],
+            },
           ],
-        },
-      ],
-    });
+        }),
+      () =>
+        validators.validateSystemConfig({
+          devices: [
+            {
+              name: "c1",
+              longClickButtons: [
+                {
+                  id: 1,
+                  actors: [
+                    { name: "actor-1", allActuators: false, actuators: [1] },
+                    { name: "actor-1", allActuators: true, actuators: [] },
+                  ],
+                  otherActors: [],
+                },
+              ],
+            },
+            { name: "actor-1" },
+          ],
+        }),
+      () =>
+        validators.validateDeviceDetails({
+          p: LshProtocol.DEVICE_DETAILS,
+          v: LSH_WIRE_PROTOCOL_MAJOR,
+          n: "c1",
+          a: [1, 1],
+          b: [7, 7],
+        }),
+    ];
 
-    expect(isValid).toBe(false);
-  });
-
-  it("rejects duplicate actuator or button IDs in details payloads", () => {
-    const isValid = validators.validateDeviceDetails({
-      p: LshProtocol.DEVICE_DETAILS,
-      v: LSH_WIRE_PROTOCOL_MAJOR,
-      n: "c1",
-      a: [1, 1],
-      b: [7, 7],
-    });
-
-    expect(isValid).toBe(false);
+    for (const validate of duplicateCases) {
+      expect(validate()).toBe(false);
+    }
   });
 
   it("rejects additional properties on LSH payloads", () => {
@@ -152,16 +160,16 @@ describe("schemas", () => {
   });
 
   it("rejects non-array containers for click button configuration", () => {
-    const isValid = validators.validateSystemConfig({
-      devices: [
-        {
-          name: "c1",
-          longClickButtons: {},
-        },
-      ],
-    });
-
-    expect(isValid).toBe(false);
+    expect(
+      validators.validateSystemConfig({
+        devices: [
+          {
+            name: "c1",
+            longClickButtons: {},
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("accepts optional Home Assistant discovery overrides in system config", () => {

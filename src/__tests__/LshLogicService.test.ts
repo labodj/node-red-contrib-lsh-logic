@@ -23,25 +23,31 @@ describe("LshLogicService - Core & Config", () => {
     ({ service, validators, loadConfig, setDeviceOnline, sendLshState } = createServiceHarness());
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   describe("General and Configuration", () => {
-    it("should ignore messages if config is not loaded", () => {
-      const result = service.processMessage("any/topic", {});
+    it("should guard service entry points when config is not loaded", () => {
+      const cases = [
+        {
+          run: () => service.processMessage("any/topic", {}),
+          warning: "Configuration not loaded, ignoring message.",
+        },
+        {
+          run: () => service.verifyInitialDeviceStates(),
+          warning: "Cannot run initial state verification: config not loaded.",
+        },
+        {
+          run: () => service.getStartupCommands(),
+          warning: "Cannot generate startup commands: config not loaded.",
+        },
+      ];
 
-      expect(result.warnings).toContain("Configuration not loaded, ignoring message.");
-    });
-
-    it("should warn if verifyInitialDeviceStates is called without config", () => {
-      const result = service.verifyInitialDeviceStates();
-
-      expect(result.warnings).toContain(
-        "Cannot run initial state verification: config not loaded.",
-      );
-    });
-
-    it("should warn if getStartupCommands is called without config", () => {
-      const result = service.getStartupCommands();
-
-      expect(result.warnings).toContain("Cannot generate startup commands: config not loaded.");
+      for (const { run, warning } of cases) {
+        const result = run();
+        expect(result.warnings).toContain(warning);
+      }
     });
 
     it("should return a cloned system configuration", () => {
@@ -53,32 +59,31 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getSystemConfig()?.devices[0].name).toBe("dev1");
     });
 
-    it("should ignore messages on unhandled topics", () => {
+    it("should treat unsupported or malformed topics as unhandled", () => {
       loadConfig();
 
-      const result = service.processMessage("unhandled/topic/1", {});
+      const cases = [
+        { topic: "unhandled/topic/1", payload: {} },
+        { topic: "homie/device-only", payload: "ready" },
+        { topic: "LSH/device-only", payload: {} },
+        { topic: "homie//$state", payload: "ready" },
+        {
+          topic: "LSH//state",
+          payload: {
+            p: LshProtocol.ACTUATORS_STATE,
+            s: [0],
+          },
+        },
+        { topic: "homie/device-1/$localip", payload: "192.168.1.5" },
+        { topic: "LSH/device-1/telemetry", payload: {} },
+      ];
 
-      expect(result.logs).toContain("Message on unhandled topic: unhandled/topic/1");
-    });
+      for (const { topic, payload } of cases) {
+        const result = service.processMessage(topic, payload);
+        expect(result.logs).toContain(`Message on unhandled topic: ${topic}`);
+      }
 
-    it("should treat malformed Homie and LSH topics under valid prefixes as unhandled", () => {
-      loadConfig();
-
-      const homieResult = service.processMessage("homie/device-only", "ready");
-      const lshResult = service.processMessage("LSH/device-only", {});
-
-      expect(homieResult.logs).toContain("Message on unhandled topic: homie/device-only");
-      expect(lshResult.logs).toContain("Message on unhandled topic: LSH/device-only");
-    });
-
-    it("should treat unsupported subtopics under valid prefixes as unhandled", () => {
-      loadConfig();
-
-      const homieResult = service.processMessage("homie/device-1/$localip", "192.168.1.5");
-      const lshResult = service.processMessage("LSH/device-1/telemetry", {});
-
-      expect(homieResult.logs).toContain("Message on unhandled topic: homie/device-1/$localip");
-      expect(lshResult.logs).toContain("Message on unhandled topic: LSH/device-1/telemetry");
+      expect(service.getDeviceRegistry()[""]).toBeUndefined();
     });
 
     it("should prune devices from the registry when config is updated", () => {
@@ -94,47 +99,7 @@ describe("LshLogicService - Core & Config", () => {
       expect(logMessage).toContain("Pruned stale devices from registry");
     });
 
-    it("should discard pending click transactions when config is updated", () => {
-      loadConfig({
-        devices: [
-          {
-            name: "device-sender",
-            longClickButtons: [
-              {
-                id: 1,
-                actors: [{ name: "actor1", allActuators: true, actuators: [] }],
-                otherActors: [],
-              },
-            ],
-          },
-          { name: "actor1" },
-        ],
-      });
-      setDeviceOnline("device-sender");
-      setDeviceOnline("actor1");
-
-      service.processMessage("LSH/device-sender/events", {
-        p: LshProtocol.NETWORK_CLICK_REQUEST,
-        c: 9,
-        i: 1,
-        t: 1,
-      });
-
-      const logMessage = service.updateSystemConfig(createSystemConfig("actor1"));
-      const confirmResult = service.processMessage("LSH/device-sender/events", {
-        p: LshProtocol.NETWORK_CLICK_CONFIRM,
-        c: 9,
-        i: 1,
-        t: 1,
-      });
-
-      expect(logMessage).toContain("Cleared 1 pending click transaction(s).");
-      expect(confirmResult.warnings).toContain(
-        "Received confirmation for an expired or unknown click: device-sender.1.1.9.",
-      );
-    });
-
-    it("should clear pending click transactions even when the config reload is identical", () => {
+    it("should discard pending click transactions whenever the config is reloaded", () => {
       const initialConfig = {
         devices: [
           {
@@ -151,29 +116,49 @@ describe("LshLogicService - Core & Config", () => {
         ],
       };
 
-      loadConfig(initialConfig);
-      setDeviceOnline("device-sender");
-      setDeviceOnline("actor1");
+      const nextConfigs = [createSystemConfig("actor1"), structuredClone(initialConfig)];
 
-      service.processMessage("LSH/device-sender/events", {
-        p: LshProtocol.NETWORK_CLICK_REQUEST,
-        c: 9,
-        i: 1,
-        t: 1,
-      });
+      for (const nextConfig of nextConfigs) {
+        loadConfig(structuredClone(initialConfig));
+        setDeviceOnline("device-sender");
+        setDeviceOnline("actor1");
 
-      const logMessage = service.updateSystemConfig(structuredClone(initialConfig));
-      const confirmResult = service.processMessage("LSH/device-sender/events", {
-        p: LshProtocol.NETWORK_CLICK_CONFIRM,
-        c: 9,
-        i: 1,
-        t: 1,
-      });
+        service.processMessage("LSH/device-sender/events", {
+          p: LshProtocol.NETWORK_CLICK_REQUEST,
+          c: 9,
+          i: 1,
+          t: 1,
+        });
 
-      expect(logMessage).toContain("Cleared 1 pending click transaction(s).");
-      expect(confirmResult.warnings).toContain(
-        "Received confirmation for an expired or unknown click: device-sender.1.1.9.",
-      );
+        const logMessage = service.updateSystemConfig(nextConfig);
+        const confirmResult = service.processMessage("LSH/device-sender/events", {
+          p: LshProtocol.NETWORK_CLICK_CONFIRM,
+          c: 9,
+          i: 1,
+          t: 1,
+        });
+
+        expect(logMessage).toContain("Cleared 1 pending click transaction(s).");
+        expect(confirmResult.warnings).toContain(
+          "Received confirmation for an expired or unknown click: device-sender.1.1.9.",
+        );
+      }
+    });
+
+    it("should clear pending watchdog probe bookkeeping for devices removed from config", () => {
+      const nowSpy = jest.spyOn(Date, "now");
+      nowSpy.mockReturnValue(1_000);
+
+      loadConfig(createSystemConfig("dev1", "dev2"));
+      setDeviceOnline("dev1");
+      setDeviceOnline("dev2");
+
+      nowSpy.mockReturnValue(5_000);
+      service.runWatchdogCheck();
+
+      const logMessage = service.updateSystemConfig(createSystemConfig("dev1"));
+
+      expect(logMessage).toContain("Cleared pending watchdog probe state for: dev2.");
     });
 
     it("should regenerate HA discovery payloads when discovery overrides change", () => {
@@ -224,13 +209,129 @@ describe("LshLogicService - Core & Config", () => {
       );
     });
 
-    it("should clear the loaded system config", () => {
-      loadConfig();
+    it("should clear config, registry and stale watchdog state together", () => {
+      const nowSpy = jest.spyOn(Date, "now");
+      nowSpy.mockReturnValue(1_000);
+
+      loadConfig(createSystemConfig("dev1"));
+      setDeviceOnline("dev1");
+
+      nowSpy.mockReturnValue(5_000);
+      service.runWatchdogCheck();
 
       service.clearSystemConfig();
-
       expect(service.getConfiguredDeviceNames()).toBeNull();
       expect(service.getSystemConfig()).toBeNull();
+      expect(service.getDeviceRegistry()).toEqual({});
+
+      service.updateSystemConfig(createSystemConfig("dev1"));
+
+      nowSpy.mockReturnValue(6_000);
+      const result = service.runWatchdogCheck();
+
+      expect(result.messages[Output.Lsh]).toBeUndefined();
+    });
+
+    it("should prune expired wildcard discovery state during watchdog cycles even when no devices are configured", () => {
+      const nowSpy = jest.spyOn(Date, "now");
+      nowSpy.mockReturnValue(0);
+
+      const watchdogHarness = createServiceHarness();
+      watchdogHarness.loadConfig(createSystemConfig());
+      watchdogHarness.service.processMessage("homie/wildcard-device/$mac", "AA:BB:CC:DD:EE:FF");
+      watchdogHarness.service.processMessage("homie/wildcard-device/$fw/version", "1.0.0");
+      watchdogHarness.service.processMessage("homie/wildcard-device/$nodes", "relay");
+
+      nowSpy.mockReturnValue(24 * 60 * 60 * 1000 + 1);
+      const pruneResult = watchdogHarness.service.runWatchdogCheck();
+      const cleanupMessages = getOutputMessages(pruneResult, Output.Lsh);
+
+      expect(cleanupMessages).toEqual([
+        expect.objectContaining({
+          topic: "homeassistant/device/lsh_wildcard-device/config",
+          payload: "",
+          qos: 1,
+          retain: true,
+        }),
+        expect.objectContaining({
+          topic: "homeassistant/sensor/lsh_wildcard-device_homie_state/config",
+          payload: "",
+          qos: 1,
+          retain: true,
+        }),
+      ]);
+
+      const regenerated = watchdogHarness.service.syncDiscoveryConfig();
+      expect(regenerated.messages[Output.Lsh]).toBeUndefined();
+    });
+
+    it("should publish retained cleanup messages when a discovered device is removed from config", () => {
+      loadConfig(createSystemConfig("device-to-remove"));
+      service.processMessage("homie/device-to-remove/$mac", "AA:BB:CC:DD:EE:FF");
+      service.processMessage("homie/device-to-remove/$fw/version", "1.0.0");
+      service.processMessage("homie/device-to-remove/$nodes", "relay");
+
+      service.updateSystemConfig(createSystemConfig());
+      const syncResult = service.syncDiscoveryConfig();
+
+      expect(getOutputMessages(syncResult, Output.Lsh)).toEqual([
+        expect.objectContaining({
+          topic: "homeassistant/device/lsh_device-to-remove/config",
+          payload: "",
+          qos: 1,
+          retain: true,
+        }),
+        expect.objectContaining({
+          topic: "homeassistant/sensor/lsh_device-to-remove_homie_state/config",
+          payload: "",
+          qos: 1,
+          retain: true,
+        }),
+      ]);
+    });
+
+    it("should sanitize malformed Homie $nodes payloads before generating discovery", () => {
+      loadConfig(createSystemConfig("device-nodes"));
+      service.processMessage("homie/device-nodes/$mac", "AA:BB:CC:DD:EE:FF");
+      service.processMessage("homie/device-nodes/$fw/version", "1.0.0");
+
+      const result = service.processMessage(
+        "homie/device-nodes/$nodes",
+        " relay ,bad node,@oops,KitchenLight,valid_2,topic/evil ",
+      );
+
+      const messages = getOutputMessages(result, Output.Lsh);
+      const deviceMessage = messages.find(
+        (message) => message.topic === "homeassistant/device/lsh_device-nodes/config",
+      ) as
+        | {
+            payload: {
+              components: Record<
+                string,
+                {
+                  state_topic?: string;
+                  command_topic?: string;
+                }
+              >;
+            };
+          }
+        | undefined;
+
+      expect(result.warnings).toContain(
+        "Ignored invalid Homie node id(s) for 'device-nodes': bad node, @oops, topic/evil.",
+      );
+      expect(deviceMessage).toBeDefined();
+      expect(deviceMessage!.payload.components).toHaveProperty("lsh_device-nodes_relay");
+      expect(deviceMessage!.payload.components).toHaveProperty("lsh_device-nodes_kitchenlight");
+      expect(deviceMessage!.payload.components).toHaveProperty("lsh_device-nodes_valid_2");
+      expect(deviceMessage!.payload.components).not.toHaveProperty("lsh_device-nodes_bad node");
+      expect(deviceMessage!.payload.components).not.toHaveProperty("lsh_device-nodes_topic/evil");
+      expect(deviceMessage!.payload.components["lsh_device-nodes_relay"]).toEqual(
+        expect.objectContaining({
+          state_topic: "homie/device-nodes/relay/state",
+          command_topic: "homie/device-nodes/relay/state/set",
+        }),
+      );
     });
   });
 
@@ -358,48 +459,58 @@ describe("LshLogicService - Core & Config", () => {
       ]);
     });
 
-    it("should request a startup BOOT replay when any configured device lacks a full snapshot", () => {
-      loadConfig(createSystemConfig("dev1", "dev2"));
-      service.processMessage(
-        "LSH/dev1/conf",
+    it("should decide startup BOOT replay based on authoritative snapshot completeness", () => {
+      const cases = [
         {
-          p: LshProtocol.DEVICE_DETAILS,
-          v: LSH_WIRE_PROTOCOL_MAJOR,
-          n: "dev1",
-          a: [1],
-          b: [],
+          setup: () => {
+            service.processMessage(
+              "LSH/dev1/conf",
+              {
+                p: LshProtocol.DEVICE_DETAILS,
+                v: LSH_WIRE_PROTOCOL_MAJOR,
+                n: "dev1",
+                a: [1],
+                b: [],
+              },
+              { retained: true },
+            );
+          },
+          expected: true,
         },
-        { retained: true },
-      );
-
-      expect(service.needsStartupBootReplay()).toBe(true);
-    });
-
-    it("should skip a startup BOOT replay when every configured device already has details and state snapshots", () => {
-      loadConfig(createSystemConfig("dev1", "dev2"));
-      for (const deviceName of ["dev1", "dev2"]) {
-        service.processMessage(
-          `LSH/${deviceName}/conf`,
-          {
-            p: LshProtocol.DEVICE_DETAILS,
-            v: LSH_WIRE_PROTOCOL_MAJOR,
-            n: deviceName,
-            a: [1],
-            b: [],
+        {
+          setup: () => {
+            for (const deviceName of ["dev1", "dev2"]) {
+              service.processMessage(
+                `LSH/${deviceName}/conf`,
+                {
+                  p: LshProtocol.DEVICE_DETAILS,
+                  v: LSH_WIRE_PROTOCOL_MAJOR,
+                  n: deviceName,
+                  a: [1],
+                  b: [],
+                },
+                { retained: true },
+              );
+              service.processMessage(
+                `LSH/${deviceName}/state`,
+                {
+                  p: LshProtocol.ACTUATORS_STATE,
+                  s: [0],
+                },
+                { retained: true },
+              );
+            }
           },
-          { retained: true },
-        );
-        service.processMessage(
-          `LSH/${deviceName}/state`,
-          {
-            p: LshProtocol.ACTUATORS_STATE,
-            s: [0],
-          },
-          { retained: true },
-        );
+          expected: false,
+        },
+      ];
+
+      for (const { setup, expected } of cases) {
+        service.clearSystemConfig();
+        loadConfig(createSystemConfig("dev1", "dev2"));
+        setup();
+        expect(service.needsStartupBootReplay()).toBe(expected);
       }
-
-      expect(service.needsStartupBootReplay()).toBe(false);
     });
 
     it("should warn when startup commands are requested for an empty configuration", () => {
@@ -416,37 +527,43 @@ describe("LshLogicService - Core & Config", () => {
       loadConfig();
     });
 
-    it("should carry validation errors for invalid conf payloads", () => {
-      validators.validateDeviceDetails.mockReturnValue(false);
-      validators.validateDeviceDetails.errors = [createAjvError("invalid format")];
+    it("should carry validation errors for invalid LSH payloads", () => {
+      const cases = [
+        {
+          mock: () => {
+            validators.validateDeviceDetails.mockReturnValue(false);
+            validators.validateDeviceDetails.errors = [createAjvError("invalid format")];
+          },
+          topic: "LSH/device-1/conf",
+          payload: { p: LshProtocol.DEVICE_DETAILS },
+          expectedWarning: "Invalid 'conf' payload from device-1: invalid format",
+        },
+        {
+          mock: () => {
+            validators.validateActuatorStates.mockReturnValue(false);
+            validators.validateActuatorStates.errors = [createAjvError("mock state error")];
+          },
+          topic: "LSH/actor1/state",
+          payload: { p: LshProtocol.ACTUATORS_STATE },
+          expectedWarning: "Invalid 'state' payload from actor1: mock state error",
+        },
+        {
+          mock: () => {
+            validators.validateAnyEventsTopic.mockReturnValue(false);
+            validators.validateAnyEventsTopic.errors = [createAjvError("mock events error")];
+          },
+          topic: "LSH/actor1/events",
+          payload: { p: LshProtocol.PING },
+          expectedWarning: "Invalid 'events' payload from actor1: mock events error",
+        },
+      ];
 
-      const result = service.processMessage("LSH/device-1/conf", {
-        p: LshProtocol.DEVICE_DETAILS,
-      });
-
-      expect(result.warnings).toEqual(["Invalid 'conf' payload from device-1: invalid format"]);
-    });
-
-    it("should carry validation errors for invalid state payloads", () => {
-      validators.validateActuatorStates.mockReturnValue(false);
-      validators.validateActuatorStates.errors = [createAjvError("mock state error")];
-
-      const result = service.processMessage("LSH/actor1/state", {
-        p: LshProtocol.ACTUATORS_STATE,
-      });
-
-      expect(result.warnings).toContain("Invalid 'state' payload from actor1: mock state error");
-    });
-
-    it("should carry validation errors for invalid events payloads", () => {
-      validators.validateAnyEventsTopic.mockReturnValue(false);
-      validators.validateAnyEventsTopic.errors = [createAjvError("mock events error")];
-
-      const result = service.processMessage("LSH/actor1/events", {
-        p: LshProtocol.PING,
-      });
-
-      expect(result.warnings).toContain("Invalid 'events' payload from actor1: mock events error");
+      for (const { mock, topic, payload, expectedWarning } of cases) {
+        jest.clearAllMocks();
+        mock();
+        const result = service.processMessage(topic, payload);
+        expect(result.warnings).toContain(expectedWarning);
+      }
     });
 
     it("should report actuator state length mismatches gracefully", () => {
@@ -466,34 +583,44 @@ describe("LshLogicService - Core & Config", () => {
       expect(result.errors).toHaveLength(1);
     });
 
-    it("should request details when a new device sends state before configuration", () => {
-      const result = service.processMessage("LSH/unknown-dev/state", {
-        p: LshProtocol.ACTUATORS_STATE,
-        s: [0],
-      });
+    it("should request details when state arrives before device details are known", () => {
+      const cases = [
+        {
+          setup: () => {},
+          topic: "LSH/unknown-dev/state",
+          expectedLog: "Received state for a new device: unknown-dev. Creating partial entry.",
+          expectedWarning:
+            "Device 'unknown-dev' sent state but its configuration is unknown. Requesting details.",
+          expectedReplyTopic: "LSH/unknown-dev/IN",
+        },
+        {
+          setup: () => {
+            service.processMessage("homie/actor1/$state", "ready");
+          },
+          topic: "LSH/actor1/state",
+          expectedWarning:
+            "Device 'actor1' sent state but its configuration is unknown. Requesting details.",
+          expectedReplyTopic: "LSH/actor1/IN",
+        },
+      ];
 
-      expect(result.logs).toContain(
-        "Received state for a new device: unknown-dev. Creating partial entry.",
-      );
-      expect(result.warnings).toContain(
-        "Device 'unknown-dev' sent state but its configuration is unknown. Requesting details.",
-      );
-      expect(getOutputMessages(result, Output.Lsh)[0].topic).toBe("LSH/unknown-dev/IN");
-    });
+      for (const { setup, topic, expectedLog, expectedWarning, expectedReplyTopic } of cases) {
+        service.clearSystemConfig();
+        loadConfig();
+        setup();
 
-    it("should request details when a known device shell sends state before details", () => {
-      service.processMessage("homie/actor1/$state", "ready");
+        const result = service.processMessage(topic, {
+          p: LshProtocol.ACTUATORS_STATE,
+          s: [0],
+        });
 
-      const result = service.processMessage("LSH/actor1/state", {
-        p: LshProtocol.ACTUATORS_STATE,
-        s: [0],
-      });
-
-      expect(result.errors).toEqual([]);
-      expect(result.warnings).toContain(
-        "Device 'actor1' sent state but its configuration is unknown. Requesting details.",
-      );
-      expect(getOutputMessages(result, Output.Lsh)[0].topic).toBe("LSH/actor1/IN");
+        if (expectedLog) {
+          expect(result.logs).toContain(expectedLog);
+        }
+        expect(result.errors).toEqual([]);
+        expect(result.warnings).toContain(expectedWarning);
+        expect(getOutputMessages(result, Output.Lsh)[0].topic).toBe(expectedReplyTopic);
+      }
     });
 
     it("should promote live LSH details and state to connected even without Homie ready", () => {
@@ -538,93 +665,94 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry().actor1.isHealthy).toBe(false);
     });
 
-    it("should ignore retained LSH ping replies for reachability and recovery", () => {
-      setDeviceOnline("actor1");
-      service.processMessage("homie/actor1/$state", "lost");
+    it("should ignore retained runtime payloads for reachability and recovery", () => {
+      const cases = [
+        {
+          topic: "LSH/actor1/events",
+          payload: { p: LshProtocol.PING },
+          expectedLog:
+            "Ignoring retained 'events' payload from 'actor1' because only live runtime traffic can affect reachability, clicks or bridge health.",
+          assertDevice: () => {
+            const device = service.getDeviceRegistry().actor1;
+            expect(device.connected).toBe(false);
+            expect(device.isHealthy).toBe(false);
+          },
+        },
+        {
+          topic: "LSH/actor1/bridge",
+          payload: {
+            event: "service_ping_reply",
+            controller_connected: true,
+            runtime_synchronized: true,
+            bootstrap_phase: "runtime_ready",
+          },
+          expectedLog:
+            "Ignoring retained 'bridge' payload from 'actor1' because only live runtime traffic can affect reachability, clicks or bridge health.",
+          assertDevice: () => {
+            const device = service.getDeviceRegistry().actor1;
+            expect(device.bridgeConnected).toBe(false);
+            expect(device.connected).toBe(false);
+          },
+        },
+      ];
 
-      const result = service.processMessage(
-        "LSH/actor1/events",
-        { p: LshProtocol.PING },
-        { retained: true },
-      );
-      const device = service.getDeviceRegistry().actor1;
+      for (const { topic, payload, expectedLog, assertDevice } of cases) {
+        service.clearSystemConfig();
+        loadConfig();
+        setDeviceOnline("actor1");
+        service.processMessage("homie/actor1/$state", "lost");
 
-      expect(result.stateChanged).toBe(false);
-      expect(result.messages).toEqual({});
-      expect(result.logs).toContain(
-        "Ignoring retained 'events' payload from 'actor1' because only live runtime traffic can affect reachability, clicks or bridge health.",
-      );
-      expect(device.connected).toBe(false);
-      expect(device.isHealthy).toBe(false);
+        const result = service.processMessage(topic, payload, { retained: true });
+
+        expect(result.stateChanged).toBe(false);
+        expect(result.messages).toEqual({});
+        expect(result.logs).toContain(expectedLog);
+        assertDevice();
+      }
     });
 
-    it("should ignore retained bridge service ping replies for bridge reachability", () => {
-      setDeviceOnline("actor1");
-      service.processMessage("homie/actor1/$state", "lost");
-
-      const result = service.processMessage(
-        "LSH/actor1/bridge",
-        {
-          event: "service_ping_reply",
-          controller_connected: true,
-          runtime_synchronized: true,
-          bootstrap_phase: "runtime_ready",
+    it("should keep retained Homie ready as a silent baseline until live traffic arrives", () => {
+      const setups = [
+        () => {
+          service.processMessage(
+            "LSH/actor1/conf",
+            {
+              p: LshProtocol.DEVICE_DETAILS,
+              v: LSH_WIRE_PROTOCOL_MAJOR,
+              n: "actor1",
+              a: [1, 2],
+              b: [],
+            },
+            { retained: true },
+          );
+          service.processMessage(
+            "LSH/actor1/state",
+            {
+              p: LshProtocol.ACTUATORS_STATE,
+              s: [0],
+            },
+            { retained: true },
+          );
         },
-        { retained: true },
-      );
-      const device = service.getDeviceRegistry().actor1;
+        () => {},
+      ];
 
-      expect(result.stateChanged).toBe(false);
-      expect(result.messages).toEqual({});
-      expect(result.logs).toContain(
-        "Ignoring retained 'bridge' payload from 'actor1' because only live runtime traffic can affect reachability, clicks or bridge health.",
-      );
-      expect(device.bridgeConnected).toBe(false);
-      expect(device.connected).toBe(false);
-    });
+      for (const setup of setups) {
+        setup();
 
-    it("should keep retained Homie ready as a silent baseline for devices known only from retained LSH snapshots", () => {
-      service.processMessage(
-        "LSH/actor1/conf",
-        {
-          p: LshProtocol.DEVICE_DETAILS,
-          v: LSH_WIRE_PROTOCOL_MAJOR,
-          n: "actor1",
-          a: [1, 2],
-          b: [],
-        },
-        { retained: true },
-      );
-      service.processMessage(
-        "LSH/actor1/state",
-        {
-          p: LshProtocol.ACTUATORS_STATE,
-          s: [0],
-        },
-        { retained: true },
-      );
+        const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
+        const device = service.getDeviceRegistry().actor1;
 
-      const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
-      const device = service.getDeviceRegistry().actor1;
+        expect(result.stateChanged).toBe(false);
+        expect(result.messages).toEqual({});
+        expect(device).toBeDefined();
+        expect(device.connected).toBe(false);
+        expect(device.lastSeenTime).toBe(0);
+        expect(device.lastHomieState).toBe("ready");
 
-      expect(result.stateChanged).toBe(false);
-      expect(result.messages).toEqual({});
-      expect(device).toBeDefined();
-      expect(device.connected).toBe(false);
-      expect(device.lastSeenTime).toBe(0);
-      expect(device.lastHomieState).toBe("ready");
-    });
-
-    it("should keep retained Homie ready as a silent baseline for configured devices until live traffic arrives", () => {
-      const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
-      const device = service.getDeviceRegistry().actor1;
-
-      expect(result.stateChanged).toBe(false);
-      expect(result.messages).toEqual({});
-      expect(device).toBeDefined();
-      expect(device.connected).toBe(false);
-      expect(device.lastSeenTime).toBe(0);
-      expect(device.lastHomieState).toBe("ready");
+        service.clearSystemConfig();
+        loadConfig();
+      }
     });
 
     it("should still ignore retained Homie ready for devices outside the loaded system config", () => {
@@ -637,109 +765,138 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry()["unknown-device"]).toBeUndefined();
     });
 
-    it("should record a live Homie init state as diagnostics without alerting or resyncing", () => {
-      const result = service.processMessage("homie/actor1/$state", "init");
-      const device = service.getDeviceRegistry().actor1;
+    it("should treat non-ready Homie lifecycle states as diagnostics and ignore repeats", () => {
+      const cases = [
+        {
+          state: "init",
+          setup: () => {},
+          assertDevice: () => {
+            const device = service.getDeviceRegistry().actor1;
+            expect(device.connected).toBe(false);
+            expect(device.isHealthy).toBe(false);
+            expect(device.lastHomieState).toBe("init");
+            expect(device.bridgeLastSeenTime).toBeGreaterThan(0);
+          },
+        },
+        {
+          state: "sleeping",
+          setup: () => {
+            setDeviceOnline("actor1");
+          },
+          assertDevice: () => {
+            const device = service.getDeviceRegistry().actor1;
+            expect(device.connected).toBe(false);
+            expect(device.lastHomieState).toBe("sleeping");
+          },
+          verifyRepeatNoop: true,
+        },
+      ];
 
-      expect(result.stateChanged).toBe(true);
-      expect(result.messages).toEqual({});
-      expect(result.logs).toContain(
-        "Device 'actor1' reported Homie lifecycle state 'init'. Ignoring it for alerts and resync.",
-      );
-      expect(device.connected).toBe(false);
-      expect(device.isHealthy).toBe(false);
-      expect(device.lastHomieState).toBe("init");
-      expect(device.bridgeLastSeenTime).toBeGreaterThan(0);
+      for (const { state, setup, assertDevice, verifyRepeatNoop } of cases) {
+        service.clearSystemConfig();
+        loadConfig();
+        setup();
+
+        const result = service.processMessage("homie/actor1/$state", state);
+
+        expect(result.stateChanged).toBe(true);
+        expect(result.messages).toEqual({});
+        expect(result.logs).toContain(
+          `Device 'actor1' reported Homie lifecycle state '${state}'. Ignoring it for alerts and resync.`,
+        );
+        assertDevice();
+
+        if (verifyRepeatNoop) {
+          const repeated = service.processMessage("homie/actor1/$state", state);
+          expect(repeated.stateChanged).toBe(false);
+          expect(repeated.logs).toEqual([]);
+          expect(repeated.messages).toEqual({});
+        }
+      }
     });
 
-    it("should treat Homie sleeping as diagnostic unavailability without alerting", () => {
-      setDeviceOnline("actor1");
+    it("should emit retained Homie transition alerts without changing live reachability", () => {
+      const cases = [
+        {
+          setup: () => setDeviceOnline("actor1"),
+          nextState: "lost",
+          expectedLog:
+            "Device 'actor1' reported retained Homie runtime transition 'ready -> lost'. Emitting an offline alert without changing reachability state.",
+          expectedHomieState: "lost",
+        },
+        {
+          setup: () => {
+            setDeviceOnline("actor1");
+            service.processMessage("homie/actor1/$state", "lost", { retained: true });
+          },
+          nextState: "ready",
+          expectedLog:
+            "Device 'actor1' reported retained Homie runtime transition 'lost -> ready'. Emitting a recovery alert without changing reachability state.",
+          expectedHomieState: "ready",
+        },
+      ];
 
-      const result = service.processMessage("homie/actor1/$state", "sleeping");
-      const device = service.getDeviceRegistry().actor1;
+      for (const { setup, nextState, expectedLog, expectedHomieState } of cases) {
+        service.clearSystemConfig();
+        loadConfig();
+        setup();
 
-      expect(result.stateChanged).toBe(true);
-      expect(result.messages).toEqual({});
-      expect(result.logs).toContain(
-        "Device 'actor1' reported Homie lifecycle state 'sleeping'. Ignoring it for alerts and resync.",
-      );
-      expect(device.connected).toBe(false);
-      expect(device.lastHomieState).toBe("sleeping");
+        const result = service.processMessage("homie/actor1/$state", nextState, {
+          retained: true,
+        });
+        const device = service.getDeviceRegistry().actor1;
+
+        expect(result.stateChanged).toBe(true);
+        expect(result.messages[Output.Alerts]).toBeDefined();
+        expect(result.logs).toContain(expectedLog);
+        expect(device.connected).toBe(true);
+        expect(device.lastHomieState).toBe(expectedHomieState);
+      }
     });
 
-    it("should return a no-op when receiving the same diagnostic Homie state twice", () => {
-      service.processMessage("homie/actor1/$state", "sleeping");
+    it("should tag recovery alerts triggered by live telemetry as live telemetry", () => {
+      const cases = [
+        {
+          setup: () => {},
+          trigger: () =>
+            service.processMessage("LSH/actor1/conf", {
+              p: LshProtocol.DEVICE_DETAILS,
+              v: LSH_WIRE_PROTOCOL_MAJOR,
+              n: "actor1",
+              a: [1, 2],
+              b: [],
+            }),
+          expectedMessage: "live details",
+        },
+        {
+          setup: () => {
+            service.processMessage("LSH/actor1/conf", {
+              p: LshProtocol.DEVICE_DETAILS,
+              v: LSH_WIRE_PROTOCOL_MAJOR,
+              n: "actor1",
+              a: [1, 2],
+              b: [],
+            });
+            sendLshState("actor1", [0]);
+          },
+          trigger: () => sendLshState("actor1", [0]),
+          expectedMessage: "live state",
+        },
+      ];
 
-      const result = service.processMessage("homie/actor1/$state", "sleeping");
+      for (const { setup, trigger, expectedMessage } of cases) {
+        setup();
+        service.processMessage("homie/actor1/$state", "lost");
 
-      expect(result.stateChanged).toBe(false);
-      expect(result.logs).toEqual([]);
-      expect(result.messages).toEqual({});
-    });
+        const result = trigger();
 
-    it("should ignore retained Homie offline transitions for reachability after live traffic established the session", () => {
-      setDeviceOnline("actor1");
+        expect(getAlertPayload(result).event_type).toBe("device_recovered");
+        expect(getAlertPayload(result).event_source).toBe("live_telemetry");
+        expect(getAlertPayload(result).message).toContain(expectedMessage);
 
-      const result = service.processMessage("homie/actor1/$state", "lost", { retained: true });
-      const device = service.getDeviceRegistry().actor1;
-
-      expect(result.stateChanged).toBe(true);
-      expect(result.messages[Output.Alerts]).toBeDefined();
-      expect(result.logs).toContain(
-        "Device 'actor1' reported retained Homie runtime transition 'ready -> lost'. Emitting an offline alert without changing reachability state.",
-      );
-      expect(device.connected).toBe(true);
-      expect(device.lastHomieState).toBe("lost");
-    });
-
-    it("should ignore retained Homie recovery transitions for reachability after live traffic established the session", () => {
-      setDeviceOnline("actor1");
-      service.processMessage("homie/actor1/$state", "lost", { retained: true });
-
-      const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
-      const device = service.getDeviceRegistry().actor1;
-
-      expect(result.stateChanged).toBe(true);
-      expect(result.messages[Output.Alerts]).toBeDefined();
-      expect(result.logs).toContain(
-        "Device 'actor1' reported retained Homie runtime transition 'lost -> ready'. Emitting a recovery alert without changing reachability state.",
-      );
-      expect(device.connected).toBe(true);
-      expect(device.lastHomieState).toBe("ready");
-    });
-
-    it("should tag recovery alerts triggered by live details as live telemetry", () => {
-      service.processMessage("homie/actor1/$state", "lost");
-
-      const result = service.processMessage("LSH/actor1/conf", {
-        p: LshProtocol.DEVICE_DETAILS,
-        v: LSH_WIRE_PROTOCOL_MAJOR,
-        n: "actor1",
-        a: [1, 2],
-        b: [],
-      });
-
-      expect(getAlertPayload(result).event_type).toBe("device_recovered");
-      expect(getAlertPayload(result).event_source).toBe("live_telemetry");
-      expect(getAlertPayload(result).message).toContain("live details");
-    });
-
-    it("should tag recovery alerts triggered by live actuator state as live telemetry", () => {
-      service.processMessage("LSH/actor1/conf", {
-        p: LshProtocol.DEVICE_DETAILS,
-        v: LSH_WIRE_PROTOCOL_MAJOR,
-        n: "actor1",
-        a: [1, 2],
-        b: [],
-      });
-      sendLshState("actor1", [0]);
-      service.processMessage("homie/actor1/$state", "lost");
-
-      const result = sendLshState("actor1", [0]);
-
-      expect(getAlertPayload(result).event_type).toBe("device_recovered");
-      expect(getAlertPayload(result).event_source).toBe("live_telemetry");
-      expect(getAlertPayload(result).message).toContain("live state");
+        service.clearSystemConfig();
+        loadConfig();
+      }
     });
 
     it("should return a no-op when receiving the same Homie ready state twice", () => {
@@ -752,25 +909,54 @@ describe("LshLogicService - Core & Config", () => {
       expect(result.messages).toEqual({});
     });
 
-    it("should not report a state change when device details are unchanged", () => {
-      const first = service.processMessage("LSH/actor1/conf", {
-        p: LshProtocol.DEVICE_DETAILS,
-        v: LSH_WIRE_PROTOCOL_MAJOR,
-        n: "actor1",
-        a: [1, 2],
-        b: [],
-      });
-      const second = service.processMessage("LSH/actor1/conf", {
-        p: LshProtocol.DEVICE_DETAILS,
-        v: LSH_WIRE_PROTOCOL_MAJOR,
-        n: "actor1",
-        a: [1, 2],
-        b: [],
-      });
+    it("should treat identical details and state updates as no-ops", () => {
+      const cases = [
+        {
+          setup: () => {},
+          first: () =>
+            service.processMessage("LSH/actor1/conf", {
+              p: LshProtocol.DEVICE_DETAILS,
+              v: LSH_WIRE_PROTOCOL_MAJOR,
+              n: "actor1",
+              a: [1, 2],
+              b: [],
+            }),
+          second: () =>
+            service.processMessage("LSH/actor1/conf", {
+              p: LshProtocol.DEVICE_DETAILS,
+              v: LSH_WIRE_PROTOCOL_MAJOR,
+              n: "actor1",
+              a: [1, 2],
+              b: [],
+            }),
+        },
+        {
+          setup: () => {
+            service.processMessage("LSH/actor1/conf", {
+              p: LshProtocol.DEVICE_DETAILS,
+              v: LSH_WIRE_PROTOCOL_MAJOR,
+              n: "actor1",
+              a: [1, 2],
+              b: [],
+            });
+          },
+          first: () => sendLshState("actor1", [0b01]),
+          second: () => sendLshState("actor1", [0b01]),
+        },
+      ];
 
-      expect(first.stateChanged).toBe(true);
-      expect(second.stateChanged).toBe(false);
-      expect(second.logs).toEqual([]);
+      for (const { setup, first, second } of cases) {
+        service.clearSystemConfig();
+        loadConfig();
+        setup();
+
+        const firstResult = first();
+        const secondResult = second();
+
+        expect(firstResult.stateChanged).toBe(true);
+        expect(secondResult.stateChanged).toBe(false);
+        expect(secondResult.logs).toEqual([]);
+      }
     });
 
     it("should invalidate authoritative state when actuator IDs change", () => {
@@ -791,29 +977,14 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry().actor1.actuatorStates).toEqual([]);
     });
 
-    it("should not report a state change when the actuator state is unchanged", () => {
-      service.processMessage("LSH/actor1/conf", {
-        p: LshProtocol.DEVICE_DETAILS,
-        v: LSH_WIRE_PROTOCOL_MAJOR,
-        n: "actor1",
-        a: [1, 2],
-        b: [],
-      });
-
-      const first = sendLshState("actor1", [0b01]);
-      const second = sendLshState("actor1", [0b01]);
-
-      expect(first.stateChanged).toBe(true);
-      expect(second.stateChanged).toBe(false);
-      expect(second.logs).toEqual([]);
-    });
-
     it("should ignore unknown events protocol payloads gracefully", () => {
       const result = service.processMessage("LSH/actor1/events", { p: 999 });
 
       expect(result.messages).toEqual({});
       expect(result.logs).toEqual([]);
-      expect(result.warnings).toEqual([]);
+      expect(result.warnings).toEqual([
+        "Unhandled 'events' payload from actor1: protocol id '999'.",
+      ]);
       expect(result.errors).toEqual([]);
     });
 

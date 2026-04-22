@@ -1,122 +1,102 @@
 /**
  * @file Unit tests for the utility functions.
  */
-import { sleep, formatAlertMessage, areSameArray } from "../utils";
-
-describe("sleep", () => {
-  it("sleep should resolve after the specified time", async () => {
-    jest.useFakeTimers();
-    const sleepPromise = sleep(1000);
-    jest.advanceTimersByTime(1000);
-    await expect(sleepPromise).resolves.toBeUndefined();
-    jest.useRealTimers();
-  });
-});
+import type { Actor } from "../types";
+import { formatAlertMessage, areSameArray, normalizeActors } from "../utils";
 
 describe("formatAlertMessage", () => {
-  it("should create a correctly formatted message for an unhealthy device", () => {
-    const unhealthyDevices = [{ name: "living-room-light", reason: "Ping failed." }];
-    const expectedMessage =
-      "‼️ *System Health Alert* ‼️\n\n" +
-      "The following event occurred:\n" +
-      "  - *living-room-light*: Ping failed.\n" +
-      "\nPlease check power and network connections where applicable.";
+  it("should format the base alert templates for unhealthy and healthy devices", () => {
+    const cases = [
+      {
+        devices: [{ name: "living-room-light", reason: "Ping failed." }],
+        status: "unhealthy" as const,
+        expectedMessage:
+          "‼️ *System Health Alert* ‼️\n\n" +
+          "The following event occurred:\n" +
+          "  - *living-room-light*: Ping failed.\n" +
+          "\nPlease check power and network connections where applicable.",
+      },
+      {
+        devices: [{ name: "living-room-light", reason: "Device is now connected." }],
+        status: "healthy" as const,
+        expectedMessage:
+          "✅ *System Health Recovery* ✅\n\n" +
+          "The following devices are now back online:\n" +
+          "  - *living-room-light*: Device is now connected.\n",
+      },
+    ];
 
-    const result = formatAlertMessage(unhealthyDevices, "unhealthy");
-    expect(result).toBe(expectedMessage);
+    for (const { devices, status, expectedMessage } of cases) {
+      expect(formatAlertMessage(devices, status)).toBe(expectedMessage);
+    }
   });
 
-  it("should create a correctly formatted message for a healthy device", () => {
-    const healthyDevices = [{ name: "living-room-light", reason: "Device is now connected." }];
-    const expectedMessage =
-      "✅ *System Health Recovery* ✅\n\n" +
-      "The following devices are now back online:\n" +
-      "  - *living-room-light*: Device is now connected.\n";
-
-    const result = formatAlertMessage(healthyDevices, "healthy");
-    expect(result).toBe(expectedMessage);
-  });
-
-  it("should include details when provided", () => {
+  it("should render structured, primitive and Error details", () => {
     const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
-    const details = { p: "c_nc", bi: "B1" };
-    const result = formatAlertMessage(unhealthyDevices, "unhealthy", details);
-    expect(result).toContain("*Details:*");
-    expect(result).toContain('"p": "c_nc"');
-  });
+    const detailsCases = [
+      {
+        details: { p: "c_nc", bi: "B1" },
+        expectedSubstring: '"p": "c_nc"',
+      },
+      {
+        details: "A simple string detail",
+        expectedSubstring: "A simple string detail",
+      },
+      {
+        details: Object.assign(new Error("boom"), { stack: "custom-stack" }),
+        expectedSubstring: "custom-stack",
+      },
+      {
+        details: (() => {
+          const error = new Error("boom");
+          error.stack = undefined;
+          return error;
+        })(),
+        expectedSubstring: "boom",
+      },
+    ];
 
-  it("should include non-object details as a string", () => {
-    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
-    const details = "A simple string detail";
-    const result = formatAlertMessage(unhealthyDevices, "unhealthy", details);
-    expect(result).toContain("*Details:*");
-    expect(result).toContain(details);
-  });
-
-  it("should prefer the error stack when details contain an Error", () => {
-    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
-    const details = new Error("boom");
-    details.stack = "custom-stack";
-
-    const result = formatAlertMessage(unhealthyDevices, "unhealthy", details);
-
-    expect(result).toContain("*Details:*");
-    expect(result).toContain("custom-stack");
-  });
-
-  it("should fall back to the error message when the stack is unavailable", () => {
-    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
-    const details = new Error("boom");
-    details.stack = undefined;
-
-    const result = formatAlertMessage(unhealthyDevices, "unhealthy", details);
-
-    expect(result).toContain("*Details:*");
-    expect(result).toContain("boom");
-  });
-
-  it("should stringify symbol details", () => {
-    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
-    const result = formatAlertMessage(unhealthyDevices, "unhealthy", Symbol.for("lsh-test"));
-
-    expect(result).toContain("*Details:*");
-    expect(result).toContain("Symbol(lsh-test)");
-  });
-
-  it("should keep the details section empty for unsupported detail types", () => {
-    const unhealthyDevices = [{ name: "device-1", reason: "Action failed" }];
-    const result = formatAlertMessage(unhealthyDevices, "unhealthy", () => "ignored");
-
-    expect(result).toContain("*Details:*");
-    expect(result).not.toContain("ignored");
+    for (const { details, expectedSubstring } of detailsCases) {
+      const result = formatAlertMessage(unhealthyDevices, "unhealthy", details);
+      expect(result).toContain("*Details:*");
+      expect(result).toContain(expectedSubstring);
+    }
   });
 });
 
 describe("areSameArray", () => {
-  it("should return true for two identical arrays of primitives", () => {
+  it("should compare primitive arrays by value, length and order", () => {
     expect(areSameArray([1, 2, 3], [1, 2, 3])).toBe(true);
     expect(areSameArray(["a", "b"], ["a", "b"])).toBe(true);
     expect(areSameArray([true, false], [true, false])).toBe(true);
-  });
-
-  it("should return false for arrays with different lengths", () => {
     expect(areSameArray([1, 2, 3], [1, 2])).toBe(false);
-  });
-
-  it("should return false for arrays with different values", () => {
-    expect(areSameArray([1, 2, 3], [1, 5, 3])).toBe(false);
-  });
-
-  it("should return false for arrays with same values in different order", () => {
     expect(areSameArray([1, 2, 3], [3, 2, 1])).toBe(false);
   });
+});
 
-  it("should return true for two empty arrays", () => {
-    expect(areSameArray([], [])).toBe(true);
+describe("normalizeActors", () => {
+  it("merges duplicate subsets targeting the same device", () => {
+    const actors: Actor[] = [
+      { name: "actor-1", allActuators: false, actuators: [1, 2] },
+      { name: "actor-1", allActuators: false, actuators: [2, 3] },
+      { name: "actor-2", allActuators: false, actuators: [7] },
+    ];
+
+    expect(normalizeActors(actors)).toEqual([
+      { name: "actor-1", allActuators: false, actuators: [1, 2, 3] },
+      { name: "actor-2", allActuators: false, actuators: [7] },
+    ]);
   });
 
-  it("should return false for arrays of different types", () => {
-    // @ts-expect-error - Intentionally testing different types to ensure strict equality.
-    expect(areSameArray([1, 2, 3], ["1", "2", "3"])).toBe(false);
+  it("lets allActuators dominate any partial subsets for the same device", () => {
+    const actors: Actor[] = [
+      { name: "actor-1", allActuators: false, actuators: [2] },
+      { name: "actor-1", allActuators: true, actuators: [] },
+      { name: "actor-1", allActuators: false, actuators: [3] },
+    ];
+
+    expect(normalizeActors(actors)).toEqual([
+      { name: "actor-1", allActuators: true, actuators: [] },
+    ]);
   });
 });

@@ -10,9 +10,34 @@ This node replaces complex Node-RED flows with a single, robust, and stateful co
 
 The original installation behind it uses Controllino controllers plus ESP32 bridges, but the Node-RED boundary is the **LSH protocol contract**, not the exact hardware. If another controller / bridge stack implements the same public MQTT topics and payload contract, this node is designed to work there too.
 
+If you are new to the public LSH stack, read the landing reference page first:
+
+- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+- [LSH glossary](https://github.com/labodj/labo-smart-home/blob/main/GLOSSARY.md)
+
 ![Node Appearance](images/node-appearance.png)
 
 ---
+
+## Start Here
+
+Use this README according to what you need:
+
+- If you are new to the stack, read the landing reference page and glossary first.
+- If you want the shortest answers to adoption questions, skim the landing [`FAQ.md`](https://github.com/labodj/labo-smart-home/blob/main/FAQ.md).
+- If you want the shortest end-to-end bring-up path, read the landing [`GETTING_STARTED.md`](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md).
+- If startup or click behavior looks inconsistent, use the landing [`TROUBLESHOOTING.md`](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md).
+- If you want the shortest path to a working setup, read [Installation](#installation), then [Configuration](#configuration), then the example configs under [`examples/`](./examples).
+- If you want the runtime model, startup behavior and watchdog semantics, read [How It Works](#how-it-works).
+- If you want to integrate MsgPack, jump to [Advanced: MsgPack Support](#advanced-msgpack-support).
+
+## Bundled Examples
+
+The fastest assets to open in this repository are:
+
+- [examples/lsh-logic-example.json](./examples/lsh-logic-example.json): example flow with dynamic MQTT subscription management
+- [examples/system-config.minimal.json](./examples/system-config.minimal.json): smallest useful `system-config.json`
+- [examples/system-config.multi-device.json](./examples/system-config.multi-device.json): richer multi-device topology example
 
 ## Key Features
 
@@ -89,7 +114,7 @@ The node accepts messages from an `mqtt-in` node. It processes:
 
 The node has five distinct outputs for clear and organized flows:
 
-1.  **LSH Commands**: Commands targeting your LSH protocol devices (e.g., `SET_STATE`, `PING`, `CLICK_ACK`).
+1.  **LSH Commands**: Commands targeting your LSH protocol devices (e.g., `SET_STATE`, `PING`, `NETWORK_CLICK_ACK`).
 2.  **Other Actor Commands**: Abstracted commands for controlling 3rd party devices (Tasmota, Zigbee) via other Node-RED flows. The payload contains the listing of target actors and the state to set.
 3.  **Alerts**: Human-readable health alerts (Markdown formatted) suitable for notifications (Telegram/Slack). The payload also includes machine-readable `event_type` and `event_source` fields so flows can distinguish lifecycle/reboot alerts from true watchdog outages without parsing the formatted text.
 4.  **Configuration**: Dynamic control messages for the `mqtt-in` node.
@@ -99,11 +124,28 @@ The node has five distinct outputs for clear and organized flows:
 
 ### Node Settings
 
-- **MQTT Paths**: Base topics for Homie and LSH protocols. Both must end with `/`.
-- **System Config Path**: Location of your `system-config.json` (absolute or relative to Node-RED user dir).
-- **Protocol**: Choose between `JSON` (human readable) and `MsgPack` (binary, efficient).
-- **Timings**: Customize Watchdog intervals, Ping timeouts, the hard pending-click timeout, periodic click cleanup, and the optional startup replay window.
-- **Home Assistant**: Enable/Disable auto-discovery generation.
+- **`name`**: Optional label shown in the Node-RED editor.
+- **`homieBasePath`**: Base topic for Homie traffic, for example `homie/`. Must end with `/`.
+- **`lshBasePath`**: Base topic for LSH traffic, for example `LSH/`. Must end with `/`.
+- **`serviceTopic`**: Bridge-scoped service topic used for hop-local `PING` and startup `BOOT` replay requests. The default public profile uses `LSH/Node-RED/SRV`.
+- **`protocol`**: Payload format for LSH commands and LSH runtime topics. Supported values are `JSON` and `MsgPack`.
+- **`systemConfigPath`**: Path to `system-config.json`, absolute or relative to the Node-RED user directory.
+- **`clickTimeout`**: Hard timeout for the request → ACK → confirm click lifecycle.
+- **`clickCleanupInterval`**: Periodic cleanup sweep for stale click transactions.
+- **`initialStateTimeout`**: Startup replay window used only when a bridge-local `BOOT` replay is actually needed.
+- **`watchdogInterval`**: Frequency of periodic device health checks.
+- **`interrogateThreshold`**: Silence threshold before the watchdog sends a ping.
+- **`pingTimeout`**: How long the watchdog waits for a ping response before treating a device as stale.
+- **`haDiscovery`**: Enable or disable Home Assistant auto-discovery output.
+- **`haDiscoveryPrefix`**: Home Assistant discovery topic prefix, usually `homeassistant`. Required only when discovery is enabled.
+- **`exposeStateContext` / `exposeStateKey`**: Optional export of the live internal device registry to flow/global context.
+- **`exportTopics` / `exportTopicsKey`**: Optional export of the generated MQTT topic set to flow/global context.
+- **`exposeConfigContext` / `exposeConfigKey`**: Optional export of the effective loaded runtime config to flow/global context.
+- **`otherActorsContext`**: Which context store (`flow` or `global`) is used to read non-LSH actor state.
+- **`otherDevicesPrefix`**: Prefix used when looking up external actor state in the selected context store.
+
+The editor help in [`src/lsh-logic.html`](src/lsh-logic.html) documents the same
+fields from the Node-RED UI perspective.
 
 ### `system-config.json`
 
@@ -146,6 +188,14 @@ Ready-to-copy examples are available in:
 ```
 
 - **`name`**: Must match the exact device ID used in MQTT topics. With the current reference bridge defaults this is typically a short ID such as `c1`, `j1`, `k1`; the default bridge build allocates 4 characters unless `CONFIG_MAX_NAME_LENGTH` is raised.
+- **`longClickButtons`**: Optional list of long-click actions handled by the orchestration layer for this device.
+- **`superLongClickButtons`**: Optional list of super-long-click actions handled by the orchestration layer for this device.
+- **`longClickButtons[].id` / `superLongClickButtons[].id`**: Numeric button ID that triggers the distributed action.
+- **`longClickButtons[].actors` / `superLongClickButtons[].actors`**: Target LSH devices affected by the action.
+- **`actors[].name`**: Target LSH device name.
+- **`actors[].allActuators`**: `true` to target all actuators on the device, `false` to target only a specific subset.
+- **`actors[].actuators`**: Required when `allActuators` is `false`; lists the exact actuator IDs to target.
+- **`longClickButtons[].otherActors` / `superLongClickButtons[].otherActors`**: Optional non-LSH actors, identified by name, to be emitted on the "Other Actor Commands" output.
 - **`haDiscovery`**: Optional Home Assistant discovery overrides for this device.
 - **`haDiscovery.deviceName`**: Optional Home Assistant device name override.
 - **`haDiscovery.defaultPlatform`**: Optional default Home Assistant entity platform for all actuator nodes of the device (`light`, `switch`, or `fan`).
@@ -154,9 +204,6 @@ Ready-to-copy examples are available in:
 - **`haDiscovery.nodes.<id>.name`**: Optional friendly entity name override shown in Home Assistant.
 - **`haDiscovery.nodes.<id>.defaultEntityId`**: Optional Home Assistant `default_entity_id` override for first discovery.
 - **`haDiscovery.nodes.<id>.icon`**: Optional Home Assistant icon override.
-- **`id`**: Button ID (numeric, e.g., `1` for Button 1).
-- **`actors`**: Target LSH devices.
-- **`otherActors`**: Target external devices (strings).
 
 ## Best Practices
 
@@ -183,7 +230,9 @@ To use MsgPack:
 2.  Configure your **Input MQTT Node** to return **"a Buffer"** instead of a parsed string.
 3.  Ensure your ESP firmware supports decoding MsgPack payloads.
 
-The node handles decoding (Input) and encoding (Output) transparently.
+The node handles decoding (Input) and encoding (Output) transparently. In MsgPack mode,
+non-Buffer inbound LSH payloads are rejected instead of being silently reinterpreted as
+text or JSON.
 
 ## Maintainer Notes
 

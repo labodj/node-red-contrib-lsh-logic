@@ -151,4 +151,26 @@ describe("Watchdog", () => {
 
     expect(watchdog.checkDeviceHealth(bridgeOnlyDevice, NOW).status).toBe("needs_ping");
   });
+
+  it("prunes pending ping bookkeeping for devices removed from config", () => {
+    const device = {
+      ...mockDevice,
+      lastSeenTime: NOW - (INTERROGATE_SEC + 1) * 1000,
+    };
+
+    expect(watchdog.checkDeviceHealth(device, NOW).status).toBe("needs_ping");
+    expect(watchdog.pruneDevices([])).toEqual([device.name]);
+    expect(watchdog.checkDeviceHealth(device, NOW + 1).status).toBe("needs_ping");
+  });
+
+  it("resets all pending ping bookkeeping when the watchdog is reset", () => {
+    const device = {
+      ...mockDevice,
+      lastSeenTime: NOW - (INTERROGATE_SEC + 1) * 1000,
+    };
+
+    expect(watchdog.checkDeviceHealth(device, NOW).status).toBe("needs_ping");
+    watchdog.reset();
+    expect(watchdog.checkDeviceHealth(device, NOW + 1).status).toBe("needs_ping");
+  });
 });

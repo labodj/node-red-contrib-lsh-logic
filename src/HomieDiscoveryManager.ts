@@ -1,9 +1,8 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
 import type { NodeMessage } from "node-red";
 
 import { Output } from "./types";
+import { appendLshMessages, createEmptyServiceResult } from "./LshLogicService.helpers";
+import { PACKAGE_VERSION } from "./version";
 import type {
   DeviceEntry,
   DeviceHomeAssistantDiscoveryConfig,
@@ -125,10 +124,11 @@ interface SingleSensorDiscoveryPayload {
 }
 
 type DiscoveryPayload = DeviceDiscoveryPayload | SingleSensorDiscoveryPayload;
+type DiscoveryMessagePayload = DiscoveryPayload | "";
 
 type DiscoveryMessage = NodeMessage & {
   topic: string;
-  payload: DiscoveryPayload;
+  payload: DiscoveryMessagePayload;
   qos: 1;
   retain: true;
 };
@@ -143,6 +143,7 @@ interface DiscoveryComponentEntry {
  * State definitions for the Homie Discovery Manager.
  */
 interface DeviceDiscoveryState {
+  lastSeenAt: number;
   mac?: string;
   fw_version?: string;
   nodes?: string[];
@@ -154,18 +155,6 @@ interface ReadyDeviceDiscoveryState extends DeviceDiscoveryState {
   fw_version: string;
   nodes: string[];
 }
-
-type PackageMetadata = {
-  version?: string;
-};
-
-const readPackageVersion = (): string => {
-  const raw = JSON.parse(
-    readFileSync(resolve(__dirname, "../package.json"), "utf8"),
-  ) as PackageMetadata;
-
-  return typeof raw.version === "string" ? raw.version : "0.0.0";
-};
 
 const normalizeOptionalString = (value: string | undefined): string | undefined => {
   const normalized = value?.trim();
@@ -195,10 +184,8 @@ const normalizeDeviceDiscoveryConfig = (
     ])
     .sort(([left], [right]) => left.localeCompare(right));
 
-  const normalizedNodes = Object.fromEntries(normalizedNodeEntries) as Record<
-    string,
-    NormalizedNodeDiscoveryConfig
-  >;
+  const normalizedNodes: Record<string, NormalizedNodeDiscoveryConfig> =
+    Object.fromEntries(normalizedNodeEntries);
 
   return {
     deviceName: normalizeOptionalString(config.deviceName),
@@ -216,11 +203,11 @@ export class HomieDiscoveryManager {
   private readonly discoveryState: Map<string, DeviceDiscoveryState> = new Map();
   private readonly discoveryConfigByDevice: Map<string, NormalizedDeviceDiscoveryConfig> =
     new Map();
-  private static readonly ORIGIN: HomeAssistantOrigin = {
-    name: "node-red-contrib-lsh-logic",
-    sw_version: readPackageVersion(),
-    support_url: "https://github.com/labodj/node-red-contrib-lsh-logic",
-  };
+  private readonly configuredDeviceIds: Set<string> = new Set();
+  private readonly pendingCleanupDeviceIds: Set<string> = new Set();
+  private static originCache: HomeAssistantOrigin | null = null;
+  private static readonly UNCONFIGURED_DEVICE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
+  private static readonly VALID_NODE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
   private static readonly SENSORS_DEF: readonly DeviceDiscoveryDefinition[] = [
     { name: "MAC Address", topic: "$mac", icon: "mdi:ethernet", cat: "diagnostic" },
@@ -329,22 +316,64 @@ export class HomieDiscoveryManager {
   constructor(
     private readonly homieBasePath: string,
     private readonly discoveryPrefix: string = "homeassistant",
+    private readonly now: () => number = Date.now,
   ) {}
 
+  private static getOrigin(): HomeAssistantOrigin {
+    if (!this.originCache) {
+      this.originCache = {
+        name: "node-red-contrib-lsh-logic",
+        sw_version: PACKAGE_VERSION,
+        support_url: "https://github.com/labodj/node-red-contrib-lsh-logic",
+      };
+    }
+
+    return this.originCache;
+  }
+
   public setDiscoveryConfig(deviceConfigMap: ReadonlyMap<string, DeviceEntry>): void {
+    const previouslyConfiguredDeviceIds = new Set(this.configuredDeviceIds);
+    this.configuredDeviceIds.clear();
     this.discoveryConfigByDevice.clear();
 
     for (const [deviceId, deviceEntry] of deviceConfigMap) {
+      this.configuredDeviceIds.add(deviceId);
       const normalizedConfig = normalizeDeviceDiscoveryConfig(deviceEntry.haDiscovery);
       if (normalizedConfig) {
         this.discoveryConfigByDevice.set(deviceId, normalizedConfig);
       }
     }
+
+    for (const deviceId of previouslyConfiguredDeviceIds) {
+      if (!this.configuredDeviceIds.has(deviceId)) {
+        this.pendingCleanupDeviceIds.add(deviceId);
+        this.discoveryState.delete(deviceId);
+      }
+    }
+
+    this.pruneStaleWildcardDiscoveryState(this.now());
+  }
+
+  public reset(): ServiceResult {
+    for (const [deviceId, deviceData] of this.discoveryState.entries()) {
+      if (deviceData.last_component_platforms !== undefined) {
+        this.pendingCleanupDeviceIds.add(deviceId);
+      }
+    }
+
+    const result = createEmptyServiceResult();
+    this.appendPendingCleanupMessages(result);
+    this.configuredDeviceIds.clear();
+    this.discoveryConfigByDevice.clear();
+    this.discoveryState.clear();
+    return result;
   }
 
   public regenerateDiscoveryPayloads(): ServiceResult {
-    const result = this.createEmptyResult();
+    const result = createEmptyServiceResult();
     const discoveryMessages: DiscoveryMessage[] = [];
+    this.pruneStaleWildcardDiscoveryState(this.now());
+    this.appendPendingCleanupMessages(result);
 
     for (const [deviceId, deviceData] of this.discoveryState.entries()) {
       if (!this.isDeviceReady(deviceData)) {
@@ -357,12 +386,19 @@ export class HomieDiscoveryManager {
     }
 
     if (discoveryMessages.length > 0) {
-      result.messages[Output.Lsh] = discoveryMessages;
+      appendLshMessages(result, discoveryMessages);
       result.logs.push(
         `Regenerated HA device discovery config for ${discoveryMessages.length} retained message(s).`,
       );
     }
 
+    return result;
+  }
+
+  public pruneExpiredDiscoveryState(now: number = this.now()): ServiceResult {
+    this.pruneStaleWildcardDiscoveryState(now);
+    const result = createEmptyServiceResult();
+    this.appendPendingCleanupMessages(result);
     return result;
   }
 
@@ -375,10 +411,19 @@ export class HomieDiscoveryManager {
     topicSuffix: string,
     payload: string,
   ): ServiceResult {
-    const result = this.createEmptyResult();
+    const result = createEmptyServiceResult();
+    const now = this.now();
+    this.pruneStaleWildcardDiscoveryState(now);
 
-    const deviceData = this.getOrCreateDeviceData(deviceId);
-    const updated = this.updateDeviceData(deviceData, topicSuffix, payload);
+    const deviceData = this.getOrCreateDeviceData(deviceId, now);
+    deviceData.lastSeenAt = now;
+    const { changed: updated, warnings } = this.updateDeviceData(
+      deviceId,
+      deviceData,
+      topicSuffix,
+      payload,
+    );
+    result.warnings.push(...warnings);
 
     if (updated && this.isDeviceReady(deviceData)) {
       const { messages, componentPlatforms } = this.generateDiscoveryPayloads(deviceId, deviceData);
@@ -392,28 +437,79 @@ export class HomieDiscoveryManager {
     return result;
   }
 
-  private createEmptyResult(): ServiceResult {
-    return {
-      messages: {},
-      logs: [],
-      warnings: [],
-      errors: [],
-      stateChanged: false,
-    };
-  }
-
   /**
    * Retrieves existing state for a device or creates a new one.
    * @param deviceId - The device identifier.
    * @returns The discovery state object for the device.
    */
-  private getOrCreateDeviceData(deviceId: string): DeviceDiscoveryState {
+  private getOrCreateDeviceData(deviceId: string, now: number): DeviceDiscoveryState {
     let deviceData = this.discoveryState.get(deviceId);
     if (!deviceData) {
-      deviceData = {};
+      // A wildcard device may legitimately reappear after its transient state
+      // was pruned but before the retained cleanup queue is flushed. In that
+      // case the pending tombstones must be cancelled so the renewed discovery
+      // config is not deleted by a stale cleanup batch.
+      this.pendingCleanupDeviceIds.delete(deviceId);
+      deviceData = { lastSeenAt: now };
       this.discoveryState.set(deviceId, deviceData);
     }
     return deviceData;
+  }
+
+  /**
+   * Wildcard discovery intentionally accepts devices that are not yet present
+   * in the system config, but their transient state must remain bounded when
+   * IDs churn over time.
+   */
+  private pruneStaleWildcardDiscoveryState(now: number): void {
+    for (const [deviceId, deviceData] of this.discoveryState.entries()) {
+      if (this.configuredDeviceIds.has(deviceId)) {
+        continue;
+      }
+
+      if (now - deviceData.lastSeenAt > HomieDiscoveryManager.UNCONFIGURED_DEVICE_STATE_TTL_MS) {
+        this.pendingCleanupDeviceIds.add(deviceId);
+        this.discoveryState.delete(deviceId);
+      }
+    }
+  }
+
+  private appendPendingCleanupMessages(result: ServiceResult): void {
+    const removedDeviceIds = Array.from(this.pendingCleanupDeviceIds).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    if (removedDeviceIds.length === 0) {
+      return;
+    }
+
+    this.pendingCleanupDeviceIds.clear();
+    const cleanupMessages = removedDeviceIds.flatMap((deviceId) =>
+      this.buildDeviceCleanupMessages(deviceId),
+    );
+    appendLshMessages(result, cleanupMessages);
+    result.logs.push(
+      `Removed HA discovery config for ${removedDeviceIds.length} device(s) using ${cleanupMessages.length} retained cleanup message(s).`,
+    );
+  }
+
+  private buildDeviceCleanupMessages(deviceId: string): DiscoveryMessage[] {
+    const deviceObjectId = `lsh_${deviceId.toLowerCase()}`;
+    const homieStateComponentId = `${deviceObjectId}_homie_state`;
+
+    return [
+      {
+        topic: `${this.discoveryPrefix}/device/${deviceObjectId}/config`,
+        payload: "",
+        qos: 1,
+        retain: true,
+      },
+      {
+        topic: `${this.discoveryPrefix}/sensor/${homieStateComponentId}/config`,
+        payload: "",
+        qos: 1,
+        retain: true,
+      },
+    ];
   }
 
   /**
@@ -424,47 +520,121 @@ export class HomieDiscoveryManager {
    * @returns True if the state was updated, false otherwise.
    */
   private updateDeviceData(
+    deviceId: string,
     data: DeviceDiscoveryState,
     topicSuffix: string,
     payload: string,
-  ): boolean {
+  ): { changed: boolean; warnings: string[] } {
     switch (topicSuffix) {
       case "/$mac": {
         if (data.mac !== payload) {
           data.mac = payload;
-          return true;
+          return { changed: true, warnings: [] };
         }
         break;
       }
       case "/$fw/version": {
         if (data.fw_version !== payload) {
           data.fw_version = payload;
-          return true;
+          return { changed: true, warnings: [] };
         }
         break;
       }
       case "/$nodes": {
-        const newNodes = payload.split(",");
+        const {
+          nodes: newNodes,
+          rejectedNodes,
+          caseCollidingNodes,
+        } = this.normalizeDiscoveryNodes(payload);
+        const warnings: string[] = [];
+        if (rejectedNodes.length > 0) {
+          warnings.push(
+            `Ignored invalid Homie node id(s) for '${deviceId}': ${rejectedNodes.join(", ")}.`,
+          );
+        }
+        if (caseCollidingNodes.length > 0) {
+          warnings.push(
+            `Ignored Homie node id(s) for '${deviceId}' because they collide case-insensitively with another node id: ${caseCollidingNodes.join(", ")}.`,
+          );
+        }
+        if (newNodes.length === 0) {
+          warnings.push(
+            `Ignored Homie $nodes payload for '${deviceId}' because it contained no valid node ids.`,
+          );
+          return { changed: false, warnings };
+        }
         if (!this.areNodesEqual(data.nodes, newNodes)) {
           data.nodes = newNodes;
-          return true;
+          return { changed: true, warnings };
         }
-        break;
+        return { changed: false, warnings };
       }
     }
-    return false;
+    return { changed: false, warnings: [] };
+  }
+
+  private normalizeDiscoveryNodes(payload: string): {
+    nodes: string[];
+    rejectedNodes: string[];
+    caseCollidingNodes: string[];
+  } {
+    const nodesByCanonicalId = new Map<string, string>();
+    const rejectedNodes: string[] = [];
+    const caseCollidingNodes: string[] = [];
+
+    for (const token of payload.split(",")) {
+      const normalized = token.trim();
+      if (!normalized) {
+        continue;
+      }
+
+      if (!HomieDiscoveryManager.VALID_NODE_ID_PATTERN.test(normalized)) {
+        rejectedNodes.push(normalized);
+        continue;
+      }
+
+      const canonicalNodeId = normalized.toLowerCase();
+      const existingNodeId = nodesByCanonicalId.get(canonicalNodeId);
+
+      if (!existingNodeId) {
+        nodesByCanonicalId.set(canonicalNodeId, normalized);
+        continue;
+      }
+
+      if (existingNodeId !== normalized) {
+        // Home Assistant entity IDs and config overrides are lowercased, so two
+        // node ids that differ only by case would collapse onto the same entity.
+        // Keep the first spelling we saw and surface the ambiguity explicitly.
+        caseCollidingNodes.push(normalized);
+      }
+    }
+
+    return {
+      nodes: Array.from(nodesByCanonicalId.values()).sort(
+        (left, right) =>
+          left.toLowerCase().localeCompare(right.toLowerCase()) || left.localeCompare(right),
+      ),
+      rejectedNodes,
+      caseCollidingNodes,
+    };
   }
 
   /**
-   * Compares two arrays of node strings for equality.
+   * Compares two arrays of node strings for equality after canonicalization.
    * @param oldNodes - The existing array of nodes.
    * @param newNodes - The new array of nodes.
-   * @returns True if both arrays contain the same strings in the same order.
+   * @returns True if both arrays contain the same canonical node set.
    */
   private areNodesEqual(oldNodes: string[] | undefined, newNodes: string[]): boolean {
     if (!oldNodes) return false;
-    if (oldNodes.length !== newNodes.length) return false;
-    return oldNodes.every((val, index) => val === newNodes[index]);
+    const canonicalOldNodes = Array.from(
+      new Set(oldNodes.map((nodeId) => nodeId.toLowerCase())),
+    ).sort((left, right) => left.localeCompare(right));
+    const canonicalNewNodes = Array.from(
+      new Set(newNodes.map((nodeId) => nodeId.toLowerCase())),
+    ).sort((left, right) => left.localeCompare(right));
+    if (canonicalOldNodes.length !== canonicalNewNodes.length) return false;
+    return canonicalOldNodes.every((val, index) => val === canonicalNewNodes[index]);
   }
 
   /**
@@ -473,7 +643,7 @@ export class HomieDiscoveryManager {
    * @returns True if the device is ready for discovery generation.
    */
   private isDeviceReady(data: DeviceDiscoveryState): data is ReadyDeviceDiscoveryState {
-    return !!(data.mac && data.fw_version && data.nodes);
+    return Boolean(data.mac && data.fw_version && data.nodes && data.nodes.length > 0);
   }
 
   /**
@@ -566,7 +736,7 @@ export class HomieDiscoveryManager {
   ): DiscoveryMessage {
     const payload: DeviceDiscoveryPayload = {
       device: baseDevice,
-      origin: HomieDiscoveryManager.ORIGIN,
+      origin: HomieDiscoveryManager.getOrigin(),
       availability_topic: `${baseTopic}/$state`,
       payload_available: "ready",
       payload_not_available: "lost",
@@ -606,7 +776,7 @@ export class HomieDiscoveryManager {
       icon: "mdi:state-machine",
       entity_category: "diagnostic",
       device: baseDevice,
-      origin: HomieDiscoveryManager.ORIGIN,
+      origin: HomieDiscoveryManager.getOrigin(),
     };
 
     return {

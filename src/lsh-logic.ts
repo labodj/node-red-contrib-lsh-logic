@@ -32,6 +32,8 @@ type NumericConfigKey =
   | "pingTimeout"
   | "initialStateTimeout";
 
+type ConfigLoadOutcome = "applied" | "skipped";
+
 const CONFIG_RELOAD_DEBOUNCE_MS = 200;
 const STARTUP_BOOT_DELAY_MS = 500;
 
@@ -112,7 +114,12 @@ export class LshLogicNode {
   private startupBootTimer: NodeJS.Timeout | null = null;
   private initialVerificationTimer: NodeJS.Timeout | null = null;
   private configReloadTimer: NodeJS.Timeout | null = null;
+  private configLoadQueue: Promise<void> = Promise.resolve();
+  private latestConfigLoadVersion: number = 0;
   private isWarmingUp: boolean = false;
+  private isClosing: boolean = false;
+  private watchdogCycleQueued: boolean = false;
+  private watchdogCyclePromise: Promise<void> | null = null;
 
   /**
    * Creates an instance of the LshLogicNode.
@@ -158,7 +165,7 @@ export class LshLogicNode {
       const userDir = this.RED.settings.userDir || process.cwd();
       const configPath = path.resolve(userDir, this.config.systemConfigPath);
 
-      await this.loadSystemConfig(configPath, validateSystemConfig, true);
+      await this.enqueueConfigLoad(configPath, validateSystemConfig, true);
       this.setupFileWatcher(configPath, validateSystemConfig);
 
       this.node.status({ fill: "green", shape: "dot", text: "Ready" });
@@ -182,15 +189,46 @@ export class LshLogicNode {
 
     const watchdogIntervalMs = this.config.watchdogInterval * 1000;
     this.watchdogInterval = setInterval(() => {
-      // Create an async IIFE and void it to satisfy the no-misused-promises rule for setInterval.
-      void (async () => {
-        if (this.isWarmingUp) {
-          return;
-        }
-        const result = this.service.runWatchdogCheck();
-        await this.processServiceResult(result);
-      })();
+      void this.runWatchdogCycle();
     }, watchdogIntervalMs);
+  }
+
+  private async runWatchdogCycle(): Promise<void> {
+    if (this.isWarmingUp || this.isClosing) {
+      return;
+    }
+
+    if (this.watchdogCyclePromise) {
+      this.watchdogCycleQueued = true;
+      await this.watchdogCyclePromise;
+      return;
+    }
+
+    let cyclePromise: Promise<void> | null = null;
+    cyclePromise = (async () => {
+      try {
+        do {
+          this.watchdogCycleQueued = false;
+          if (this.isWarmingUp || this.isClosing) {
+            break;
+          }
+
+          const result = this.service.runWatchdogCheck();
+          await this.processServiceResult(result);
+        } while (this.watchdogCycleQueued && !this.isClosing);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.node.error(`Error during watchdog cycle: ${errorMessage}`);
+      } finally {
+        this.watchdogCycleQueued = false;
+        if (this.watchdogCyclePromise === cyclePromise) {
+          this.watchdogCyclePromise = null;
+        }
+      }
+    })();
+
+    this.watchdogCyclePromise = cyclePromise;
+    await cyclePromise;
   }
 
   /**
@@ -217,25 +255,32 @@ export class LshLogicNode {
 
   /**
    * The main handler for all incoming messages from Node-RED.
-   * It detects if the payload is a Buffer (indicating MsgPack) and decodes it
-   * before delegating processing to the service.
+   * It decodes the payload according to the configured topic protocol before
+   * delegating processing to the service.
    * @param msg The incoming Node-RED message.
    * @param done The callback to signal completion to the Node-RED runtime.
    */
   private async handleInput(msg: NodeMessage, done: (err?: Error) => void): Promise<void> {
+    if (this.isClosing) {
+      done();
+      return;
+    }
+
     const topic = msg.topic || "";
     let processedPayload: unknown;
 
     try {
       const payloadProtocol = this.getPayloadProtocol(topic);
       processedPayload = this.codec.decode(msg.payload, payloadProtocol);
-      if (Buffer.isBuffer(msg.payload) && payloadProtocol === "msgpack") {
-        this.node.log(`Decoded MsgPack payload from topic: ${topic || "unknown"}`);
-      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.node.error(`Failed to decode payload on topic ${topic || "unknown"}: ${errorMessage}`);
       done(error instanceof Error ? error : new Error(errorMessage));
+      return;
+    }
+
+    if (this.isClosing) {
+      done();
       return;
     }
 
@@ -267,20 +312,32 @@ export class LshLogicNode {
    * @param result The ServiceResult object from a service method call.
    */
   public async processServiceResult(result: ServiceResult): Promise<void> {
+    if (this.isClosing) {
+      return;
+    }
+
     result.logs.forEach((log) => this.node.log(log));
     result.warnings.forEach((warn) => this.node.warn(warn));
     result.errors.forEach((err) => this.node.error(err));
 
-    if (result.stateChanged) {
+    if (result.stateChanged || result.registryChanged) {
       this.updateExposedState();
     }
 
     if (this.isWarmingUp && result.messages[Output.Alerts]) {
-      const alertMsg = result.messages[Output.Alerts] as NodeMessage;
+      const alertMessages = Array.isArray(result.messages[Output.Alerts])
+        ? result.messages[Output.Alerts]
+        : [result.messages[Output.Alerts]];
+      const filteredAlerts = alertMessages.filter((alertMsg) => !this.isRecoveryAlert(alertMsg));
 
-      if (this.isRecoveryAlert(alertMsg)) {
+      if (filteredAlerts.length !== alertMessages.length) {
         this.node.log("Suppressing 'device recovered' alert during warm-up period.");
-        delete result.messages[Output.Alerts];
+        if (filteredAlerts.length === 0) {
+          delete result.messages[Output.Alerts];
+        } else {
+          result.messages[Output.Alerts] =
+            filteredAlerts.length === 1 ? filteredAlerts[0] : filteredAlerts;
+        }
       }
     }
 
@@ -293,15 +350,24 @@ export class LshLogicNode {
           `Sending ${lshMessages.length} messages in a staggered sequence to prevent a thundering herd.`,
         );
         for (const msg of lshMessages) {
+          if (this.isClosing) {
+            return;
+          }
           this.send({ [Output.Lsh]: msg });
           // Sleep for a short, random interval to avoid a "thundering herd."
           await sleep(Math.random() * 200 + 50);
+          if (this.isClosing) {
+            return;
+          }
         }
         // The staggered messages have been sent, so remove them from the result object.
         delete result.messages[Output.Lsh];
       }
 
       // Send any remaining messages (or all if no staggering was needed).
+      if (this.isClosing) {
+        return;
+      }
       this.send(result.messages);
     }
   }
@@ -333,10 +399,8 @@ export class LshLogicNode {
     filePath: string,
     validateFn: ValidateFunction,
     scheduleStartupVerification: boolean,
-  ): Promise<void> {
-    // Clear any pending startup timers from a previous load.
-    this.clearStartupTimers();
-
+    loadVersion: number,
+  ): Promise<ConfigLoadOutcome> {
     try {
       this.node.log(`Loading config from: ${filePath}`);
       const fileContent = await fs.readFile(filePath, "utf-8");
@@ -347,6 +411,13 @@ export class LshLogicNode {
           validateFn.errors?.map((e) => e.message).join(", ") || "unknown validation error";
         throw new Error(`Invalid system-config.json: ${errorText}`);
       }
+
+      if (this.isConfigLoadStale(loadVersion)) {
+        return "skipped";
+      }
+
+      // Clear any pending startup timers only when this load is still current.
+      this.clearStartupTimers();
       const logMessage = this.service.updateSystemConfig(parsedConfig as SystemConfig);
       this.node.log(logMessage);
       await this.processServiceResult(this.service.syncDiscoveryConfig());
@@ -354,14 +425,47 @@ export class LshLogicNode {
       if (scheduleStartupVerification) {
         this.scheduleInitialVerification();
       }
+      return "applied";
     } catch (error) {
-      this.service.clearSystemConfig();
+      if (this.isConfigLoadStale(loadVersion)) {
+        return "skipped";
+      }
+
+      await this.processServiceResult(this.service.clearSystemConfig());
       throw error;
     } finally {
-      this.updateExposedState();
-      this.updateExposedConfig();
-      this.updateExportedTopics();
+      if (!this.isConfigLoadStale(loadVersion)) {
+        this.updateExposedState();
+        this.updateExposedConfig();
+        this.updateExportedTopics();
+      }
     }
+  }
+
+  private enqueueConfigLoad(
+    filePath: string,
+    validateFn: ValidateFunction,
+    scheduleStartupVerification: boolean,
+  ): Promise<ConfigLoadOutcome> {
+    const loadVersion = ++this.latestConfigLoadVersion;
+    const runLoad = async (): Promise<ConfigLoadOutcome> => {
+      if (this.isClosing) {
+        return "skipped";
+      }
+
+      return this.loadSystemConfig(filePath, validateFn, scheduleStartupVerification, loadVersion);
+    };
+
+    const queuedLoad = this.configLoadQueue.then(runLoad, runLoad);
+    this.configLoadQueue = queuedLoad.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queuedLoad;
+  }
+
+  private isConfigLoadStale(loadVersion: number): boolean {
+    return this.isClosing || loadVersion !== this.latestConfigLoadVersion;
   }
 
   /**
@@ -504,7 +608,10 @@ export class LshLogicNode {
     this.node.log(`Configuration file changed: ${path}. Reloading...`);
     this.node.status({ fill: "yellow", shape: "dot", text: "Reloading config..." });
     try {
-      await this.loadSystemConfig(path, validateFn, false);
+      const outcome = await this.enqueueConfigLoad(path, validateFn, false);
+      if (outcome === "skipped") {
+        return;
+      }
       this.node.log(`Configuration successfully reloaded from ${path}.`);
       this.node.status({ fill: "green", shape: "dot", text: "Ready" });
     } catch (err) {
@@ -519,6 +626,10 @@ export class LshLogicNode {
    * @param messages An object mapping an Output enum member to the message(s) to be sent.
    */
   private send(messages: OutputMessages): void {
+    if (this.isClosing) {
+      return;
+    }
+
     // Derive the output count from the enum itself so the mapping stays correct
     // if a future change adds or removes outputs.
     const numOutputs = Object.keys(Output).filter((k) => !isNaN(Number(k))).length;
@@ -531,12 +642,16 @@ export class LshLogicNode {
       | null
     >(numOutputs).fill(null);
 
-    // Directly map the messages to their corresponding output index.
-    for (const key in messages) {
-      const outputIndex = Number(key);
-      if (!isNaN(outputIndex) && outputIndex >= 0 && outputIndex < numOutputs) {
-        outputArray[outputIndex] = messages[outputIndex as Output] || null;
-      }
+    const mappedOutputs: Array<[Output, OutputMessages[Output] | undefined]> = [
+      [Output.Lsh, messages[Output.Lsh]],
+      [Output.OtherActors, messages[Output.OtherActors]],
+      [Output.Alerts, messages[Output.Alerts]],
+      [Output.Configuration, messages[Output.Configuration]],
+      [Output.Debug, messages[Output.Debug]],
+    ];
+
+    for (const [outputIndex, outputMessage] of mappedOutputs) {
+      outputArray[outputIndex] = outputMessage || null;
     }
 
     // Send only if at least one message is not null to avoid empty sends.
@@ -549,12 +664,18 @@ export class LshLogicNode {
    * Cleans up all resources.
    */
   public async _cleanupResources(): Promise<void> {
+    this.isClosing = true;
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
+    this.watchdogCycleQueued = false;
     this.clearStartupTimers();
     if (this.configReloadTimer) clearTimeout(this.configReloadTimer);
     if (this.watcher) {
       await this.watcher.close();
+    }
+    await this.configLoadQueue;
+    if (this.watchdogCyclePromise) {
+      await this.watchdogCyclePromise;
     }
     this.node.log("Cleaned up timers and file watcher.");
   }
@@ -575,7 +696,7 @@ export class LshLogicNode {
 
   private updateExposedState(): void {
     const { exposeStateContext, exposeStateKey } = this.config;
-    if (exposeStateContext === "none" || !exposeStateKey) return;
+    if (this.isClosing || exposeStateContext === "none" || !exposeStateKey) return;
     const exposedData = {
       devices: this.service.getDeviceRegistry(),
       lastUpdated: Date.now(),
@@ -585,13 +706,13 @@ export class LshLogicNode {
 
   private updateExposedConfig(): void {
     const { exposeConfigContext, exposeConfigKey } = this.config;
-    if (exposeConfigContext === "none" || !exposeConfigKey) return;
+    if (this.isClosing || exposeConfigContext === "none" || !exposeConfigKey) return;
 
     // Get the full system config from the service layer
     const fullSystemConfig = this.service.getSystemConfig();
 
     const exposedData = {
-      nodeConfig: this.config,
+      nodeConfig: structuredClone(this.config),
       // Use the complete systemConfig object obtained from the service
       systemConfig: fullSystemConfig,
       lastUpdated: Date.now(),
@@ -601,6 +722,9 @@ export class LshLogicNode {
 
   private updateExportedTopics(): void {
     const { exportTopics, exportTopicsKey, lshBasePath, homieBasePath } = this.config;
+    if (this.isClosing) {
+      return;
+    }
 
     const deviceNames = this.service.getConfiguredDeviceNames() || [];
 
@@ -611,6 +735,9 @@ export class LshLogicNode {
     ); // These require QoS 2.
 
     const homieTopics = deviceNames.map((name) => `${homieBasePath}${name}/$state`); // These require QoS 1
+    const discoveryTopics = this.config.haDiscovery
+      ? [`${homieBasePath}+/$nodes`, `${homieBasePath}+/$mac`, `${homieBasePath}+/$fw/version`]
+      : [];
 
     // Create the message to unsubscribe from ALL current topics.
     // The `mqtt-in` node accepts `topic: true` for this action.
@@ -647,12 +774,7 @@ export class LshLogicNode {
       this.node.log(`Generated 'subscribe' message for ${lshTopics.length} topic(s) with QoS 2.`);
     }
 
-    if (this.config.haDiscovery) {
-      const discoveryTopics = [
-        `${homieBasePath}+/$nodes`,
-        `${homieBasePath}+/$mac`,
-        `${homieBasePath}+/$fw/version`,
-      ];
+    if (discoveryTopics.length > 0) {
       const subscribeDiscoveryMessage: MqttSubscribeMsg = {
         action: "subscribe",
         topic: discoveryTopics,
@@ -667,10 +789,11 @@ export class LshLogicNode {
 
     // Update the context variable for passive inspection.
     if (exportTopics !== "none" && exportTopicsKey) {
-      const allTopics = [...homieTopics, ...lshTopics];
+      const allTopics = [...homieTopics, ...discoveryTopics, ...lshTopics];
       const topicsToExport = {
         lsh: lshTopics,
         homie: homieTopics,
+        discovery: discoveryTopics,
         all: allTopics,
         lastUpdated: Date.now(),
       };

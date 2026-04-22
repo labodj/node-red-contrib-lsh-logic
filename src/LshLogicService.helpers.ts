@@ -12,6 +12,8 @@ import type {
   BridgeDiagnosticPayload,
   ClickType,
   HomieLifecycleState,
+  MqttSubscribeMsg,
+  MqttUnsubscribeMsg,
   ServiceResult,
 } from "./types";
 import type { NodeMessage } from "node-red";
@@ -92,7 +94,18 @@ export function createEmptyServiceResult(): ServiceResult {
     warnings: [],
     errors: [],
     stateChanged: false,
+    registryChanged: false,
   };
+}
+
+type ConfigurationMessage = MqttSubscribeMsg | MqttUnsubscribeMsg;
+
+/**
+ * Normalizes a node output slot to an array so merge logic can stay linear and
+ * type-safe without widening the public `OutputMessages` contract.
+ */
+function toMessageArray<T>(value: T | T[]): T[] {
+  return Array.isArray(value) ? value : [value];
 }
 
 /**
@@ -100,11 +113,46 @@ export function createEmptyServiceResult(): ServiceResult {
  * warnings or the stagger hint.
  */
 export function mergeServiceResults(target: ServiceResult, source: ServiceResult): void {
-  Object.assign(target.messages, source.messages);
+  const mergeOutputSlot = <T>(
+    targetValue: T | T[] | undefined,
+    sourceValue: T | T[] | undefined,
+  ): T | T[] | undefined => {
+    if (sourceValue === undefined) {
+      return targetValue;
+    }
+
+    if (targetValue === undefined) {
+      return sourceValue;
+    }
+
+    return [...toMessageArray(targetValue), ...toMessageArray(sourceValue)];
+  };
+
+  target.messages[Output.Lsh] = mergeOutputSlot<NodeMessage>(
+    target.messages[Output.Lsh],
+    source.messages[Output.Lsh],
+  );
+  target.messages[Output.OtherActors] = mergeOutputSlot<NodeMessage>(
+    target.messages[Output.OtherActors],
+    source.messages[Output.OtherActors],
+  );
+  target.messages[Output.Alerts] = mergeOutputSlot<NodeMessage>(
+    target.messages[Output.Alerts],
+    source.messages[Output.Alerts],
+  );
+  target.messages[Output.Configuration] = mergeOutputSlot<ConfigurationMessage>(
+    target.messages[Output.Configuration],
+    source.messages[Output.Configuration],
+  );
+  target.messages[Output.Debug] = mergeOutputSlot<NodeMessage>(
+    target.messages[Output.Debug],
+    source.messages[Output.Debug],
+  );
   target.logs.push(...source.logs);
   target.warnings.push(...source.warnings);
   target.errors.push(...source.errors);
   target.stateChanged = target.stateChanged || source.stateChanged;
+  target.registryChanged = Boolean(target.registryChanged || source.registryChanged);
   if (source.staggerLshMessages) {
     target.staggerLshMessages = true;
   }
@@ -118,7 +166,7 @@ export function mergeServiceResults(target: ServiceResult, source: ServiceResult
 export function parseDeviceScopedTopic(topic: string, basePath: string): DeviceScopedTopic | null {
   const baseLen = basePath.length;
   const slashIndex = topic.indexOf("/", baseLen);
-  if (slashIndex === -1) {
+  if (slashIndex === -1 || slashIndex === baseLen) {
     return null;
   }
 

@@ -2,6 +2,7 @@
  * @file A collection of small, pure, and reusable utility functions
  * that are used across the application.
  */
+import type { Actor } from "./types";
 
 /**
  * Creates a promise that resolves after a specified number of milliseconds.
@@ -88,4 +89,54 @@ export const areSameArray = <T>(a: T[], b: T[]): boolean => {
     if (a[i] !== b[i]) return false;
   }
   return true;
+};
+
+/**
+ * Merges multiple actor entries that target the same device into a single,
+ * deterministic actor definition.
+ * `allActuators=true` dominates any partial subsets for that device.
+ */
+export const normalizeActors = (actors: Actor[]): Actor[] => {
+  const normalizedActors = new Map<
+    string,
+    {
+      actor: Actor;
+      seenActuators: Set<number>;
+    }
+  >();
+
+  for (const actor of actors) {
+    const existing = normalizedActors.get(actor.name);
+    if (!existing) {
+      normalizedActors.set(actor.name, {
+        actor: {
+          name: actor.name,
+          allActuators: actor.allActuators,
+          actuators: actor.allActuators ? [] : [...actor.actuators],
+        },
+        seenActuators: new Set(actor.allActuators ? [] : actor.actuators),
+      });
+      continue;
+    }
+
+    if (existing.actor.allActuators) {
+      continue;
+    }
+
+    if (actor.allActuators) {
+      existing.actor.allActuators = true;
+      existing.actor.actuators = [];
+      existing.seenActuators.clear();
+      continue;
+    }
+
+    for (const actuatorId of actor.actuators) {
+      if (!existing.seenActuators.has(actuatorId)) {
+        existing.seenActuators.add(actuatorId);
+        existing.actor.actuators.push(actuatorId);
+      }
+    }
+  }
+
+  return Array.from(normalizedActors.values(), ({ actor }) => actor);
 };

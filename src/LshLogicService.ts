@@ -31,28 +31,20 @@ import type {
   AlertEventType,
   AnyBridgeTopicPayload,
   AnyEventsTopicPayload,
-  BootPayload,
   DeviceActuatorsStatePayload,
   DeviceDetailsPayload,
   DeviceEntry,
   DeviceState,
-  FailoverClickPayload,
-  FailoverPayload,
   HomieLifecycleState,
-  NetworkClickAckPayload,
   NetworkClickConfirmPayload,
   NetworkClickRequestPayload,
   OtherActorsCommandPayload,
-  PingPayload,
   ProcessMessageOptions,
-  RequestDetailsPayload,
-  RequestStatePayload,
   ServiceResult,
-  SetSingleActuatorPayload,
-  SetStatePayload,
   SystemConfig,
+  DeviceRegistrySnapshot,
 } from "./types";
-import { formatAlertMessage } from "./utils";
+import { formatAlertMessage, normalizeActors } from "./utils";
 import type { NodeMessage } from "node-red";
 import type { ValidateFunction } from "ajv";
 
@@ -220,6 +212,13 @@ export class LshLogicService {
       appendLshMessages(result, this._buildDevicePingCommands(unreachableDevices));
     }
 
+    const lshMessages = result.messages[Output.Lsh];
+    if (Array.isArray(lshMessages) && lshMessages.length > 1) {
+      // Reuse the same anti-burst policy as the watchdog: startup recovery can
+      // legitimately fan out to many devices and should not dump them all at once.
+      result.staggerLshMessages = true;
+    }
+
     if (recoveryCommands.length === 0 && unreachableDevices.length === 0) {
       result.logs.push(
         "Initial state verification: all configured devices are reachable and already have authoritative snapshots.",
@@ -263,6 +262,7 @@ export class LshLogicService {
       this.deviceConfigMap.set(device.name, device);
     }
     this.discoveryManager.setDiscoveryConfig(this.deviceConfigMap);
+    const clearedWatchdogDevices = this.watchdog.pruneDevices(newDeviceNames);
 
     const prunedDevices = [];
     for (const deviceName of this.deviceManager.getRegisteredDeviceNames()) {
@@ -274,6 +274,9 @@ export class LshLogicService {
     let logMessage = "System configuration successfully loaded and validated.";
     if (prunedDevices.length > 0) {
       logMessage += ` Pruned stale devices from registry: ${prunedDevices.join(", ")}.`;
+    }
+    if (clearedWatchdogDevices.length > 0) {
+      logMessage += ` Cleared pending watchdog probe state for: ${clearedWatchdogDevices.join(", ")}.`;
     }
     if (clearedPendingClicks > 0) {
       logMessage += ` Cleared ${clearedPendingClicks} pending click transaction(s).`;
@@ -292,11 +295,18 @@ export class LshLogicService {
   /**
    * Resets the configuration to null, typically on a file loading or validation error.
    */
-  public clearSystemConfig(): void {
+  public clearSystemConfig(): ServiceResult {
+    const hadRuntimeState =
+      this.systemConfig !== null || this.deviceManager.getRegisteredDeviceNames().length > 0;
     this.systemConfig = null;
     this.deviceConfigMap.clear();
-    this.discoveryManager.setDiscoveryConfig(this.deviceConfigMap);
+    const result = this.discoveryManager.reset();
     this.clickManager.clearAll();
+    this.watchdog.reset();
+    this.deviceManager.reset();
+    result.stateChanged = result.stateChanged || hadRuntimeState;
+    result.registryChanged = result.registryChanged || hadRuntimeState;
+    return result;
   }
 
   /**
@@ -322,7 +332,7 @@ export class LshLogicService {
     result.logs.push("Requesting a single bridge-local BOOT resync from all devices.");
     result.messages[Output.Lsh] = this._createLshCommand(
       this.serviceTopic,
-      { p: LshProtocol.BOOT } as BootPayload,
+      { p: LshProtocol.BOOT },
       1,
     );
     return result;
@@ -348,16 +358,12 @@ export class LshLogicService {
 
   private _buildDevicePingCommands(deviceNames: Iterable<string>): NodeMessage[] {
     return Array.from(deviceNames, (deviceName) =>
-      this._createLshCommand(
-        this._deviceCommandTopic(deviceName),
-        { p: LshProtocol.PING } as PingPayload,
-        1,
-      ),
+      this._createLshCommand(this._deviceCommandTopic(deviceName), { p: LshProtocol.PING }, 1),
     );
   }
 
   private _buildBridgeProbeCommand(): NodeMessage {
-    return this._createLshCommand(this.serviceTopic, { p: LshProtocol.PING } as PingPayload, 1);
+    return this._createLshCommand(this.serviceTopic, { p: LshProtocol.PING }, 1);
   }
 
   private recordLiveControllerActivity(
@@ -366,7 +372,11 @@ export class LshLogicService {
     trafficDescription: string,
   ): void {
     this.watchdog.onDeviceActivity(deviceName);
-    const { stateChanged, becameHealthy } = this.deviceManager.recordControllerActivity(deviceName);
+    const { stateChanged, becameHealthy, registryChanged } =
+      this.deviceManager.recordControllerActivity(deviceName);
+    if (registryChanged) {
+      result.registryChanged = true;
+    }
     if (!stateChanged) {
       return;
     }
@@ -398,7 +408,11 @@ export class LshLogicService {
     if (isLiveTelemetry) {
       this.watchdog.onDeviceActivity(deviceName);
     }
-    const { stateChanged, becameHealthy } = this.deviceManager.recordControllerActivity(deviceName);
+    const { stateChanged, becameHealthy, registryChanged } =
+      this.deviceManager.recordControllerActivity(deviceName);
+    if (registryChanged) {
+      result.registryChanged = true;
+    }
 
     if (stateChanged) {
       result.stateChanged = true;
@@ -447,16 +461,8 @@ export class LshLogicService {
       return {
         reason: "details_and_state",
         commands: [
-          this._createLshCommand(
-            commandTopic,
-            { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
-            1,
-          ),
-          this._createLshCommand(
-            commandTopic,
-            { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
-            1,
-          ),
+          this._createLshCommand(commandTopic, { p: LshProtocol.REQUEST_DETAILS }, 1),
+          this._createLshCommand(commandTopic, { p: LshProtocol.REQUEST_STATE }, 1),
         ],
       };
     }
@@ -464,13 +470,7 @@ export class LshLogicService {
     if (device.lastStateTime === 0) {
       return {
         reason: "state_only",
-        commands: [
-          this._createLshCommand(
-            commandTopic,
-            { p: LshProtocol.REQUEST_STATE } as RequestStatePayload,
-            1,
-          ),
-        ],
+        commands: [this._createLshCommand(commandTopic, { p: LshProtocol.REQUEST_STATE }, 1)],
       };
     }
 
@@ -626,7 +626,7 @@ export class LshLogicService {
   /**
    * Returns a copy of the device registry for external use (e.g., exposing to context).
    */
-  public getDeviceRegistry() {
+  public getDeviceRegistry(): DeviceRegistrySnapshot {
     return this.deviceManager.getRegistry();
   }
 
@@ -636,11 +636,14 @@ export class LshLogicService {
    */
   public runWatchdogCheck(): ServiceResult {
     const result = createEmptyServiceResult();
+    const now = Date.now();
+    if (this.haDiscovery) {
+      mergeServiceResults(result, this.discoveryManager.pruneExpiredDiscoveryState(now));
+    }
     if (!this.systemConfig || this.systemConfig.devices.length === 0) {
       return result;
     }
 
-    const now = Date.now();
     const actions: WatchdogActions = {
       devicesToPing: new Set<string>(),
       unhealthyDevicesForAlert: [],
@@ -789,11 +792,9 @@ export class LshLogicService {
       return result;
     }
 
-    const lifecycleChanged = this.deviceManager.recordHomieLifecycleState(
-      deviceName,
-      homieState,
-      false,
-    ).stateChanged;
+    const { stateChanged: lifecycleChanged, registryChanged } =
+      this.deviceManager.recordHomieLifecycleState(deviceName, homieState, false);
+    result.registryChanged = registryChanged;
 
     if (!existingDevice || existingDevice.lastSeenTime === 0 || !lifecycleChanged) {
       return result;
@@ -855,11 +856,9 @@ export class LshLogicService {
     previousLifecycleState: HomieLifecycleState | null,
   ): ServiceResult {
     const result = createEmptyServiceResult();
-    const lifecycleChanged = this.deviceManager.recordHomieLifecycleState(
-      deviceName,
-      homieState,
-      true,
-    ).stateChanged;
+    const { stateChanged: lifecycleChanged, registryChanged } =
+      this.deviceManager.recordHomieLifecycleState(deviceName, homieState, true);
+    result.registryChanged = registryChanged;
     const bridgeConnectionResult = this.deviceManager.updateBridgeConnectionState(
       deviceName,
       homieState,
@@ -976,11 +975,14 @@ export class LshLogicService {
       );
       return result;
     }
-    const { changed } = this.deviceManager.registerDeviceDetails(
+    const { changed, registryChanged } = this.deviceManager.registerDeviceDetails(
       deviceName,
       detailsPayload,
       isLiveTelemetry,
     );
+    if (registryChanged) {
+      result.registryChanged = true;
+    }
     if (isLiveTelemetry) {
       this.recordLiveControllerActivity(result, deviceName, "details");
     }
@@ -1035,11 +1037,11 @@ export class LshLogicService {
         }
       }
 
-      const { isNew, changed, configIsMissing } = this.deviceManager.registerActuatorStates(
-        deviceName,
-        states,
-        isLiveTelemetry,
-      );
+      const { isNew, changed, configIsMissing, registryChanged } =
+        this.deviceManager.registerActuatorStates(deviceName, states, isLiveTelemetry);
+      if (registryChanged) {
+        result.registryChanged = true;
+      }
       if (isLiveTelemetry) {
         this.recordLiveControllerActivity(result, deviceName, "state");
       }
@@ -1056,7 +1058,7 @@ export class LshLogicService {
         );
         result.messages[Output.Lsh] = this._createLshCommand(
           this._deviceCommandTopic(deviceName),
-          { p: LshProtocol.REQUEST_DETAILS } as RequestDetailsPayload,
+          { p: LshProtocol.REQUEST_DETAILS },
           1,
         );
       }
@@ -1104,6 +1106,9 @@ export class LshLogicService {
         break;
 
       default:
+        result.warnings.push(
+          `Unhandled 'events' payload from ${deviceName}: protocol id '${String((eventsPayload as { p: unknown }).p)}'.`,
+        );
         return result;
     }
     return result;
@@ -1130,12 +1135,20 @@ export class LshLogicService {
     }
 
     const servicePingReply = bridgePayload;
-    const { stateChanged, bridgeBecameConnected, controllerDisconnected, snapshotInvalidated } =
-      this.deviceManager.recordBridgePingReply(
-        deviceName,
-        servicePingReply.controller_connected,
-        servicePingReply.runtime_synchronized,
-      );
+    const {
+      stateChanged,
+      bridgeBecameConnected,
+      controllerDisconnected,
+      snapshotInvalidated,
+      registryChanged,
+    } = this.deviceManager.recordBridgePingReply(
+      deviceName,
+      servicePingReply.controller_connected,
+      servicePingReply.runtime_synchronized,
+    );
+    if (registryChanged) {
+      result.registryChanged = true;
+    }
 
     if (stateChanged) {
       result.stateChanged = true;
@@ -1203,7 +1216,7 @@ export class LshLogicService {
           c: correlationId,
           t: clickType,
           i: buttonId,
-        } as NetworkClickAckPayload,
+        },
         2,
       );
       result.logs.push(`Validation OK for ${transactionKey}. Sending ACK.`);
@@ -1222,7 +1235,7 @@ export class LshLogicService {
           result.errors.push(`System failure on click. Sending General Failover (c_gf).`);
           result.messages[Output.Lsh] = this._createLshCommand(
             commandTopic,
-            { p: LshProtocol.FAILOVER } as FailoverPayload,
+            { p: LshProtocol.FAILOVER },
             2,
           );
         } else {
@@ -1233,7 +1246,7 @@ export class LshLogicService {
               c: correlationId,
               t: clickType,
               i: buttonId,
-            } as FailoverClickPayload,
+            },
             2,
           );
         }
@@ -1300,15 +1313,16 @@ export class LshLogicService {
     if (!buttonConfig)
       throw new ClickValidationError("No action configured for this button.", "click");
 
-    const { actors = [], otherActors = [] } = buttonConfig;
-    if (actors.length === 0 && otherActors.length === 0)
+    const normalizedActors = normalizeActors(buttonConfig.actors ?? []);
+    const { otherActors = [] } = buttonConfig;
+    if (normalizedActors.length === 0 && otherActors.length === 0)
       throw new ClickValidationError("Action configured with no targets.", "click");
 
-    for (const actor of actors) {
+    for (const actor of normalizedActors) {
       this._assertActorCanHandleClick(actor, clickType);
     }
 
-    return { actors, otherActors };
+    return { actors: normalizedActors, otherActors };
   }
 
   private _assertActorCanHandleClick(actor: Actor, clickType: ClickType): void {
@@ -1495,18 +1509,19 @@ export class LshLogicService {
     otherActors: string[],
     clickType: ClickType,
   ): Pick<ServiceResult, "messages" | "logs" | "warnings"> {
+    const normalizedActors = normalizeActors(actors);
     const result: Pick<ServiceResult, "messages" | "logs" | "warnings"> = {
       messages: {},
       logs: [],
       warnings: [],
     };
-    const stateToSet = this._resolveClickState(result, actors, otherActors, clickType);
+    const stateToSet = this._resolveClickState(result, normalizedActors, otherActors, clickType);
     if (stateToSet === null) {
       return result;
     }
 
     const { commands: lshCommands, warnings: commandWarnings } = this.buildStateCommands(
-      actors,
+      normalizedActors,
       stateToSet,
     );
     result.warnings.push(...commandWarnings);
@@ -1550,7 +1565,7 @@ export class LshLogicService {
               p: LshProtocol.SET_SINGLE_ACTUATOR,
               i: actor.actuators[0],
               s: stateValue,
-            } as SetSingleActuatorPayload,
+            },
             2,
           ),
         );
@@ -1569,7 +1584,7 @@ export class LshLogicService {
           {
             p: LshProtocol.SET_STATE,
             s: this._packBooleanStates(stateBuildResult.states),
-          } as SetStatePayload,
+          },
           2,
         ),
       );

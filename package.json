@@ -1,22 +1,24 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "A single, powerful node for advanced automation logic on devices implementing the public LSH MQTT/protocol contract.",
   "main": "dist/lsh-logic.js",
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "sync:version": "node scripts/sync-version.mjs --write",
+    "sync:version:check": "node scripts/sync-version.mjs --check",
     "copy-assets": "copyfiles -u 1 src/**/*.html dist/",
-    "dev:build": "npm run clean && tsc && npm run copy-assets",
-    "build": "npm run clean && tsc -p tsconfig.prod.json && npm run copy-assets",
-    "typecheck": "tsc -p tsconfig.typecheck.json",
-    "lint": "eslint src --max-warnings=0 --cache --cache-location ./.cache/eslint",
-    "format": "prettier --write \"src/**/*.{ts,html,json}\" \"examples/**/*.json\" README.md CITATION.cff package.json jest.config.js eslint.config.mjs knip.json tsconfig*.json .prettierrc.json \".github/**/*.{yml,yaml}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,html,json}\" \"examples/**/*.json\" README.md CITATION.cff package.json jest.config.js eslint.config.mjs knip.json tsconfig*.json .prettierrc.json \".github/**/*.{yml,yaml}\"",
+    "dev:build": "npm run sync:version:check && npm run clean && tsc && npm run copy-assets",
+    "build": "npm run sync:version:check && npm run clean && tsc -p tsconfig.prod.json && npm run copy-assets",
+    "typecheck": "npm run sync:version:check && tsc -p tsconfig.typecheck.json",
+    "lint": "npm run sync:version:check && eslint src --max-warnings=0 --cache --cache-location ./.cache/eslint",
+    "format": "prettier --write \"src/**/*.{ts,html,json}\" \"scripts/**/*.mjs\" \"examples/**/*.json\" README.md CITATION.cff package.json jest.config.js eslint.config.mjs knip.json tsconfig*.json .prettierrc.json \".github/**/*.{yml,yaml}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,html,json}\" \"scripts/**/*.mjs\" \"examples/**/*.json\" README.md CITATION.cff package.json jest.config.js eslint.config.mjs knip.json tsconfig*.json .prettierrc.json \".github/**/*.{yml,yaml}\"",
     "knip": "knip --production --strict",
     "watch": "tsc -w",
     "prepublishOnly": "npm run build",
-    "test": "jest --no-cache --detectOpenHandles",
-    "test:cov": "jest --coverage --no-cache --detectOpenHandles",
+    "test": "npm run sync:version:check && jest --no-cache --detectOpenHandles",
+    "test:cov": "npm run sync:version:check && jest --coverage --no-cache --detectOpenHandles",
     "test:watch": "jest --watch"
   },
   "files": [
@@ -73,10 +75,10 @@
     "eslint-plugin-jest": "^29.15.2",
     "globals": "^17.5.0",
     "jest": "^30.3.0",
-    "knip": "^6.5.0",
+    "knip": "^6.6.1",
     "prettier": "^3.8.3",
     "ts-jest": "^29.4.9",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.58.2"
+    "typescript-eslint": "^8.59.0"
   }
 }

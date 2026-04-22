@@ -204,7 +204,16 @@ export function getSingleOutputMessage<TPayload = unknown>(
 }
 
 export function getAlertPayload(result: Pick<ServiceResult, "messages">): AlertPayload {
-  return getSingleOutputMessage<AlertPayload>(result, Output.Alerts).payload;
+  const alertPayloads = getAlertPayloads(result);
+  if (alertPayloads.length !== 1) {
+    throw new Error(`Expected exactly one alert payload, got ${alertPayloads.length}.`);
+  }
+
+  return alertPayloads[0];
+}
+
+export function getAlertPayloads(result: Pick<ServiceResult, "messages">): AlertPayload[] {
+  return getOutputMessages(result, Output.Alerts).map((message) => message.payload as AlertPayload);
 }
 
 export function getOtherActorsPayload(

@@ -113,6 +113,7 @@ const buttonActionSchema = {
     actors: {
       type: "array",
       description: "A list of primary LSH actors controlled by this button.",
+      uniqueItemProperty: "name",
       items: actorSchema,
     },
     otherActors: {
