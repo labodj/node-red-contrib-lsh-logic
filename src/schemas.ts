@@ -33,6 +33,13 @@ const nonEmptyStringSchema = {
   minLength: 1,
 } as const;
 
+const mqttTopicSegmentSchema = {
+  ...nonEmptyStringSchema,
+  pattern: "^[A-Za-z0-9_-]+$",
+} as const;
+
+const homieNodeIdSchema = mqttTopicSegmentSchema;
+
 const clickTypeEnum = Object.values(ClickType).filter(
   (value): value is number => typeof value === "number",
 );
@@ -58,12 +65,123 @@ function hasUniqueItemProperty(propertyName: string, data: unknown): boolean {
   return true;
 }
 
+function hasCaseInsensitiveUniqueItemProperty(propertyName: string, data: unknown): boolean {
+  if (!Array.isArray(data)) {
+    return true;
+  }
+
+  const seen = new Set<string>();
+  for (const item of data) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+
+    const value = (item as Record<string, unknown>)[propertyName];
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const normalizedValue = value.toLowerCase();
+    if (seen.has(normalizedValue)) {
+      return false;
+    }
+    seen.add(normalizedValue);
+  }
+
+  return true;
+}
+
+function hasCaseInsensitiveUniquePropertyNames(data: unknown): boolean {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    return true;
+  }
+
+  const seen = new Set<string>();
+  for (const propertyName of Object.keys(data)) {
+    const normalizedPropertyName = propertyName.toLowerCase();
+    if (seen.has(normalizedPropertyName)) {
+      return false;
+    }
+    seen.add(normalizedPropertyName);
+  }
+
+  return true;
+}
+
+function hasValidActorReferences(data: unknown): boolean {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    return true;
+  }
+
+  const devices = (data as { devices?: unknown }).devices;
+  if (!Array.isArray(devices)) {
+    return true;
+  }
+
+  const configuredDeviceNames = new Set<string>();
+  for (const device of devices) {
+    if (device === null || typeof device !== "object" || Array.isArray(device)) {
+      continue;
+    }
+
+    const deviceName = (device as { name?: unknown }).name;
+    if (typeof deviceName === "string") {
+      configuredDeviceNames.add(deviceName);
+    }
+  }
+
+  for (const device of devices) {
+    if (device === null || typeof device !== "object" || Array.isArray(device)) {
+      continue;
+    }
+
+    const buttonGroups = [
+      (device as { longClickButtons?: unknown }).longClickButtons,
+      (device as { superLongClickButtons?: unknown }).superLongClickButtons,
+    ];
+
+    for (const buttonGroup of buttonGroups) {
+      if (!Array.isArray(buttonGroup)) {
+        continue;
+      }
+
+      for (const buttonAction of buttonGroup) {
+        if (
+          buttonAction === null ||
+          typeof buttonAction !== "object" ||
+          Array.isArray(buttonAction)
+        ) {
+          continue;
+        }
+
+        const actors = (buttonAction as { actors?: unknown }).actors;
+        if (!Array.isArray(actors)) {
+          continue;
+        }
+
+        for (const actor of actors) {
+          if (actor === null || typeof actor !== "object" || Array.isArray(actor)) {
+            continue;
+          }
+
+          const actorName = (actor as { name?: unknown }).name;
+          if (typeof actorName === "string" && !configuredDeviceNames.has(actorName)) {
+            return false;
+          }
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
 const actorSchema = {
   type: "object",
   properties: {
     name: {
-      ...nonEmptyStringSchema,
-      description: "The name of the target device.",
+      ...mqttTopicSegmentSchema,
+      description: "The exact configured name of the target device.",
     },
     allActuators: {
       type: "boolean",
@@ -102,6 +220,7 @@ const actorSchema = {
 /**
  * Schema for a single button action configuration, used within `longClickConfigSchema`.
  * It defines the structure for specifying which actors are controlled by a button.
+ * At least one target must exist across `actors` and `otherActors`.
  */
 const buttonActionSchema = {
   type: "object",
@@ -123,8 +242,28 @@ const buttonActionSchema = {
       uniqueItems: true,
     },
   },
-  required: ["id", "actors", "otherActors"],
+  required: ["id"],
   additionalProperties: false,
+  anyOf: [
+    {
+      required: ["actors"],
+      properties: {
+        actors: {
+          type: "array",
+          minItems: 1,
+        },
+      },
+    },
+    {
+      required: ["otherActors"],
+      properties: {
+        otherActors: {
+          type: "array",
+          minItems: 1,
+        },
+      },
+    },
+  ],
 } as const;
 
 const homeAssistantNodeDiscoveryConfigSchema = {
@@ -166,7 +305,8 @@ const deviceHomeAssistantDiscoveryConfigSchema = {
     nodes: {
       type: "object",
       description: "Optional per-node Home Assistant discovery overrides keyed by Homie node ID.",
-      propertyNames: nonEmptyStringSchema,
+      propertyNames: homieNodeIdSchema,
+      caseInsensitiveUniquePropertyNames: true,
       additionalProperties: homeAssistantNodeDiscoveryConfigSchema,
     },
   },
@@ -186,12 +326,14 @@ export const systemConfigSchema = {
     devices: {
       type: "array",
       uniqueItemProperty: "name",
+      caseInsensitiveUniqueItemProperty: "name",
       items: {
         type: "object",
         properties: {
           name: {
-            ...nonEmptyStringSchema,
-            description: "The unique name of the device.",
+            ...mqttTopicSegmentSchema,
+            description:
+              "The unique name of the device. Must be a single MQTT topic segment using only letters, digits, '_' or '-'.",
           },
           longClickButtons: {
             type: "array",
@@ -214,6 +356,7 @@ export const systemConfigSchema = {
   },
   required: ["devices"],
   additionalProperties: false,
+  validActorReferences: true,
 } as const;
 
 /**
@@ -422,6 +565,27 @@ export function createAppValidators(): AppValidators {
     type: "array",
     schemaType: "string",
     validate: hasUniqueItemProperty,
+    errors: false,
+  });
+  ajv.addKeyword({
+    keyword: "caseInsensitiveUniqueItemProperty",
+    type: "array",
+    schemaType: "string",
+    validate: hasCaseInsensitiveUniqueItemProperty,
+    errors: false,
+  });
+  ajv.addKeyword({
+    keyword: "caseInsensitiveUniquePropertyNames",
+    type: "object",
+    schemaType: "boolean",
+    validate: (_schema: boolean, data: unknown) => hasCaseInsensitiveUniquePropertyNames(data),
+    errors: false,
+  });
+  ajv.addKeyword({
+    keyword: "validActorReferences",
+    type: "object",
+    schemaType: "boolean",
+    validate: (_schema: boolean, data: unknown) => hasValidActorReferences(data),
     errors: false,
   });
 

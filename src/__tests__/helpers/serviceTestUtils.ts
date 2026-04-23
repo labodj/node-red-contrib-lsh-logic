@@ -1,6 +1,7 @@
 import type { ErrorObject, ValidateFunction } from "ajv";
 import type { NodeMessage } from "node-red";
 import { LshLogicService } from "../../LshLogicService";
+import { createAppValidators } from "../../schemas";
 import { LSH_WIRE_PROTOCOL_MAJOR, LshProtocol, Output } from "../../types";
 import type {
   AlertPayload,
@@ -13,6 +14,8 @@ import type {
 } from "../../types";
 
 export type ValidatorMock = jest.Mock & ValidateFunction;
+
+const validateSystemConfig = createAppValidators().validateSystemConfig;
 
 export const createMockValidator = (): ValidatorMock => {
   const mockFn = jest.fn().mockReturnValue(true) as ValidatorMock;
@@ -80,6 +83,13 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
   const loadConfig = (
     systemConfig: SystemConfig = options.systemConfig ?? defaultSystemConfig,
   ): SystemConfig => {
+    if (!validateSystemConfig(systemConfig)) {
+      const errorText =
+        validateSystemConfig.errors?.map((error) => error.message).join(", ") ||
+        "unknown validation error";
+      throw new Error(`Test harness received an invalid SystemConfig: ${errorText}`);
+    }
+
     service.updateSystemConfig(systemConfig);
     return systemConfig;
   };

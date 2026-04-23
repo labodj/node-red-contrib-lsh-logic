@@ -23,6 +23,7 @@ import type { NodeMessage } from "node-red";
  * firmware. Index 0 matches bit 0, index 7 matches bit 7.
  */
 export const BIT_MASK_8 = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] as const;
+const MQTT_TOPIC_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /**
  * Parsed representation of a device-scoped MQTT topic.
@@ -32,6 +33,14 @@ export type DeviceScopedTopic = {
   deviceName: string;
   suffix: string;
 };
+
+/**
+ * Returns whether a string is safe to use as a single MQTT topic segment in
+ * the runtime-managed device namespace.
+ */
+export function isValidMqttTopicSegment(value: string): boolean {
+  return MQTT_TOPIC_SEGMENT_PATTERN.test(value);
+}
 
 /**
  * Builds the stable slot key used for click transaction tracking before the
@@ -155,6 +164,12 @@ export function mergeServiceResults(target: ServiceResult, source: ServiceResult
   target.registryChanged = Boolean(target.registryChanged || source.registryChanged);
   if (source.staggerLshMessages) {
     target.staggerLshMessages = true;
+  }
+  if (source.discoveryFlushDelayMs !== undefined) {
+    target.discoveryFlushDelayMs =
+      target.discoveryFlushDelayMs === undefined
+        ? source.discoveryFlushDelayMs
+        : Math.min(target.discoveryFlushDelayMs, source.discoveryFlushDelayMs);
   }
 }
 

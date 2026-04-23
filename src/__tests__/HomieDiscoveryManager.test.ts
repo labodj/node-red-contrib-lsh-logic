@@ -82,6 +82,29 @@ describe("HomieDiscoveryManager", () => {
     return message;
   };
 
+  const markNodeStateMetadata = (
+    deviceId: string,
+    nodeId: string,
+    { datatype, settable }: { datatype?: string; settable?: boolean },
+  ): void => {
+    if (datatype !== undefined) {
+      manager.processDiscoveryMessage(deviceId, `/${nodeId}/state/$datatype`, datatype);
+    }
+    if (settable !== undefined) {
+      manager.processDiscoveryMessage(
+        deviceId,
+        `/${nodeId}/state/$settable`,
+        settable ? "true" : "false",
+      );
+    }
+  };
+
+  const markWritableBooleanNodes = (deviceId: string, ...nodeIds: string[]): void => {
+    for (const nodeId of nodeIds) {
+      markNodeStateMetadata(deviceId, nodeId, { datatype: "boolean", settable: true });
+    }
+  };
+
   it("should accumulate state and generate a device discovery payload when all data is present", () => {
     const deviceId = "device01";
 
@@ -91,6 +114,7 @@ describe("HomieDiscoveryManager", () => {
     expect(
       manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0").messages[Output.Lsh],
     ).toBeUndefined();
+    markWritableBooleanNodes(deviceId, "light1", "light2");
 
     const result = manager.processDiscoveryMessage(deviceId, "/$nodes", "light1,light2");
     const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
@@ -155,6 +179,7 @@ describe("HomieDiscoveryManager", () => {
         payload_off: "false",
       }),
     );
+    expect(deviceMessage.payload.components).not.toHaveProperty("lsh_device01_ota_state");
 
     expect(homieStateMessage.payload).toEqual(
       expect.objectContaining({
@@ -168,11 +193,98 @@ describe("HomieDiscoveryManager", () => {
     expect(homieStateMessage.payload).not.toHaveProperty("availability_topic");
   });
 
+  it("should defer discovery publication until retained node metadata settles", () => {
+    const deviceId = "device01defer";
+
+    manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+
+    const nodesResult = manager.processDiscoveryMessage(deviceId, "/$nodes", "relay");
+    expect(nodesResult.messages[Output.Lsh]).toBeUndefined();
+    expect(nodesResult.discoveryFlushDelayMs).toBeGreaterThan(0);
+
+    const datatypeResult = manager.processDiscoveryMessage(
+      deviceId,
+      "/relay/state/$datatype",
+      "boolean",
+    );
+    expect(datatypeResult.messages[Output.Lsh]).toBeUndefined();
+
+    const settableResult = manager.processDiscoveryMessage(
+      deviceId,
+      "/relay/state/$settable",
+      "true",
+    );
+    expect(settableResult.messages[Output.Lsh]).toBeUndefined();
+
+    now += 149;
+    expect(manager.flushPendingDiscovery().messages[Output.Lsh]).toBeUndefined();
+
+    now += 1;
+    const flushed = manager.flushPendingDiscovery();
+    const messages = getDiscoveryMessages(flushed.messages[Output.Lsh]);
+
+    expect(messages).toHaveLength(2);
+    expect(
+      getMessageByTopic(messages, "homeassistant/device/lsh_device01defer/config"),
+    ).toBeDefined();
+    expect(
+      getMessageByTopic(messages, "homeassistant/sensor/lsh_device01defer_homie_state/config"),
+    ).toBeDefined();
+  });
+
+  it("should expose read-only boolean state nodes as binary sensors without a command topic", () => {
+    const deviceId = "device01b";
+
+    manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markNodeStateMetadata(deviceId, "door", { datatype: "boolean", settable: false });
+
+    const result = manager.processDiscoveryMessage(deviceId, "/$nodes", "door");
+    const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
+    const deviceMessage = getMessageByTopic(messages, "homeassistant/device/lsh_device01b/config");
+
+    expect(deviceMessage.payload.components?.lsh_device01b_door).toEqual(
+      expect.objectContaining({
+        platform: "binary_sensor",
+        state_topic: "homie/device01b/door/state",
+        payload_on: "true",
+        payload_off: "false",
+      }),
+    );
+    expect(deviceMessage.payload.components?.lsh_device01b_door).not.toHaveProperty(
+      "command_topic",
+    );
+  });
+
+  it("should expose non-boolean state nodes as plain sensors without a command topic", () => {
+    const deviceId = "device01c";
+
+    manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markNodeStateMetadata(deviceId, "temperature", { datatype: "float" });
+
+    const result = manager.processDiscoveryMessage(deviceId, "/$nodes", "temperature");
+    const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
+    const deviceMessage = getMessageByTopic(messages, "homeassistant/device/lsh_device01c/config");
+
+    expect(deviceMessage.payload.components?.lsh_device01c_temperature).toEqual(
+      expect.objectContaining({
+        platform: "sensor",
+        state_topic: "homie/device01c/temperature/state",
+      }),
+    );
+    expect(deviceMessage.payload.components?.lsh_device01c_temperature).not.toHaveProperty(
+      "command_topic",
+    );
+  });
+
   it("should be idempotent and not regenerate config if data has not changed", () => {
     const deviceId = "device02";
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "led");
 
     expect(
       manager.processDiscoveryMessage(deviceId, "/$nodes", "led").messages[Output.Lsh],
@@ -191,6 +303,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "led");
     manager.processDiscoveryMessage(deviceId, "/$nodes", "led");
 
     const result = manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.1");
@@ -206,6 +319,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "led");
     manager.processDiscoveryMessage(deviceId, "/$nodes", "led");
 
     const repeatedFirmware = manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
@@ -219,6 +333,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "KitchenLight");
     const result = manager.processDiscoveryMessage(deviceId, "/$nodes", "KitchenLight");
 
     const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
@@ -239,6 +354,8 @@ describe("HomieDiscoveryManager", () => {
 
     defaultPrefixManager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     defaultPrefixManager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    defaultPrefixManager.processDiscoveryMessage(deviceId, "/light1/state/$datatype", "boolean");
+    defaultPrefixManager.processDiscoveryMessage(deviceId, "/light1/state/$settable", "true");
     const result = defaultPrefixManager.processDiscoveryMessage(deviceId, "/$nodes", "light1,");
 
     const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
@@ -257,6 +374,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "relay", "KitchenLight", "valid_2");
     const result = manager.processDiscoveryMessage(
       deviceId,
       "/$nodes",
@@ -286,6 +404,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "relay");
     manager.processDiscoveryMessage(deviceId, "/$nodes", "relay");
 
     const malformed = manager.processDiscoveryMessage(deviceId, "/$nodes", "bad node,@oops");
@@ -314,6 +433,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "relay", "lamp");
     manager.processDiscoveryMessage(deviceId, "/$nodes", "relay,lamp");
 
     const reordered = manager.processDiscoveryMessage(deviceId, "/$nodes", "lamp,relay,relay");
@@ -327,6 +447,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "led", "relay");
     manager.processDiscoveryMessage(deviceId, "/$nodes", "led,relay");
 
     const ignored = manager.processDiscoveryMessage(deviceId, "/$localip", "192.168.1.5");
@@ -370,6 +491,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "led");
     const result = manager.processDiscoveryMessage(deviceId, "/$nodes", "led");
     const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
     const deviceMessage = getMessageByTopic(messages, "homeassistant/device/lsh_device06/config");
@@ -417,6 +539,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "1", "2");
     const result = manager.processDiscoveryMessage(deviceId, "/$nodes", "1,2");
 
     const messages = getDiscoveryMessages(result.messages[Output.Lsh]);
@@ -444,6 +567,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage(deviceId, "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage(deviceId, "/$fw/version", "1.0.0");
+    markWritableBooleanNodes(deviceId, "1");
     manager.processDiscoveryMessage(deviceId, "/$nodes", "1");
 
     manager.setDiscoveryConfig(
@@ -481,6 +605,64 @@ describe("HomieDiscoveryManager", () => {
     );
   });
 
+  it("should reject discovery override node ids that collide case-insensitively", () => {
+    expect(() =>
+      manager.setDiscoveryConfig(
+        new Map([
+          [
+            "device09",
+            {
+              name: "device09",
+              haDiscovery: {
+                nodes: {
+                  Relay: {
+                    platform: "switch",
+                  },
+                  relay: {
+                    platform: "fan",
+                  },
+                },
+              },
+            },
+          ],
+        ]),
+      ),
+    ).toThrow(/collide after case-insensitive normalization/);
+  });
+
+  it("should reject discovery override node ids that are not valid Homie node ids", () => {
+    expect(() =>
+      manager.setDiscoveryConfig(
+        new Map([
+          [
+            "device09",
+            {
+              name: "device09",
+              haDiscovery: {
+                nodes: {
+                  "bad node": {
+                    platform: "switch",
+                  },
+                },
+              },
+            },
+          ],
+        ]),
+      ),
+    ).toThrow(/not a valid Homie node id/);
+  });
+
+  it("should reject configured device ids that collide after lowercase normalization", () => {
+    expect(() =>
+      manager.setDiscoveryConfig(
+        new Map([
+          ["Foo", { name: "Foo" }],
+          ["foo", { name: "foo" }],
+        ]),
+      ),
+    ).toThrow(/collide after case-insensitive normalization/);
+  });
+
   it("prunes discovery state for devices removed from configured overrides", () => {
     manager.setDiscoveryConfig(
       new Map([
@@ -498,6 +680,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage("device09", "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage("device09", "/$fw/version", "1.0.0");
+    markWritableBooleanNodes("device09", "relay");
     manager.processDiscoveryMessage("device09", "/$nodes", "relay");
 
     manager.setDiscoveryConfig(new Map());
@@ -535,6 +718,7 @@ describe("HomieDiscoveryManager", () => {
   it("prunes stale wildcard discovery state after the retention window", () => {
     manager.processDiscoveryMessage("wildcard-device", "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage("wildcard-device", "/$fw/version", "1.0.0");
+    markWritableBooleanNodes("wildcard-device", "relay");
     manager.processDiscoveryMessage("wildcard-device", "/$nodes", "relay");
 
     now += UNCONFIGURED_DISCOVERY_STATE_TTL_MS + 1;
@@ -564,11 +748,13 @@ describe("HomieDiscoveryManager", () => {
   it("cancels pending cleanup when a wildcard device reappears before cleanup is flushed", () => {
     manager.processDiscoveryMessage("wildcard-device", "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage("wildcard-device", "/$fw/version", "1.0.0");
+    markWritableBooleanNodes("wildcard-device", "relay");
     manager.processDiscoveryMessage("wildcard-device", "/$nodes", "relay");
 
     now += UNCONFIGURED_DISCOVERY_STATE_TTL_MS + 1;
     manager.processDiscoveryMessage("wildcard-device", "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage("wildcard-device", "/$fw/version", "1.1.0");
+    markWritableBooleanNodes("wildcard-device", "relay");
     manager.processDiscoveryMessage("wildcard-device", "/$nodes", "relay");
 
     const regenerated = manager.regenerateDiscoveryPayloads();
@@ -595,6 +781,76 @@ describe("HomieDiscoveryManager", () => {
     ]);
   });
 
+  it("cancels pending cleanup when a wildcard device reappears with only a case change", () => {
+    manager.processDiscoveryMessage("Foo", "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage("Foo", "/$fw/version", "1.0.0");
+    markWritableBooleanNodes("Foo", "relay");
+    manager.processDiscoveryMessage("Foo", "/$nodes", "relay");
+
+    now += UNCONFIGURED_DISCOVERY_STATE_TTL_MS + 1;
+    manager.processDiscoveryMessage("foo", "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage("foo", "/$fw/version", "1.1.0");
+    markWritableBooleanNodes("foo", "relay");
+    manager.processDiscoveryMessage("foo", "/$nodes", "relay");
+
+    const regenerated = manager.regenerateDiscoveryPayloads();
+    const messages = Array.isArray(regenerated.messages[Output.Lsh])
+      ? regenerated.messages[Output.Lsh]
+      : regenerated.messages[Output.Lsh]
+        ? [regenerated.messages[Output.Lsh]]
+        : [];
+
+    expect(messages).toHaveLength(2);
+    expect(messages).toEqual([
+      expect.objectContaining({
+        topic: "homeassistant/device/lsh_foo/config",
+        payload: expect.objectContaining({
+          availability_topic: "homie/foo/$state",
+        }),
+        qos: 1,
+        retain: true,
+      }),
+      expect.objectContaining({
+        topic: "homeassistant/sensor/lsh_foo_homie_state/config",
+        payload: expect.objectContaining({
+          state_topic: "homie/foo/$state",
+        }),
+        qos: 1,
+        retain: true,
+      }),
+    ]);
+  });
+
+  it("treats wildcard devices that differ only by case as one canonical HA discovery target", () => {
+    manager.processDiscoveryMessage("Foo", "/$mac", "AA:BB:CC:DD:EE:FF");
+    manager.processDiscoveryMessage("Foo", "/$fw/version", "1.0.0");
+    markWritableBooleanNodes("Foo", "relay");
+    manager.processDiscoveryMessage("Foo", "/$nodes", "relay");
+
+    const updateResult = manager.processDiscoveryMessage("foo", "/$fw/version", "1.1.0");
+    const messages = Array.isArray(updateResult.messages[Output.Lsh])
+      ? updateResult.messages[Output.Lsh]
+      : updateResult.messages[Output.Lsh]
+        ? [updateResult.messages[Output.Lsh]]
+        : [];
+
+    expect(messages).toHaveLength(2);
+    expect(messages).toEqual([
+      expect.objectContaining({
+        topic: "homeassistant/device/lsh_foo/config",
+        payload: expect.objectContaining({
+          availability_topic: "homie/foo/$state",
+        }),
+      }),
+      expect.objectContaining({
+        topic: "homeassistant/sensor/lsh_foo_homie_state/config",
+        payload: expect.objectContaining({
+          state_topic: "homie/foo/$state",
+        }),
+      }),
+    ]);
+  });
+
   it("retains configured devices without discovery overrides while pruning wildcard state", () => {
     manager.setDiscoveryConfig(
       new Map([
@@ -609,6 +865,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage("device11", "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage("device11", "/$fw/version", "1.0.0");
+    markWritableBooleanNodes("device11", "relay");
     manager.processDiscoveryMessage("device11", "/$nodes", "relay");
 
     now += UNCONFIGURED_DISCOVERY_STATE_TTL_MS + 1;
@@ -635,6 +892,7 @@ describe("HomieDiscoveryManager", () => {
 
     manager.processDiscoveryMessage("device10", "/$mac", "AA:BB:CC:DD:EE:FF");
     manager.processDiscoveryMessage("device10", "/$fw/version", "1.0.0");
+    markWritableBooleanNodes("device10", "relay");
     manager.processDiscoveryMessage("device10", "/$nodes", "relay");
 
     manager.reset();

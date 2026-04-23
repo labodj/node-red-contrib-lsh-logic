@@ -9,6 +9,13 @@
 import { DeviceRegistryManager } from "./DeviceRegistryManager";
 import { ClickTransactionManager } from "./ClickTransactionManager";
 import { HomieDiscoveryManager } from "./HomieDiscoveryManager";
+import { parseDiscoveryStateMetadataTopic } from "./HomieDiscoveryManager.helpers";
+import {
+  classifyDeviceRecoveryPath,
+  findUnknownActorReference,
+  shouldProbeBridgeForRecoveryPath,
+  type WatchdogActions,
+} from "./LshLogicService.lifecycle";
 import { LshCodec } from "./LshCodec";
 import {
   appendLshMessages,
@@ -16,6 +23,7 @@ import {
   buildClickCorrelationKey,
   buildClickSlotKey,
   createEmptyServiceResult,
+  isValidMqttTopicSegment,
   isBridgeDiagnosticPayload,
   isDiagnosticOnlyHomieState,
   mergeServiceResults,
@@ -49,17 +57,6 @@ import type { NodeMessage } from "node-red";
 import type { ValidateFunction } from "ajv";
 
 /**
- * Collects actions to be performed at the end of a watchdog cycle.
- * @internal
- */
-type WatchdogActions = {
-  devicesToPing: Set<string>;
-  unhealthyDevicesForAlert: Array<{ name: string; reason: string }>;
-  stateChanged: boolean;
-  shouldProbeBridges: boolean;
-};
-
-/**
  * Custom error for handling click validation failures gracefully. This allows
  * the service to distinguish between different failure types and provide
  * specific feedback to the device.
@@ -81,6 +78,17 @@ export class ClickValidationError extends Error {
  * and state, but does not interact directly with the Node-RED runtime.
  * It orchestrates the various managers and returns descriptive results (`ServiceResult`)
  * rather than performing I/O actions itself.
+ *
+ * Architectural note:
+ * - topic decoding and message routing stay in this class because lifecycle
+ *   policy depends on transport-specific runtime signals
+ * - lifecycle repair and watchdog decisions are intentionally centralized here
+ *   so startup, reload, Homie, and bridge recovery paths reuse one policy core
+ * - click execution also lives here because it depends on the same registry and
+ *   reachability invariants
+ *
+ * Keep new behavior inside one of those existing domains instead of adding
+ * ad-hoc cross-cutting branches in the adapter or in the individual managers.
  */
 export class LshLogicService {
   private readonly deviceManager: DeviceRegistryManager;
@@ -94,6 +102,7 @@ export class LshLogicService {
 
   private readonly protocol: "json" | "msgpack";
   private readonly serviceTopic: string;
+  private readonly snapshotRecoveryRetryMs: number;
   private readonly codec: LshCodec;
   private readonly validators: {
     validateDeviceDetails: ValidateFunction;
@@ -104,6 +113,8 @@ export class LshLogicService {
 
   private systemConfig: SystemConfig | null = null;
   private deviceConfigMap: Map<string, DeviceEntry> = new Map();
+  private snapshotRecoveryTimestamps: Map<string, number> = new Map();
+  private queuedSnapshotRecoveryFrames: Map<string, number> = new Map();
 
   /**
    * Constructs a new LshLogicService. Dependencies are injected to promote
@@ -138,6 +149,7 @@ export class LshLogicService {
     this.serviceTopic = config.serviceTopic;
     this.protocol = config.protocol;
     this.haDiscovery = config.haDiscovery;
+    this.snapshotRecoveryRetryMs = Math.max(config.pingTimeout * 1000, 1000);
 
     this.validators = validators;
 
@@ -160,6 +172,92 @@ export class LshLogicService {
   }
 
   /**
+   * Records that a controller-directed ping has been queued for later
+   * transmission but has not necessarily left the adapter yet.
+   * @param deviceName - The targeted device.
+   */
+  public recordQueuedControllerPing(deviceName: string): void {
+    this.watchdog.onPingQueued(deviceName);
+  }
+
+  /**
+   * Records the real dispatch time of an outgoing controller ping so watchdog
+   * timeout accounting starts from the actual emit instant.
+   * @param deviceName - The targeted device.
+   * @param now - The timestamp of the real dispatch.
+   */
+  public recordDispatchedControllerPing(deviceName: string, now = Date.now()): void {
+    this.watchdog.onPingDispatched(deviceName, now);
+  }
+
+  /**
+   * Cancels a queued-but-unsent controller ping, typically because pending
+   * low-priority work was invalidated by a new config generation.
+   * @param deviceName - The targeted device.
+   */
+  public cancelQueuedControllerPing(deviceName: string): void {
+    this.watchdog.cancelQueuedPing(deviceName);
+  }
+
+  /**
+   * Marks that a bridge-level service probe has been queued for later
+   * transmission but has not necessarily left the adapter yet.
+   */
+  public recordQueuedBridgeProbe(): void {
+    this.watchdog.onBridgeProbeQueued();
+  }
+
+  /**
+   * Records the real dispatch time of an outgoing bridge-level service probe
+   * so its cooldown starts from the actual emit instant.
+   * @param now - The timestamp of the real dispatch.
+   */
+  public recordDispatchedBridgeProbe(now = Date.now()): void {
+    this.watchdog.onBridgeProbeDispatched(now);
+  }
+
+  /**
+   * Cancels a queued-but-unsent bridge-level service probe when pending
+   * low-priority work gets invalidated before the probe is emitted.
+   */
+  public cancelQueuedBridgeProbe(): void {
+    this.watchdog.cancelQueuedBridgeProbe();
+  }
+
+  /**
+   * Records the real dispatch time of a snapshot recovery command burst. The
+   * retry cooldown starts only once at least one recovery frame has actually
+   * left the adapter.
+   * @param deviceName - The device whose snapshot recovery was emitted.
+   * @param now - The timestamp of the real dispatch.
+   */
+  public recordDispatchedSnapshotRecovery(deviceName: string, now = Date.now()): void {
+    const remainingFrames = this.queuedSnapshotRecoveryFrames.get(deviceName);
+    if (remainingFrames === undefined) {
+      this.snapshotRecoveryTimestamps.set(deviceName, now);
+      return;
+    }
+
+    if (remainingFrames <= 1) {
+      this.queuedSnapshotRecoveryFrames.delete(deviceName);
+      this.snapshotRecoveryTimestamps.set(deviceName, now);
+      return;
+    }
+
+    this.queuedSnapshotRecoveryFrames.set(deviceName, remainingFrames - 1);
+  }
+
+  /**
+   * Cancels queued-but-unsent snapshot recovery work, typically when a config
+   * generation invalidates pending low-priority messages before they are emitted.
+   * @param deviceName - The affected device.
+   */
+  public cancelQueuedSnapshotRecovery(deviceName: string): void {
+    this.queuedSnapshotRecoveryFrames.delete(deviceName);
+    this.snapshotRecoveryTimestamps.delete(deviceName);
+  }
+
+  /**
    * Actively verifies the state of all configured devices after the startup
    * replay window. The check prefers the lightest recovery step that can close
    * each device gap:
@@ -176,18 +274,19 @@ export class LshLogicService {
 
     const configuredDevices = this.getConfiguredDeviceNames() as string[];
     const unreachableDevices: string[] = [];
+    const bridgeOnlyDevices: string[] = [];
     const recoveryCommands: NodeMessage[] = [];
     let devicesNeedingRecovery = 0;
 
     for (const deviceName of configuredDevices) {
       const deviceState = this.deviceManager.getDevice(deviceName);
-      if (!deviceState) {
+      const recoveryPath = classifyDeviceRecoveryPath(deviceState);
+      if (recoveryPath === "offline") {
         unreachableDevices.push(deviceName);
         continue;
       }
-
-      if (!deviceState.connected && !deviceState.bridgeConnected) {
-        unreachableDevices.push(deviceName);
+      if (recoveryPath === "bridge_only") {
+        bridgeOnlyDevices.push(deviceName);
         continue;
       }
 
@@ -212,6 +311,12 @@ export class LshLogicService {
       appendLshMessages(result, this._buildDevicePingCommands(unreachableDevices));
     }
 
+    if (bridgeOnlyDevices.length > 0) {
+      result.logs.push(
+        `Initial state verification: ${bridgeOnlyDevices.length} device(s) have a reachable bridge but the downstream controller link is still down. Skipping direct controller recovery commands.`,
+      );
+    }
+
     const lshMessages = result.messages[Output.Lsh];
     if (Array.isArray(lshMessages) && lshMessages.length > 1) {
       // Reuse the same anti-burst policy as the watchdog: startup recovery can
@@ -219,7 +324,11 @@ export class LshLogicService {
       result.staggerLshMessages = true;
     }
 
-    if (recoveryCommands.length === 0 && unreachableDevices.length === 0) {
+    if (
+      recoveryCommands.length === 0 &&
+      unreachableDevices.length === 0 &&
+      bridgeOnlyDevices.length === 0
+    ) {
       result.logs.push(
         "Initial state verification: all configured devices are reachable and already have authoritative snapshots.",
       );
@@ -251,6 +360,31 @@ export class LshLogicService {
    * @returns A log message indicating the result of the update.
    */
   public updateSystemConfig(newConfig: SystemConfig): string {
+    const seenDeviceNames = new Map<string, string>();
+    for (const { name } of newConfig.devices) {
+      if (!isValidMqttTopicSegment(name)) {
+        throw new Error(
+          `Invalid device name '${name}'. Device names must be valid single MQTT topic segments.`,
+        );
+      }
+
+      const canonicalName = name.toLowerCase();
+      const previousName = seenDeviceNames.get(canonicalName);
+      if (previousName) {
+        throw new Error(
+          `Configured device names '${previousName}' and '${name}' collide after case-insensitive normalization.`,
+        );
+      }
+      seenDeviceNames.set(canonicalName, name);
+    }
+
+    const unknownActorReference = findUnknownActorReference(newConfig);
+    if (unknownActorReference) {
+      throw new Error(
+        `Configured actor '${unknownActorReference.actorName}' referenced by device '${unknownActorReference.sourceDeviceName}' is not declared in devices[].name.`,
+      );
+    }
+
     this.systemConfig = newConfig;
     this.deviceConfigMap.clear();
     // Simplicity over improbable race handling: any successful config load invalidates
@@ -263,6 +397,16 @@ export class LshLogicService {
     }
     this.discoveryManager.setDiscoveryConfig(this.deviceConfigMap);
     const clearedWatchdogDevices = this.watchdog.pruneDevices(newDeviceNames);
+    for (const deviceName of Array.from(this.snapshotRecoveryTimestamps.keys())) {
+      if (!newDeviceNames.has(deviceName)) {
+        this._clearSnapshotRecoveryTracking(deviceName);
+      }
+    }
+    for (const deviceName of Array.from(this.queuedSnapshotRecoveryFrames.keys())) {
+      if (!newDeviceNames.has(deviceName)) {
+        this._clearSnapshotRecoveryTracking(deviceName);
+      }
+    }
 
     const prunedDevices = [];
     for (const deviceName of this.deviceManager.getRegisteredDeviceNames()) {
@@ -289,7 +433,15 @@ export class LshLogicService {
       return createEmptyServiceResult();
     }
 
-    return this.discoveryManager.regenerateDiscoveryPayloads();
+    return this.discoveryManager.syncConfigIfNeeded();
+  }
+
+  public flushPendingDiscovery(): ServiceResult {
+    if (!this.haDiscovery) {
+      return createEmptyServiceResult();
+    }
+
+    return this.discoveryManager.flushPendingDiscovery();
   }
 
   /**
@@ -303,6 +455,8 @@ export class LshLogicService {
     const result = this.discoveryManager.reset();
     this.clickManager.clearAll();
     this.watchdog.reset();
+    this.snapshotRecoveryTimestamps.clear();
+    this.queuedSnapshotRecoveryFrames.clear();
     this.deviceManager.reset();
     result.stateChanged = result.stateChanged || hadRuntimeState;
     result.registryChanged = result.registryChanged || hadRuntimeState;
@@ -356,6 +510,18 @@ export class LshLogicService {
     return `${this.lshBasePath}${deviceName}/IN`;
   }
 
+  /**
+   * Records one bridge-probe request when the watchdog cooldown allows it.
+   * The actual command is a single broadcast service ping, so this helper only
+   * latches a global boolean rather than tracking per-device probe output.
+   */
+  private _queueBridgeProbeIfAllowed(now: number, actions: WatchdogActions): void {
+    if (this.watchdog.shouldProbeBridge(now)) {
+      this.recordQueuedBridgeProbe();
+      actions.shouldProbeBridges = true;
+    }
+  }
+
   private _buildDevicePingCommands(deviceNames: Iterable<string>): NodeMessage[] {
     return Array.from(deviceNames, (deviceName) =>
       this._createLshCommand(this._deviceCommandTopic(deviceName), { p: LshProtocol.PING }, 1),
@@ -377,6 +543,7 @@ export class LshLogicService {
     if (registryChanged) {
       result.registryChanged = true;
     }
+    this._clearSnapshotRecoveryBackoffIfSatisfied(deviceName);
     if (!stateChanged) {
       return;
     }
@@ -413,6 +580,7 @@ export class LshLogicService {
     if (registryChanged) {
       result.registryChanged = true;
     }
+    this._clearSnapshotRecoveryBackoffIfSatisfied(deviceName);
 
     if (stateChanged) {
       result.stateChanged = true;
@@ -477,6 +645,44 @@ export class LshLogicService {
     return { reason: null, commands: [] };
   }
 
+  /**
+   * Clears the per-device snapshot recovery cooldown once the registry holds a
+   * complete authoritative snapshot again.
+   * @param deviceName - The device whose recovery latch may be cleared.
+   */
+  private _clearSnapshotRecoveryBackoffIfSatisfied(deviceName: string): void {
+    const recoveryPlan = this._buildSnapshotRecoveryPlan(deviceName);
+    if (recoveryPlan.reason === null) {
+      this._clearSnapshotRecoveryTracking(deviceName);
+    }
+  }
+
+  private _clearSnapshotRecoveryTracking(deviceName: string): void {
+    this.snapshotRecoveryTimestamps.delete(deviceName);
+    this.queuedSnapshotRecoveryFrames.delete(deviceName);
+  }
+
+  /**
+   * Returns whether a device may issue another snapshot recovery request now.
+   * The cooldown prevents repeated bridge replies or watchdog cycles from
+   * enqueueing the same `REQUEST_DETAILS` / `REQUEST_STATE` burst endlessly.
+   * @param deviceName - The device that may need snapshot recovery.
+   * @param force - When `true`, bypasses the cooldown for hard recovery edges.
+   */
+  private _canRequestSnapshotRecovery(deviceName: string, force: boolean): boolean {
+    if (this.queuedSnapshotRecoveryFrames.has(deviceName)) {
+      return false;
+    }
+
+    if (force) {
+      return true;
+    }
+
+    const now = Date.now();
+    const lastRecoveryTime = this.snapshotRecoveryTimestamps.get(deviceName);
+    return lastRecoveryTime === undefined || now - lastRecoveryTime >= this.snapshotRecoveryRetryMs;
+  }
+
   private requestSnapshotRecovery(
     result: ServiceResult,
     deviceName: string,
@@ -484,12 +690,19 @@ export class LshLogicService {
       detailsAndState?: string;
       stateOnly?: string;
     } = {},
+    force = false,
   ): boolean {
     const recoveryPlan = this._buildSnapshotRecoveryPlan(deviceName);
     if (recoveryPlan.reason === null) {
+      this._clearSnapshotRecoveryTracking(deviceName);
       return false;
     }
 
+    if (!this._canRequestSnapshotRecovery(deviceName, force)) {
+      return false;
+    }
+
+    this.queuedSnapshotRecoveryFrames.set(deviceName, recoveryPlan.commands.length);
     appendLshMessages(result, recoveryPlan.commands);
 
     if (recoveryPlan.reason === "details_and_state") {
@@ -560,7 +773,8 @@ export class LshLogicService {
       this.haDiscovery &&
       (parsedTopic.suffix === "/$mac" ||
         parsedTopic.suffix === "/$fw/version" ||
-        parsedTopic.suffix === "/$nodes")
+        parsedTopic.suffix === "/$nodes" ||
+        parseDiscoveryStateMetadataTopic(parsedTopic.suffix) !== null)
     ) {
       return this.discoveryManager.processDiscoveryMessage(
         parsedTopic.deviceName,
@@ -697,11 +911,15 @@ export class LshLogicService {
     actions: WatchdogActions,
   ): void {
     const deviceState = this.deviceManager.getDevice(deviceName);
-    // Optimization: If a device is already known to be offline and an alert has been sent,
-    // skip any further checks on it until it comes back online. This prevents redundant work and log spam.
-    if (deviceState && !deviceState.isHealthy && deviceState.alertSent) {
-      return; // Skip already alerted devices
+    const recoveryPath = classifyDeviceRecoveryPath(deviceState);
+    if (shouldProbeBridgeForRecoveryPath(recoveryPath)) {
+      this._queueBridgeProbeIfAllowed(now, actions);
     }
+
+    if (recoveryPath === "bridge_only") {
+      return;
+    }
+
     const healthResult = this.watchdog.checkDeviceHealth(deviceState, now);
 
     // If a device appears healthy to the watchdog (recent lastSeenTime) but is not
@@ -728,19 +946,23 @@ export class LshLogicService {
             reason: "No response to ping.",
           });
         }
-        actions.shouldProbeBridges = true;
+        this._queueBridgeProbeIfAllowed(now, actions);
         actions.devicesToPing.add(deviceName);
         break;
+      case "retry_queued":
+        break;
       case "unhealthy":
-        actions.unhealthyDevicesForAlert.push({
-          name: deviceName,
-          reason: healthResult.reason,
-        });
-        {
-          const { stateChanged } = this.deviceManager.recordAlertSent(deviceName);
-          /* istanbul ignore if */
-          if (stateChanged) {
-            actions.stateChanged = true;
+        if (!deviceState?.alertSent) {
+          actions.unhealthyDevicesForAlert.push({
+            name: deviceName,
+            reason: healthResult.reason,
+          });
+          {
+            const { stateChanged } = this.deviceManager.recordAlertSent(deviceName);
+            /* istanbul ignore if */
+            if (stateChanged) {
+              actions.stateChanged = true;
+            }
           }
         }
         break;
@@ -859,22 +1081,23 @@ export class LshLogicService {
     const { stateChanged: lifecycleChanged, registryChanged } =
       this.deviceManager.recordHomieLifecycleState(deviceName, homieState, true);
     result.registryChanged = registryChanged;
+
+    if (isDiagnosticOnlyHomieState(homieState)) {
+      if (!lifecycleChanged) {
+        return result;
+      }
+
+      result.stateChanged = true;
+      result.logs.push(
+        `Device '${deviceName}' reported Homie lifecycle state '${homieState}'. Ignoring it for reachability, alerts and resync.`,
+      );
+      return result;
+    }
+
     const bridgeConnectionResult = this.deviceManager.updateBridgeConnectionState(
       deviceName,
       homieState,
     );
-
-    if (isDiagnosticOnlyHomieState(homieState)) {
-      if (!bridgeConnectionResult.stateChanged && !lifecycleChanged) {
-        return result;
-      }
-
-      result.stateChanged = bridgeConnectionResult.stateChanged || lifecycleChanged;
-      result.logs.push(
-        `Device '${deviceName}' reported Homie lifecycle state '${homieState}'. Ignoring it for alerts and resync.`,
-      );
-      return result;
-    }
 
     // A retained `ready` recorded earlier is enough to tell us that a subsequent live
     // `lost` means "device went offline", even if this Node-RED session never observed
@@ -904,6 +1127,7 @@ export class LshLogicService {
     const cameOnline = !bridgeConnectionResult.wasConnected && bridgeConnectionResult.isConnected;
 
     if (wentOffline) {
+      this._clearSnapshotRecoveryTracking(deviceName);
       this._emitHomieLifecycleAlert(
         result,
         deviceName,
@@ -923,10 +1147,15 @@ export class LshLogicService {
         "device_lifecycle_online",
         "Bridge is now connected and ready to refresh controller state.",
       );
-      this.requestSnapshotRecovery(result, deviceName, {
-        detailsAndState: `Bridge '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
-        stateOnly: `Bridge '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
-      });
+      this.requestSnapshotRecovery(
+        result,
+        deviceName,
+        {
+          detailsAndState: `Bridge '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
+          stateOnly: `Bridge '${deviceName}' is online. Requesting the missing authoritative snapshot data.`,
+        },
+        true,
+      );
     }
 
     return result;
@@ -990,6 +1219,7 @@ export class LshLogicService {
       result.logs.push(`Stored/Updated details for device '${deviceName}'.`);
       result.stateChanged = true;
     }
+    this._clearSnapshotRecoveryBackoffIfSatisfied(deviceName);
     return result;
   }
 
@@ -1015,7 +1245,7 @@ export class LshLogicService {
       const numActuators = hasKnownDetails ? device.actuatorsIDs.length : packedBytes.length * 8;
 
       // Validate byte array length: each byte covers 8 actuators
-      const expectedBytes = Math.ceil(numActuators / 8);
+      const expectedBytes = (numActuators + 7) >> 3;
       if (packedBytes.length !== expectedBytes) {
         result.errors.push(
           `State mismatch for ${deviceName}: expected ${expectedBytes} bytes for ${numActuators} actuators, received ${packedBytes.length}.`,
@@ -1025,15 +1255,17 @@ export class LshLogicService {
 
       // Unpack using per-byte loop structure (matches C++ implementation)
       // This avoids Math.floor() and % operations on the hot path
-      const states: boolean[] = [];
+      const states = new Array<boolean>(numActuators);
+      let stateIndex = 0;
       for (
         let byteIndex = 0;
-        byteIndex < packedBytes.length && states.length < numActuators;
+        byteIndex < packedBytes.length && stateIndex < numActuators;
         byteIndex++
       ) {
         const packedByte = packedBytes[byteIndex];
-        for (let bitIndex = 0; bitIndex < 8 && states.length < numActuators; bitIndex++) {
-          states.push((packedByte & BIT_MASK_8[bitIndex]) !== 0);
+        for (let bitIndex = 0; bitIndex < 8 && stateIndex < numActuators; bitIndex++) {
+          states[stateIndex] = (packedByte & BIT_MASK_8[bitIndex]) !== 0;
+          stateIndex++;
         }
       }
 
@@ -1051,6 +1283,7 @@ export class LshLogicService {
         result.logs.push(`Updated state for '${deviceName}': [${states.join(", ")}]`);
         result.stateChanged = true;
       }
+      this._clearSnapshotRecoveryBackoffIfSatisfied(deviceName);
       // If we receive a state but don't have the device details (IDs), proactively request them.
       if (configIsMissing) {
         result.warnings.push(
@@ -1180,11 +1413,23 @@ export class LshLogicService {
       );
     }
 
-    if (snapshotInvalidated) {
-      this.requestSnapshotRecovery(result, deviceName, {
-        detailsAndState: `Bridge '${deviceName}' reported an unsynchronized runtime cache. Requesting a fresh authoritative snapshot immediately.`,
-        stateOnly: `Bridge '${deviceName}' reported an unsynchronized runtime cache. Requesting a fresh authoritative state immediately.`,
-      });
+    if (!servicePingReply.controller_connected) {
+      this._clearSnapshotRecoveryTracking(deviceName);
+    } else {
+      this.requestSnapshotRecovery(
+        result,
+        deviceName,
+        snapshotInvalidated
+          ? {
+              detailsAndState: `Bridge '${deviceName}' reported an unsynchronized runtime cache. Requesting a fresh authoritative snapshot immediately.`,
+              stateOnly: `Bridge '${deviceName}' reported an unsynchronized runtime cache. Requesting a fresh authoritative state immediately.`,
+            }
+          : {
+              detailsAndState: `Bridge '${deviceName}' confirmed the controller path is up. Requesting the missing authoritative snapshot data.`,
+              stateOnly: `Bridge '${deviceName}' confirmed the controller path is up. Requesting the missing authoritative state.`,
+            },
+        snapshotInvalidated,
+      );
     }
 
     return result;

@@ -6,7 +6,7 @@
 
 A powerful, high-performance Node-RED node designed to manage advanced automation logic for smart home devices that speak the public LSH MQTT / protocol contract. Built with TypeScript for maximum reliability and type safety.
 
-This node replaces complex Node-RED flows with a single, robust, and stateful component that manages device state, implements distributed click logic (two-phase commit), and actively monitors device health.
+This node replaces complex Node-RED flows with a single, robust, and stateful component that manages device state, implements distributed click logic through a request/ACK/confirm handshake, and actively monitors device health.
 
 The original installation behind it uses Controllino controllers plus ESP32 bridges, but the Node-RED boundary is the **LSH protocol contract**, not the exact hardware. If another controller / bridge stack implements the same public MQTT topics and payload contract, this node is designed to work there too.
 
@@ -29,6 +29,7 @@ Use this README according to what you need:
 - If startup or click behavior looks inconsistent, use the landing [`TROUBLESHOOTING.md`](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md).
 - If you want the shortest path to a working setup, read [Installation](#installation), then [Configuration](#configuration), then the example configs under [`examples/`](./examples).
 - If you want the runtime model, startup behavior and watchdog semantics, read [How It Works](#how-it-works).
+- If you want the precise lifecycle invariants and recovery policy, read [LIFECYCLE.md](./LIFECYCLE.md).
 - If you want to integrate MsgPack, jump to [Advanced: MsgPack Support](#advanced-msgpack-support).
 
 ## Bundled Examples
@@ -78,18 +79,29 @@ The canonical command IDs, compact wire keys and golden JSON examples are genera
 
 At startup the node uses retained LSH snapshots when available, but it does not trust retained Homie `$state` alone as proof of current reachability: that must come from a live Homie transition or live controller-backed LSH traffic. After a short subscription-settle window, the node checks whether every configured device already has an authoritative `conf + state` snapshot. If yes, it skips the startup `BOOT` entirely. If not, it requests a single bridge-local `BOOT` replay, waits for the replay window, and then runs an active verification pass. During that verification, reachable devices receive only the missing snapshot requests, while still-unreachable devices are pinged directly. A later live `ready`, `conf`, `state`, `events`, or device-level `PING` response automatically recovers devices that were offline during startup. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
 
+The detailed lifecycle contract now lives in [LIFECYCLE.md](./LIFECYCLE.md). Read that file if you need the exact semantics of:
+
+- bridge-up / controller-down handling
+- retained vs live reachability proofs
+- startup vs runtime reload recovery
+- watchdog bridge probes vs controller pings
+- snapshot repair cooldowns and output ordering guarantees
+
 The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
 
 Operational simplifications:
 
-- If a runtime config reload becomes unreadable or invalid, the node intentionally fails closed: it clears the active config, unsubscribes, and waits for a valid file again.
+- If a runtime config reload becomes unreadable or invalid while a valid config is already active, the node keeps the last valid runtime configuration and reports the reload failure as a degraded-warning condition instead of tearing the runtime down.
+- Startup config failures do not require a Node-RED restart: the file watcher stays active, and a later valid save re-enters the normal startup bootstrap flow with warm-up and alert suppression.
 - Reloading `system-config.json` always clears pending network click transactions. In-flight distributed clicks are intentionally failed rather than preserved across a config change.
-- Runtime config reloads do not restart the startup warm-up/verification cycle. Recovery after reload is best-effort through normal live traffic, retained MQTT data and later watchdog pings.
+- Runtime config reloads do not restart warm-up, but a successful reload schedules a strong post-reload recovery pass. If startup recovery is still pending, that post-reload recovery is deferred until startup verification completes.
+- Watchdog controller `PING` timeouts start when the ping is actually emitted by the adapter, not when the watchdog only queued it behind low-priority staggered traffic.
+- Successful reloads regenerate Home Assistant discovery only when the effective discovery model changes.
 - Distributed long-click logic requires an authoritative actuator snapshot for every targeted LSH device. If a target is reachable but still missing fresh state, the click fails fast and is retried naturally on the next user action.
 - Retained `conf` and `state` snapshots are treated as the last known authoritative topology/state, not as proof that the device is currently alive. Device health and reachability come only from live Homie transitions, live LSH traffic and watchdog ping responses.
 - Retained `events` and `bridge` payloads are ignored. They are runtime-only signals and never count as current activity, click traffic or bridge health.
 - Bridge-local diagnostics published by `lsh-bridge` on `bridge` are accepted as informational runtime events, but they do not count as controller traffic or proof of current controller reachability.
-- Extremely narrow timing races during startup or config reload are handled in best-effort mode rather than with complex transaction recovery logic.
+- Extremely narrow timing races during startup or config reload are intentionally handled with idempotent recovery rather than with complex cross-restart transaction repair logic.
 
 To verify that the Node-RED generated protocol files match the vendored source of truth:
 
@@ -125,9 +137,9 @@ The node has five distinct outputs for clear and organized flows:
 ### Node Settings
 
 - **`name`**: Optional label shown in the Node-RED editor.
-- **`homieBasePath`**: Base topic for Homie traffic, for example `homie/`. Must end with `/`.
-- **`lshBasePath`**: Base topic for LSH traffic, for example `LSH/`. Must end with `/`.
-- **`serviceTopic`**: Bridge-scoped service topic used for hop-local `PING` and startup `BOOT` replay requests. The default public profile uses `LSH/Node-RED/SRV`.
+- **`homieBasePath`**: Base topic for Homie traffic, for example `homie/`. Must end with `/`, contain no MQTT wildcards, and contain only non-empty path segments.
+- **`lshBasePath`**: Base topic for LSH traffic, for example `LSH/`. Must end with `/`, contain no MQTT wildcards, and contain only non-empty path segments.
+- **`serviceTopic`**: Bridge-scoped service topic used for hop-local `PING` and startup `BOOT` replay requests. The default public profile uses `LSH/Node-RED/SRV`. It must be a concrete publish topic, so wildcards are rejected.
 - **`protocol`**: Payload format for LSH commands and LSH runtime topics. Supported values are `JSON` and `MsgPack`.
 - **`systemConfigPath`**: Path to `system-config.json`, absolute or relative to the Node-RED user directory.
 - **`clickTimeout`**: Hard timeout for the request → ACK → confirm click lifecycle.
@@ -137,7 +149,7 @@ The node has five distinct outputs for clear and organized flows:
 - **`interrogateThreshold`**: Silence threshold before the watchdog sends a ping.
 - **`pingTimeout`**: How long the watchdog waits for a ping response before treating a device as stale.
 - **`haDiscovery`**: Enable or disable Home Assistant auto-discovery output.
-- **`haDiscoveryPrefix`**: Home Assistant discovery topic prefix, usually `homeassistant`. Required only when discovery is enabled.
+- **`haDiscoveryPrefix`**: Home Assistant discovery topic prefix, usually `homeassistant`. Required only when discovery is enabled, and it must be a concrete topic prefix without MQTT wildcards or empty segments.
 - **`exposeStateContext` / `exposeStateKey`**: Optional export of the live internal device registry to flow/global context.
 - **`exportTopics` / `exportTopicsKey`**: Optional export of the generated MQTT topic set to flow/global context.
 - **`exposeConfigContext` / `exposeConfigKey`**: Optional export of the effective loaded runtime config to flow/global context.
@@ -187,23 +199,31 @@ Ready-to-copy examples are available in:
 }
 ```
 
-- **`name`**: Must match the exact device ID used in MQTT topics. With the current reference bridge defaults this is typically a short ID such as `c1`, `j1`, `k1`; the default bridge build allocates 4 characters unless `CONFIG_MAX_NAME_LENGTH` is raised.
+- **`name`**: Must match the exact device ID used in MQTT topics. It is validated as a single MQTT topic segment, so use only letters, digits, `_` or `-`. Device names must also be unique case-insensitively because Home Assistant discovery normalizes object IDs to lowercase. With the current reference bridge defaults this is typically a short ID such as `c1`, `j1`, `k1`; the default bridge build allocates 4 characters unless `CONFIG_MAX_NAME_LENGTH` is raised.
 - **`longClickButtons`**: Optional list of long-click actions handled by the orchestration layer for this device.
 - **`superLongClickButtons`**: Optional list of super-long-click actions handled by the orchestration layer for this device.
 - **`longClickButtons[].id` / `superLongClickButtons[].id`**: Numeric button ID that triggers the distributed action.
 - **`longClickButtons[].actors` / `superLongClickButtons[].actors`**: Target LSH devices affected by the action.
-- **`actors[].name`**: Target LSH device name.
+- **`actors[].name`**: Target LSH device name. It must match one of the configured `devices[].name` entries exactly, including case.
 - **`actors[].allActuators`**: `true` to target all actuators on the device, `false` to target only a specific subset.
 - **`actors[].actuators`**: Required when `allActuators` is `false`; lists the exact actuator IDs to target.
 - **`longClickButtons[].otherActors` / `superLongClickButtons[].otherActors`**: Optional non-LSH actors, identified by name, to be emitted on the "Other Actor Commands" output.
 - **`haDiscovery`**: Optional Home Assistant discovery overrides for this device.
 - **`haDiscovery.deviceName`**: Optional Home Assistant device name override.
-- **`haDiscovery.defaultPlatform`**: Optional default Home Assistant entity platform for all actuator nodes of the device (`light`, `switch`, or `fan`).
+- **`haDiscovery.defaultPlatform`**: Optional default Home Assistant entity platform for writable boolean Homie nodes of the device (`light`, `switch`, or `fan`).
 - **`haDiscovery.nodes`**: Optional per-node overrides keyed by the Homie node ID as published under `$nodes`.
-- **`haDiscovery.nodes.<id>.platform`**: Optional per-node Home Assistant entity platform override.
+- **`haDiscovery.nodes` keys must be valid Homie node IDs**: use only letters, digits, `_` or `-`.
+- **`haDiscovery.nodes` keys are case-insensitive**: do not define both `Relay` and `relay`; the config validator rejects overrides that collide after lowercase normalization.
+- **`haDiscovery.nodes.<id>.platform`**: Optional per-node Home Assistant entity platform override for writable boolean Homie nodes.
 - **`haDiscovery.nodes.<id>.name`**: Optional friendly entity name override shown in Home Assistant.
 - **`haDiscovery.nodes.<id>.defaultEntityId`**: Optional Home Assistant `default_entity_id` override for first discovery.
 - **`haDiscovery.nodes.<id>.icon`**: Optional Home Assistant icon override.
+
+Home Assistant discovery no longer assumes every Homie node is a writable actuator. Nodes are classified from retained Homie metadata:
+
+- boolean `state` nodes with `state/$settable=true` become writable toggle entities
+- boolean `state` nodes without `settable=true` become binary sensors
+- all other `state` nodes fall back to sensors
 
 ## Best Practices
 
@@ -215,12 +235,12 @@ The most powerful way to use this node is to let it manage your MQTT subscriptio
 
 ![Dynamic MQTT Flow](images/dynamic_mqtt_listener.png)
 
-When you deploy or when `system-config.json` changes, the `lsh-logic` node will:
+When you deploy or when the effective MQTT topic set changes, the `lsh-logic` node will:
 
 1. Send a message to the `mqtt-in` node to **unsubscribe from all topics**.
 2. Send a second message to **subscribe to the new, correct list of topics**.
 
-This ensures your `mqtt-in` node is always listening to exactly the right topics without any manual changes.
+This ensures your `mqtt-in` node is always listening to exactly the right topics without any manual changes. Reloads that only affect internal logic and leave the effective topic set unchanged do not churn MQTT subscriptions.
 
 ## Advanced: MsgPack Support
 

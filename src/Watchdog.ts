@@ -17,8 +17,16 @@ export type WatchdogResult =
   | { status: "needs_ping" }
   /** A ping was sent to a connected device, but it timed out. The device is now considered stale. */
   | { status: "stale" }
+  /**
+   * The device is already stale and its retry ping is still queued for the
+   * adapter's low-priority drain. Keep the stale state latched, but do not
+   * enqueue duplicate retries on every watchdog cycle.
+   */
+  | { status: "retry_queued" }
   /** The device is considered unhealthy for a specific reason (e.g., never seen, or connected but unresponsive). */
   | { status: "unhealthy"; reason: string };
+
+type PingLifecycleState = { status: "queued" } | { status: "sent"; sentTime: number };
 
 export class Watchdog {
   /** Milliseconds of silence before a device is considered in need of a ping. */
@@ -29,7 +37,12 @@ export class Watchdog {
    * Stores timestamps of when a ping was last sent to a device.
    * This internal state is key to the multi-stage health check.
    */
-  private pingTimestamps: Map<string, number> = new Map();
+  private pingStates: Map<string, PingLifecycleState> = new Map();
+  /**
+   * Tracks the lifecycle of the single bridge-level service probe broadcast.
+   * The emitted command is global, so its throttle state is global too.
+   */
+  private bridgeProbeState: PingLifecycleState | null = null;
 
   /**
    * Constructs a new Watchdog instance.
@@ -47,7 +60,8 @@ export class Watchdog {
    * 1. It first checks whether the device is currently known to be reachable at the controller layer.
    *    Bridge-only reachability is tracked separately in the registry.
    * 2. If the device is reachable but has been silent beyond `interrogateThreshold`, it initiates a ping.
-   * 3. If the bridge is alive but controller reachability is unknown, it still initiates controller pings.
+   * 3. If the bridge is alive but controller reachability is still unknown, it may initiate controller pings.
+   *    If the bridge explicitly reported `controller_connected=false`, it suppresses controller probes.
    * 4. If a ping has been sent but no response is received within `pingTimeout`, it marks the device as 'stale'.
    * 5. If the device has never been seen, it is immediately marked 'unhealthy'.
    * @param deviceState - The current state of the device to check, or `undefined` if never seen.
@@ -62,13 +76,25 @@ export class Watchdog {
 
     // GUARD 2: The bridge is currently offline, so controller probes cannot succeed.
     if (!deviceState.connected && !deviceState.bridgeConnected) {
-      this.onDeviceActivity(deviceState.name); // Clear any pending pings for it.
+      this.pingStates.delete(deviceState.name);
+      return { status: "ok" };
+    }
+
+    // GUARD 3: The bridge is alive and explicitly reported that the downstream
+    // controller link is down. Controller pings cannot succeed until the bridge
+    // reports that link as recovered.
+    if (
+      !deviceState.connected &&
+      deviceState.bridgeConnected &&
+      deviceState.controllerLinkConnected === false
+    ) {
+      this.pingStates.delete(deviceState.name);
       return { status: "ok" };
     }
 
     const timeSinceLastSeen = now - deviceState.lastSeenTime;
 
-    // GUARD 3: The device is connected and has been seen recently. It's healthy.
+    // GUARD 4: The device is connected and has been seen recently. It's healthy.
     if (deviceState.lastSeenTime > 0 && timeSinceLastSeen < this.interrogateThresholdMs) {
       this.onDeviceActivity(deviceState.name);
       return { status: "ok" };
@@ -76,26 +102,37 @@ export class Watchdog {
 
     // At this point, the device is CONNECTED but has been SILENT for too long.
     // We now proceed with the ping/staleness logic.
-    const pingSentTime = this.pingTimestamps.get(deviceState.name);
+    const pingState = this.pingStates.get(deviceState.name);
 
-    if (pingSentTime) {
-      // A ping has been sent. Check if it has timed out.
-      const pingHasTimedOut = now - pingSentTime > this.pingTimeoutMs;
+    if (pingState?.status === "sent") {
+      // A ping has actually been emitted by the adapter. Only now does the
+      // timeout window start counting down.
+      const pingHasTimedOut = now - pingState.sentTime > this.pingTimeoutMs;
       if (pingHasTimedOut) {
-        // The device is connected but did not respond to our ping in time. It is stale.
-        this.pingTimestamps.set(deviceState.name, now); // Set a new ping time for the next attempt.
+        // The last emitted ping timed out. Latch the retry request as queued so
+        // later watchdog cycles do not keep duplicating the same retry while it
+        // is still waiting in the adapter's low-priority drain.
+        this.pingStates.set(deviceState.name, { status: "queued" });
         return { status: "stale" };
-      } else {
-        // We are still waiting for a response. Keep a stale device latched as stale
-        // until real activity clears it, otherwise the state would oscillate between
-        // stale and healthy without any actual reply from the device.
-        return deviceState.isStale ? { status: "stale" } : { status: "ok" };
       }
-    } else {
-      // The device is silent and we haven't sent a ping yet. Time to send one.
-      this.pingTimestamps.set(deviceState.name, now);
-      return { status: "needs_ping" };
+
+      // We are still waiting for a response to a ping that really left the
+      // node. Keep a stale device latched as stale until genuine activity
+      // clears it, otherwise the state would oscillate without any reply.
+      return deviceState.isStale ? { status: "stale" } : { status: "ok" };
     }
+
+    if (pingState?.status === "queued") {
+      // A ping is already queued for transmission, but has not been observed as
+      // emitted by the adapter yet. Do not start timeout accounting early and
+      // do not enqueue duplicate pings on every watchdog cycle.
+      return deviceState.isStale ? { status: "retry_queued" } : { status: "ok" };
+    }
+
+    // The device is silent and no ping is currently pending. Request one and
+    // mark it as queued until the adapter confirms the actual dispatch time.
+    this.pingStates.set(deviceState.name, { status: "queued" });
+    return { status: "needs_ping" };
   }
 
   /**
@@ -105,7 +142,87 @@ export class Watchdog {
    * @param deviceName - The name of the active device.
    */
   public onDeviceActivity(deviceName: string): void {
-    this.pingTimestamps.delete(deviceName);
+    this.pingStates.delete(deviceName);
+  }
+
+  /**
+   * Marks that the adapter has queued a controller ping for a device but the
+   * frame has not necessarily left the node yet.
+   * @param deviceName - The device that now has a queued ping.
+   */
+  public onPingQueued(deviceName: string): void {
+    this.pingStates.set(deviceName, { status: "queued" });
+  }
+
+  /**
+   * Marks the instant a controller ping actually leaves the node. The timeout
+   * window starts from this real dispatch time, not from the watchdog cycle
+   * that merely decided a ping was needed.
+   * @param deviceName - The device whose ping was emitted.
+   * @param now - The current timestamp.
+   */
+  public onPingDispatched(deviceName: string, now: number): void {
+    this.pingStates.set(deviceName, { status: "sent", sentTime: now });
+  }
+
+  /**
+   * Clears a queued-but-unsent ping when the adapter drops pending low-priority
+   * work, for example after a config generation change.
+   * @param deviceName - The device whose queued ping should be cancelled.
+   */
+  public cancelQueuedPing(deviceName: string): void {
+    const pingState = this.pingStates.get(deviceName);
+    if (pingState?.status === "queued") {
+      this.pingStates.delete(deviceName);
+    }
+  }
+
+  /**
+   * Returns whether a new bridge-level service probe may be sent now.
+   * The probe is throttled independently from controller pings so a retained
+   * Homie baseline or an explicitly disconnected controller path cannot cause
+   * one service ping per watchdog tick forever. Because the emitted command is
+   * a single broadcast on the service topic, the cooldown is global too.
+   * @param now - The current timestamp.
+   * @returns `true` when the probe should be sent now.
+   */
+  public shouldProbeBridge(now: number): boolean {
+    if (this.bridgeProbeState?.status === "queued") {
+      return false;
+    }
+
+    if (this.bridgeProbeState?.status === "sent") {
+      return now - this.bridgeProbeState.sentTime >= this.pingTimeoutMs;
+    }
+
+    return true;
+  }
+
+  /**
+   * Marks that a bridge-level service probe has been queued for later
+   * transmission but has not necessarily left the adapter yet.
+   */
+  public onBridgeProbeQueued(): void {
+    this.bridgeProbeState = { status: "queued" };
+  }
+
+  /**
+   * Marks the actual dispatch instant of the bridge-level service probe. The
+   * cooldown starts from this real emit time.
+   * @param now - The current timestamp.
+   */
+  public onBridgeProbeDispatched(now: number): void {
+    this.bridgeProbeState = { status: "sent", sentTime: now };
+  }
+
+  /**
+   * Cancels a queued-but-unsent bridge-level probe, for example when a config
+   * generation invalidates pending low-priority work before it is emitted.
+   */
+  public cancelQueuedBridgeProbe(): void {
+    if (this.bridgeProbeState?.status === "queued") {
+      this.bridgeProbeState = null;
+    }
   }
 
   /**
@@ -117,9 +234,9 @@ export class Watchdog {
     const configuredDevices = new Set(configuredDeviceNames);
     const prunedDeviceNames: string[] = [];
 
-    for (const deviceName of this.pingTimestamps.keys()) {
+    for (const deviceName of this.pingStates.keys()) {
       if (!configuredDevices.has(deviceName)) {
-        this.pingTimestamps.delete(deviceName);
+        this.pingStates.delete(deviceName);
         prunedDeviceNames.push(deviceName);
       }
     }
@@ -131,6 +248,7 @@ export class Watchdog {
    * Clears all pending ping bookkeeping, typically when configuration is reset.
    */
   public reset(): void {
-    this.pingTimestamps.clear();
+    this.pingStates.clear();
+    this.bridgeProbeState = null;
   }
 }

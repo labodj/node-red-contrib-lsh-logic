@@ -133,17 +133,86 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
         staggerLshMessages: true,
       }),
     );
+    await flushMicrotasks(10);
 
     expect(mockNodeInstance.send).toHaveBeenCalledTimes(3);
     expect(mockNodeInstance.send).toHaveBeenNthCalledWith(1, [lshMsg1, null, null, null, null]);
-    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(2, [lshMsg2, null, null, null, null]);
-    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(3, [null, otherMsg, null, null, null]);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(2, [null, otherMsg, null, null, null]);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(3, [lshMsg2, null, null, null, null]);
+  });
+
+  it("should let high-priority outputs overtake future low-priority staggered frames", async () => {
+    await initializeNode();
+    mockNodeInstance.send.mockClear();
+
+    let releaseFirstSleep: (() => void) | undefined;
+    jest
+      .spyOn(utils, "sleep")
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstSleep = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+
+    const firstRun = nodeInstance.processServiceResult(
+      createServiceResult({
+        messages: {
+          [Output.Lsh]: [
+            { topic: "LSH/dev1/IN", payload: "p1" },
+            { topic: "LSH/dev2/IN", payload: "p2" },
+          ],
+        },
+        staggerLshMessages: true,
+      }),
+    );
+
+    await flushMicrotasks();
+
+    const secondRun = nodeInstance.processServiceResult(
+      createServiceResult({
+        messages: {
+          [Output.OtherActors]: { payload: "other" },
+        },
+      }),
+    );
+
+    await flushMicrotasks();
+    expect(mockNodeInstance.send).toHaveBeenCalledTimes(2);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(1, [
+      { topic: "LSH/dev1/IN", payload: "p1" },
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(2, [
+      null,
+      { payload: "other" },
+      null,
+      null,
+      null,
+    ]);
+
+    releaseFirstSleep?.();
+    await Promise.all([firstRun, secondRun]);
+    await flushMicrotasks(10);
+
+    expect(mockNodeInstance.send).toHaveBeenNthCalledWith(3, [
+      { topic: "LSH/dev2/IN", payload: "p2" },
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 
   it("should update the exposed state in context when state changes", async () => {
     const deviceState: DeviceState = {
       name: "device-1",
       connected: true,
+      controllerLinkConnected: true,
       isHealthy: true,
       isStale: false,
       lastSeenTime: 1,
@@ -230,7 +299,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     expect(processResultSpy).toHaveBeenCalled();
   });
 
-  it("should not overlap watchdog cycles and should run one queued cycle afterwards", async () => {
+  it("should let later watchdog cycles proceed while low-priority staggered traffic is still draining", async () => {
     const runWatchdogCheckSpy = jest
       .spyOn(LshLogicService.prototype, "runWatchdogCheck")
       .mockReturnValue(
@@ -272,16 +341,20 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     jest.advanceTimersByTime(4000);
     await flushMicrotasks();
-    expect(runWatchdogCheckSpy).toHaveBeenCalledTimes(1);
+    expect(runWatchdogCheckSpy).toHaveBeenCalledTimes(3);
 
     resolveSleep?.();
     await flushMicrotasks(6);
 
-    expect(runWatchdogCheckSpy).toHaveBeenCalledTimes(2);
+    expect(runWatchdogCheckSpy).toHaveBeenCalledTimes(3);
     expect(sleepSpy).toHaveBeenCalled();
   });
 
   it("should wait for an in-flight watchdog cycle to quiesce before finishing close", async () => {
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(false);
+    jest
+      .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
+      .mockReturnValue(createServiceResult());
     const runWatchdogCheckSpy = jest
       .spyOn(LshLogicService.prototype, "runWatchdogCheck")
       .mockReturnValue(
@@ -334,12 +407,12 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     const done = jest.fn();
     getCloseHandler(mockNodeInstance)(done);
-    await flushMicrotasks(6);
+    await flushMicrotasks(10);
 
     expect(done).not.toHaveBeenCalled();
 
     resolveSleep?.();
-    await flushMicrotasks(6);
+    await flushMicrotasks(10);
 
     expect(done).toHaveBeenCalled();
     expect(mockNodeInstance.send).toHaveBeenCalledTimes(sendsBeforeClose);
@@ -349,6 +422,10 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     jest
       .spyOn(LshLogicService.prototype, "runWatchdogCheck")
       .mockReturnValue(createServiceResult());
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(true);
+    jest
+      .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
+      .mockReturnValue(createServiceResult());
 
     await initializeNode({
       ...defaultNodeConfig,
@@ -356,6 +433,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
       initialStateTimeout: 10,
       pingTimeout: 10,
     });
+    (LshLogicService.prototype.runWatchdogCheck as jest.Mock).mockClear();
 
     jest.advanceTimersByTime(1000);
     await flushMicrotasks();
@@ -384,8 +462,14 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     );
   });
 
-  it("should not restart startup verification timers on config reload", async () => {
-    const verifySpy = jest.spyOn(LshLogicService.prototype, "verifyInitialDeviceStates");
+  it("should defer post-reload strong recovery until pending startup verification completes", async () => {
+    jest
+      .spyOn(LshLogicService.prototype, "needsStartupBootReplay")
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    const verifySpy = jest
+      .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
+      .mockReturnValue(createServiceResult());
 
     await initializeNode({
       ...defaultNodeConfig,
@@ -395,10 +479,285 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     verifySpy.mockClear();
 
     await nodeInstance.handleConfigFileChange("/tmp/new-config.json", createValidator(true));
-    jest.advanceTimersByTime(5000);
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+    jest.advanceTimersByTime(2000);
     await flushMicrotasks(6);
 
-    expect(verifySpy).not.toHaveBeenCalled();
+    expect(verifySpy).toHaveBeenCalledTimes(1);
+
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+
+    expect(verifySpy).toHaveBeenCalledTimes(2);
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Running post-reload device recovery: reconciling snapshots for the updated runtime configuration.",
+    );
+  });
+
+  it("should schedule a strong runtime recovery pass after a hot reload once warm-up is over", async () => {
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(false);
+    const verifySpy = jest
+      .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
+      .mockReturnValue(createServiceResult());
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      initialStateTimeout: 1,
+      pingTimeout: 1,
+    });
+
+    jest.advanceTimersByTime(1500);
+    await flushMicrotasks(6);
+    verifySpy.mockClear();
+
+    await nodeInstance.handleConfigFileChange("/tmp/new-config.json", createValidator(true));
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+
+    expect(verifySpy).toHaveBeenCalledTimes(1);
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Running post-reload device recovery: reconciling snapshots for the updated runtime configuration.",
+    );
+  });
+
+  it("should schedule a strong runtime recovery pass during late warm-up once startup verification already ran", async () => {
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(false);
+    const verifySpy = jest
+      .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
+      .mockReturnValue(createServiceResult());
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      initialStateTimeout: 1,
+      pingTimeout: 1,
+    });
+
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+    expect(verifySpy).toHaveBeenCalledTimes(1);
+    verifySpy.mockClear();
+
+    await nodeInstance.handleConfigFileChange("/tmp/new-config.json", createValidator(true));
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+
+    expect(verifySpy).toHaveBeenCalledTimes(1);
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Running post-reload device recovery: reconciling snapshots for the updated runtime configuration.",
+    );
+  });
+
+  it("should drop stale low-priority LSH traffic after a successful config reload", async () => {
+    await initializeNode();
+    mockNodeInstance.send.mockClear();
+
+    let releaseFirstSleep: (() => void) | undefined;
+    jest
+      .spyOn(utils, "sleep")
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstSleep = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+
+    const staleMessage = { topic: "LSH/stale-device/IN", payload: "stale" };
+
+    const drainRun = nodeInstance.processServiceResult(
+      createServiceResult({
+        messages: {
+          [Output.Lsh]: [{ topic: "LSH/live-device/IN", payload: "live" }, staleMessage],
+        },
+        staggerLshMessages: true,
+      }),
+    );
+
+    await flushMicrotasks();
+    expect(mockNodeInstance.send).toHaveBeenCalledTimes(1);
+
+    await nodeInstance.handleConfigFileChange("/tmp/new-config.json", createValidator(true));
+    await flushMicrotasks(6);
+
+    releaseFirstSleep?.();
+    await drainRun;
+    await flushMicrotasks(10);
+
+    const sentTopics = mockNodeInstance.send.mock.calls.flatMap((call) => {
+      const outputs = call[0] as Array<{ topic?: string } | null>;
+      return outputs
+        .map((message) => message?.topic ?? null)
+        .filter((topic): topic is string => topic !== null);
+    });
+
+    expect(sentTopics).not.toContain(staleMessage.topic);
+  });
+
+  it("should cancel a queued bridge probe when a stale low-priority batch is invalidated", async () => {
+    await initializeNode();
+
+    const service = (nodeInstance as unknown as { service: LshLogicService }).service;
+    service.processMessage("homie/test-device/$state", "ready", { retained: true });
+
+    const watchdogResult = service.runWatchdogCheck();
+    const probeMessage = watchdogResult.messages[Output.Lsh] as NodeMessage | undefined;
+    expect(probeMessage).toBeDefined();
+
+    let releaseFirstSleep: (() => void) | undefined;
+    jest
+      .spyOn(utils, "sleep")
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstSleep = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+
+    mockNodeInstance.send.mockClear();
+    const drainRun = nodeInstance.processServiceResult(
+      createServiceResult({
+        messages: {
+          [Output.Lsh]: [{ topic: "LSH/backlog/IN", payload: "backlog" }, probeMessage!],
+        },
+        staggerLshMessages: true,
+      }),
+    );
+
+    await flushMicrotasks();
+    expect(mockNodeInstance.send).toHaveBeenCalledTimes(1);
+
+    await nodeInstance.handleConfigFileChange("/tmp/new-config.json", createValidator(true));
+    await flushMicrotasks(6);
+
+    releaseFirstSleep?.();
+    await drainRun;
+    await flushMicrotasks(10);
+
+    const retryResult = service.runWatchdogCheck();
+    expect(retryResult.messages[Output.Lsh]).toEqual(probeMessage);
+  });
+
+  it("should cancel queued snapshot recovery cooldown when stale low-priority recovery is invalidated", async () => {
+    await initializeNode();
+
+    const service = (nodeInstance as unknown as { service: LshLogicService }).service;
+    service.processMessage("homie/test-device/$state", "ready", { retained: true });
+
+    const recoveryResult = service.processMessage("LSH/test-device/bridge", {
+      event: "service_ping_reply",
+      controller_connected: true,
+      runtime_synchronized: true,
+      bootstrap_phase: "synced",
+    });
+    const recoveryMessages = recoveryResult.messages[Output.Lsh] as NodeMessage[] | undefined;
+    expect(recoveryMessages).toHaveLength(2);
+
+    let releaseFirstSleep: (() => void) | undefined;
+    jest
+      .spyOn(utils, "sleep")
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstSleep = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+
+    mockNodeInstance.send.mockClear();
+    const drainRun = nodeInstance.processServiceResult(
+      createServiceResult({
+        messages: {
+          [Output.Lsh]: [{ topic: "LSH/backlog/IN", payload: "backlog" }, ...recoveryMessages!],
+        },
+        staggerLshMessages: true,
+      }),
+    );
+
+    await flushMicrotasks();
+    expect(mockNodeInstance.send).toHaveBeenCalledTimes(1);
+
+    await nodeInstance.handleConfigFileChange("/tmp/new-config.json", createValidator(true));
+    await flushMicrotasks(6);
+
+    releaseFirstSleep?.();
+    await drainRun;
+    await flushMicrotasks(10);
+
+    const retryResult = service.processMessage("LSH/test-device/bridge", {
+      event: "service_ping_reply",
+      controller_connected: true,
+      runtime_synchronized: true,
+      bootstrap_phase: "synced",
+    });
+    expect(retryResult.messages[Output.Lsh]).toEqual(recoveryMessages);
+  });
+
+  it("should allow snapshot recovery replacement when only the first recovery frame was sent before reload invalidated the second", async () => {
+    await initializeNode();
+
+    const service = (nodeInstance as unknown as { service: LshLogicService }).service;
+    service.processMessage("homie/test-device/$state", "ready", { retained: true });
+
+    const requestDetails: NodeMessage = {
+      topic: "LSH/test-device/IN",
+      payload: { p: LshProtocol.REQUEST_DETAILS },
+    };
+    const requestState: NodeMessage = {
+      topic: "LSH/test-device/IN",
+      payload: { p: LshProtocol.REQUEST_STATE },
+    };
+
+    let releaseFirstSleep: (() => void) | undefined;
+    jest
+      .spyOn(utils, "sleep")
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstSleep = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+
+    mockNodeInstance.send.mockClear();
+    const drainRun = nodeInstance.processServiceResult(
+      createServiceResult({
+        messages: {
+          [Output.Lsh]: [requestDetails, requestState],
+        },
+        staggerLshMessages: true,
+      }),
+    );
+
+    await flushMicrotasks();
+    expect(mockNodeInstance.send).toHaveBeenCalledTimes(1);
+    expect(mockNodeInstance.send).toHaveBeenLastCalledWith([
+      requestDetails,
+      null,
+      null,
+      null,
+      null,
+    ]);
+
+    await nodeInstance.handleConfigFileChange("/tmp/new-config.json", createValidator(true));
+    await flushMicrotasks(6);
+
+    releaseFirstSleep?.();
+    await drainRun;
+    await flushMicrotasks(10);
+
+    const retryResult = service.processMessage("LSH/test-device/bridge", {
+      event: "service_ping_reply",
+      controller_connected: true,
+      runtime_synchronized: true,
+      bootstrap_phase: "synced",
+    });
+    expect(
+      (retryResult.messages[Output.Lsh] as NodeMessage[] | undefined)?.map(
+        (message) => message.payload,
+      ),
+    ).toEqual([{ p: LshProtocol.REQUEST_DETAILS }, { p: LshProtocol.REQUEST_STATE }]);
   });
 
   it("should handle config reload failures", async () => {
@@ -409,17 +768,23 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     await nodeInstance.handleConfigFileChange("/tmp/bad-config.json", validateFn);
 
+    const service = (nodeInstance as unknown as { service: LshLogicService }).service;
+
     expect(mockNodeInstance.error).toHaveBeenCalledWith(
       "Error reloading /tmp/bad-config.json: Invalid system-config.json: invalid config",
     );
+    expect(mockNodeInstance.warn).toHaveBeenCalledWith(
+      "Keeping the last valid runtime configuration because a hot-reload failed.",
+    );
     expect(mockNodeInstance.status).toHaveBeenCalledWith({
-      fill: "red",
+      fill: "yellow",
       shape: "ring",
-      text: "Config reload failed",
+      text: "Reload failed, using last config",
     });
+    expect(service.getConfiguredDeviceNames()).toEqual(["test-device"]);
   });
 
-  it("should emit HA discovery cleanup when a config reload fails after discovery was published", async () => {
+  it("should keep published HA discovery state intact when a config reload fails", async () => {
     await initializeNode({
       ...defaultNodeConfig,
       haDiscovery: true,
@@ -450,24 +815,10 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
           Array.isArray(outputs) && Array.isArray(outputs[Output.Lsh]),
       );
 
-    expect(cleanupOutputs).toBeDefined();
-    expect(cleanupOutputs?.[Output.Lsh]).toEqual([
-      expect.objectContaining({
-        topic: "homeassistant/device/lsh_test-device/config",
-        payload: "",
-        qos: 1,
-        retain: true,
-      }),
-      expect.objectContaining({
-        topic: "homeassistant/sensor/lsh_test-device_homie_state/config",
-        payload: "",
-        qos: 1,
-        retain: true,
-      }),
-    ]);
+    expect(cleanupOutputs).toBeUndefined();
   });
 
-  it("should clear exposed registry state when a config reload fails", async () => {
+  it("should preserve exposed registry state when a config reload fails", async () => {
     await initializeNode({
       ...defaultNodeConfig,
       exposeStateContext: "flow",
@@ -494,6 +845,24 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
       service.processMessage("homie/test-device/$state", "ready"),
     );
 
+    const lastPublishedState = mockNodeInstance.__context.flow.set.mock.calls
+      .filter(([key]) => key === "lsh_state")
+      .at(-1)?.[1] as
+      | {
+          devices: Record<string, { lastSeenTime: number }>;
+        }
+      | undefined;
+
+    expect(lastPublishedState).toEqual(
+      expect.objectContaining({
+        devices: expect.objectContaining({
+          "test-device": expect.objectContaining({
+            lastSeenTime: expect.any(Number),
+          }),
+        }),
+      }),
+    );
+
     mockNodeInstance.__context.flow.set.mockClear();
 
     const validateFn = createValidator(false);
@@ -501,12 +870,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     await nodeInstance.handleConfigFileChange("/tmp/bad-config.json", validateFn);
 
-    expect(mockNodeInstance.__context.flow.set).toHaveBeenCalledWith(
-      "lsh_state",
-      expect.objectContaining({
-        devices: {},
-      }),
-    );
+    expect(mockNodeInstance.__context.flow.set).not.toHaveBeenCalled();
   });
 
   it("should serialize overlapping config reloads and apply them in request order", async () => {
@@ -550,6 +914,44 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     const service = (nodeInstance as unknown as { service: LshLogicService }).service;
     expect(service.getConfiguredDeviceNames()).toEqual(["config-b"]);
+  });
+
+  it("should skip MQTT reconfiguration when a successful reload keeps the same effective topic set", async () => {
+    await initializeNode();
+    mockNodeInstance.send.mockClear();
+
+    await nodeInstance.handleConfigFileChange("/tmp/same-config.json", createValidator(true));
+
+    expect(mockNodeInstance.send).not.toHaveBeenCalled();
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "MQTT topic set unchanged after config update. Skipping runtime subscription reconfiguration.",
+    );
+  });
+
+  it("should treat topic-set comparison as order-insensitive across config reordering", async () => {
+    jest
+      .mocked(fs.readFile)
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          devices: [{ name: "zeta-device" }, { name: "alpha-device" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          devices: [{ name: "alpha-device" }, { name: "zeta-device" }],
+        }),
+      );
+
+    await initializeNode();
+    mockNodeInstance.send.mockClear();
+    mockNodeInstance.log.mockClear();
+
+    await nodeInstance.handleConfigFileChange("/tmp/reordered-config.json", createValidator(true));
+
+    expect(mockNodeInstance.send).not.toHaveBeenCalled();
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "MQTT topic set unchanged after config update. Skipping runtime subscription reconfiguration.",
+    );
   });
 
   it("should delegate file watcher add/change events to the reload handler after debounce", async () => {
@@ -601,6 +1003,35 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
         lshBasePath: "custom/base",
       }),
     ).rejects.toThrow("LSH Base Path must end with '/'.");
+
+    await expect(
+      initializeNode({
+        ...defaultNodeConfig,
+        homieBasePath: "homie/#/",
+      }),
+    ).rejects.toThrow("Homie Base Path must not contain MQTT wildcards");
+
+    await expect(
+      initializeNode({
+        ...defaultNodeConfig,
+        lshBasePath: "LSH/+/",
+      }),
+    ).rejects.toThrow("LSH Base Path must not contain MQTT wildcards");
+
+    await expect(
+      initializeNode({
+        ...defaultNodeConfig,
+        serviceTopic: "LSH/Node-RED/#",
+      }),
+    ).rejects.toThrow("Service Topic must not contain MQTT wildcards");
+
+    await expect(
+      initializeNode({
+        ...defaultNodeConfig,
+        haDiscovery: true,
+        haDiscoveryPrefix: "homeassistant/#",
+      }),
+    ).rejects.toThrow("Discovery Prefix must not contain MQTT wildcards");
   });
 
   it("should run the initial verification timer using the configured LSH base path", async () => {
@@ -662,6 +1093,54 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     expect(verifySpy).toHaveBeenCalled();
     expect(startupSpy).toHaveBeenCalledTimes(1);
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Warm-up period finished. Node is now fully operational.",
+    );
+  });
+
+  it("should anchor startup warm-up to the last staggered startup ping dispatch instead of the fixed verification start", async () => {
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(false);
+    jest.spyOn(LshLogicService.prototype, "verifyInitialDeviceStates").mockReturnValue(
+      createServiceResult({
+        messages: {
+          [Output.Lsh]: [
+            { topic: "LSH/dev1/IN", payload: { p: LshProtocol.PING } },
+            { topic: "LSH/dev2/IN", payload: { p: LshProtocol.PING } },
+          ],
+        },
+        staggerLshMessages: true,
+      }),
+    );
+    jest
+      .spyOn(utils, "sleep")
+      .mockImplementation(() => new Promise<void>((resolve) => setTimeout(resolve, 250)));
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      initialStateTimeout: 2,
+      pingTimeout: 3,
+    });
+    mockNodeInstance.log.mockClear();
+
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+    jest.advanceTimersByTime(250);
+    await flushMicrotasks(6);
+
+    jest.advanceTimersByTime(2750);
+    await flushMicrotasks(6);
+    expect(mockNodeInstance.log).not.toHaveBeenCalledWith(
+      "Warm-up period finished. Node is now fully operational.",
+    );
+
+    jest.advanceTimersByTime(249);
+    await flushMicrotasks(6);
+    expect(mockNodeInstance.log).not.toHaveBeenCalledWith(
+      "Warm-up period finished. Node is now fully operational.",
+    );
+
+    jest.advanceTimersByTime(1);
+    await flushMicrotasks(6);
     expect(mockNodeInstance.log).toHaveBeenCalledWith(
       "Warm-up period finished. Node is now fully operational.",
     );
@@ -745,14 +1224,129 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     );
   });
 
+  it("should suppress late startup ping recoveries until pingTimeout after the last staggered startup ping dispatch", async () => {
+    jest.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        devices: [{ name: "dev1" }, { name: "dev2" }],
+      }),
+    );
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(false);
+    jest.spyOn(LshLogicService.prototype, "verifyInitialDeviceStates").mockReturnValue(
+      createServiceResult({
+        messages: {
+          [Output.Lsh]: [
+            { topic: "LSH/dev1/IN", payload: { p: LshProtocol.PING } },
+            { topic: "LSH/dev2/IN", payload: { p: LshProtocol.PING } },
+          ],
+        },
+        staggerLshMessages: true,
+      }),
+    );
+    jest
+      .spyOn(utils, "sleep")
+      .mockImplementation(() => new Promise<void>((resolve) => setTimeout(resolve, 250)));
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      initialStateTimeout: 2,
+      pingTimeout: 3,
+    });
+
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+    jest.advanceTimersByTime(250);
+    await flushMicrotasks(6);
+
+    mockNodeInstance.send.mockClear();
+    mockNodeInstance.log.mockClear();
+
+    jest.advanceTimersByTime(2850);
+    await flushMicrotasks(6);
+
+    const service = (nodeInstance as unknown as { service: LshLogicService }).service;
+    const result = service.processMessage("LSH/dev2/events", { p: LshProtocol.PING });
+    await nodeInstance.processServiceResult(result);
+
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Suppressing 'device recovered' alert during warm-up period.",
+    );
+    expect(mockNodeInstance.log).not.toHaveBeenCalledWith(
+      "Warm-up period finished. Node is now fully operational.",
+    );
+  });
+
+  it("should suppress late startup snapshot recoveries until pingTimeout after the last staggered startup recovery dispatch", async () => {
+    jest.mocked(fs.readFile).mockResolvedValue(
+      JSON.stringify({
+        devices: [{ name: "dev1" }],
+      }),
+    );
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(false);
+    jest.spyOn(LshLogicService.prototype, "verifyInitialDeviceStates").mockReturnValue(
+      createServiceResult({
+        messages: {
+          [Output.Lsh]: [
+            { topic: "LSH/dev1/IN", payload: { p: LshProtocol.REQUEST_DETAILS } },
+            { topic: "LSH/dev1/IN", payload: { p: LshProtocol.REQUEST_STATE } },
+          ],
+        },
+        staggerLshMessages: true,
+      }),
+    );
+    jest
+      .spyOn(utils, "sleep")
+      .mockImplementation(() => new Promise<void>((resolve) => setTimeout(resolve, 250)));
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      initialStateTimeout: 2,
+      pingTimeout: 3,
+    });
+
+    jest.advanceTimersByTime(500);
+    await flushMicrotasks(6);
+    jest.advanceTimersByTime(250);
+    await flushMicrotasks(6);
+
+    mockNodeInstance.send.mockClear();
+    mockNodeInstance.log.mockClear();
+
+    jest.advanceTimersByTime(2850);
+    await flushMicrotasks(6);
+    expect(mockNodeInstance.log).not.toHaveBeenCalledWith(
+      "Warm-up period finished. Node is now fully operational.",
+    );
+
+    const service = (nodeInstance as unknown as { service: LshLogicService }).service;
+    const result = service.processMessage("LSH/dev1/conf", {
+      p: LshProtocol.DEVICE_DETAILS,
+      v: LSH_WIRE_PROTOCOL_MAJOR,
+      n: "dev1",
+      a: [1],
+      b: [],
+    });
+    await nodeInstance.processServiceResult(result);
+
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Suppressing 'device recovered' alert during warm-up period.",
+    );
+    expect(mockNodeInstance.log).not.toHaveBeenCalledWith(
+      "Warm-up period finished. Node is now fully operational.",
+    );
+  });
+
   it("should run cleanup when the close handler is invoked", async () => {
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(false);
+    jest
+      .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
+      .mockReturnValue(createServiceResult());
     await initializeNode();
 
     mockNodeInstance.log.mockClear();
     const done = jest.fn();
 
     getCloseHandler(mockNodeInstance)(done);
-    await flushMicrotasks();
+    await flushMicrotasks(6);
 
     expect(mockNodeInstance.log).toHaveBeenCalledWith("Closing LSH Logic node.");
     expect(done).toHaveBeenCalled();

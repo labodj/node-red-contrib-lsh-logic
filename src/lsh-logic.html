@@ -9,7 +9,25 @@
 
   const validateTopicBase = (value) => {
     const normalized = String(value || "").trim();
-    return normalized.length > 0 && normalized.endsWith("/");
+    if (normalized.length === 0 || !normalized.endsWith("/")) {
+      return false;
+    }
+
+    const topicBody = normalized.slice(0, -1);
+    if (topicBody.length === 0 || /[+#]/.test(normalized)) {
+      return false;
+    }
+
+    return topicBody.split("/").every((segment) => segment.length > 0);
+  };
+
+  const validateConcreteTopic = (value) => {
+    const normalized = String(value || "").trim();
+    if (normalized.length === 0 || normalized.endsWith("/") || /[+#]/.test(normalized)) {
+      return false;
+    }
+
+    return normalized.split("/").every((segment) => segment.length > 0);
   };
 
   function validateContextBackedKey(value, contextFieldName) {
@@ -38,7 +56,7 @@
       return true;
     }
 
-    return String(value || "").trim().length > 0;
+    return validateConcreteTopic(value);
   }
 
   RED.nodes.registerType("lsh-logic", {
@@ -52,7 +70,7 @@
       serviceTopic: {
         value: "LSH/Node-RED/SRV",
         required: true,
-        validate: validateRequiredTrimmed,
+        validate: validateConcreteTopic,
       },
       protocol: { value: "json", required: true },
       // Context Key Prefixes
@@ -235,19 +253,25 @@
     <div class="form-row">
       <label for="node-input-homieBasePath">Homie Base Path</label>
       <input type="text" id="node-input-homieBasePath" placeholder="e.g., homie/" />
-      <span class="lsh-form-tip">Base path for Homie topics. Must end with a '/'.</span>
+      <span class="lsh-form-tip"
+        >Base path for Homie topics. Must end with a '/' and must not contain MQTT wildcards or
+        empty segments.</span
+      >
     </div>
     <div class="form-row">
       <label for="node-input-lshBasePath">LSH Base Path</label>
       <input type="text" id="node-input-lshBasePath" placeholder="e.g., LSH/" />
-      <span class="lsh-form-tip">Base path for LSH topics. Must end with a '/'.</span>
+      <span class="lsh-form-tip"
+        >Base path for LSH topics. Must end with a '/' and must not contain MQTT wildcards or empty
+        segments.</span
+      >
     </div>
     <div class="form-row">
       <label for="node-input-serviceTopic">Service Topic</label>
       <input type="text" id="node-input-serviceTopic" placeholder="e.g., LSH/Node-RED/SRV" />
       <span class="lsh-form-tip"
-        >Hop-local bridge service topic used for <code>PING</code> and startup
-        <code>BOOT</code>.</span
+        >Hop-local bridge service topic used for <code>PING</code> and startup <code>BOOT</code>.
+        Must be a concrete topic, not a wildcard subscription.</span
       >
     </div>
 
@@ -469,7 +493,8 @@
     <li>
       <strong>Declarative System Configuration:</strong> Define all your system's devices in a
       single, clear <code>system-config.json</code> file. The node automatically hot-reloads the
-      configuration when the file is modified.
+      configuration when the file is modified, and startup can recover automatically if the config
+      file is temporarily invalid and then fixed.
     </li>
     <li>
       <strong>Centralized State Management:</strong> Maintains an in-memory registry of all device
@@ -482,7 +507,9 @@
     </li>
     <li>
       <strong>Reliable Network Protocol:</strong> Uses a two-phase commit protocol for network-based
-      button clicks to ensure commands are not lost, even on unreliable networks.
+      button clicks using a request/ACK/confirm handshake. Targets are revalidated at confirm time,
+      so execution follows the best current live topology instead of claiming hard distributed
+      atomicity.
     </li>
     <li>
       <strong>Intelligent Watchdog:</strong> Actively monitors device health using a combination of
@@ -494,7 +521,8 @@
     <li>
       <strong>Dynamic Topic Management:</strong> Emits messages on a dedicated output to dynamically
       configure an <code>mqtt-in</code> node, automatically managing topic subscriptions and
-      unsubscriptions as your system configuration changes.
+      unsubscriptions as your system configuration changes. Reconfiguration is skipped completely
+      when a successful reload leaves the effective topic set unchanged.
     </li>
   </ul>
 
@@ -512,6 +540,11 @@
     <code>bridge</code> topics carry bridge-local runtime events emitted by <code>lsh-bridge</code>.
     The node accepts bridge-local payloads as informational runtime events, but it does not treat
     them as click traffic or as proof that the controller is currently reachable.
+  </p>
+  <p>
+    Home Assistant discovery also listens to retained Homie node metadata. Writable boolean
+    <code>state</code> nodes become toggle entities, read-only booleans become binary sensors, and
+    all other nodes fall back to plain sensors.
   </p>
 
   <h3>Outputs</h3>
@@ -551,7 +584,9 @@
     <dt>MQTT Path Settings</dt>
     <dd>
       Defines the base MQTT paths for all topics the node interacts with. These must match your
-      system's topic structure (e.g., <code>homie/</code>, <code>LSH/</code>).
+      system's topic structure (e.g., <code>homie/</code>, <code>LSH/</code>). Base paths must end
+      with <code>/</code>, use only non-empty literal topic segments, and must not contain MQTT
+      wildcards. The service topic must also be a concrete publish topic without wildcards.
     </dd>
 
     <dt>System Config</dt>
@@ -603,6 +638,11 @@
       or a successful watchdog <code>PING</code> response.
     </li>
     <li>
+      If startup begins with an invalid or unreadable <code>system-config.json</code>, the node
+      stays in <code>Config Error</code> but keeps the file watcher active. Fixing the file later
+      triggers a normal recovery load without requiring a Node-RED restart.
+    </li>
+    <li>
       If a device is offline during startup, it is recovered automatically later when it sends live
       traffic again; the node will request only the missing snapshot pieces at that moment.
     </li>
@@ -622,11 +662,12 @@
     >
   </p>
   <p>
-    When the flow is deployed or when the configuration file changes, the `lsh-logic` node will send
-    a sequence of messages to the `mqtt-in` node to first
+    When the flow is deployed or when the effective MQTT topic set changes, the `lsh-logic` node
+    will send a sequence of messages to the `mqtt-in` node to first
     <strong>unsubscribe from all</strong> previous topics and then
     <strong>subscribe to the new, correct list of topics</strong>. This ensures your system is
-    always listening to exactly the right channels without any manual intervention.
+    always listening to exactly the right channels without any manual intervention. Pure logic-only
+    reloads that keep the same effective topic set do not churn subscriptions.
   </p>
 
   <h4>Configuration File Management</h4>

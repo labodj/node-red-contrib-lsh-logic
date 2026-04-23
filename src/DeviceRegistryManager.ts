@@ -35,7 +35,7 @@ export class DeviceRegistryManager {
    * Incremental read-optimized snapshot used for exposure outside the manager.
    * Each device entry is cloned only when that device changes.
    */
-  private registrySnapshot: DeviceRegistrySnapshot = {};
+  private registrySnapshot: DeviceRegistrySnapshot = Object.freeze({});
   /** The prefix used to construct context keys for reading external device states. */
   private readonly otherDevicesPrefix: string;
   /** A reference to the context reader for fetching external states (e.g., from flow or global context). */
@@ -64,11 +64,20 @@ export class DeviceRegistryManager {
   private _publishDeviceSnapshot(deviceName: string): void {
     const device = this.registry[deviceName];
     if (!device) {
-      delete this.registrySnapshot[deviceName];
+      if (!(deviceName in this.registrySnapshot)) {
+        return;
+      }
+
+      const nextSnapshot: DeviceRegistrySnapshot = { ...this.registrySnapshot };
+      delete nextSnapshot[deviceName];
+      this.registrySnapshot = Object.freeze(nextSnapshot);
       return;
     }
 
-    this.registrySnapshot[deviceName] = this._createDeviceSnapshot(device);
+    this.registrySnapshot = Object.freeze({
+      ...this.registrySnapshot,
+      [deviceName]: this._createDeviceSnapshot(device),
+    });
   }
 
   /**
@@ -85,6 +94,7 @@ export class DeviceRegistryManager {
         // A new device is assumed to be bridge-disconnected and controller-unhealthy
         // until telemetry proves otherwise.
         connected: false,
+        controllerLinkConnected: null,
         isHealthy: false,
         isStale: false,
         alertSent: false,
@@ -140,7 +150,7 @@ export class DeviceRegistryManager {
    */
   public pruneDevice(deviceName: string): void {
     delete this.registry[deviceName];
-    delete this.registrySnapshot[deviceName];
+    this._publishDeviceSnapshot(deviceName);
   }
 
   /**
@@ -149,7 +159,7 @@ export class DeviceRegistryManager {
    */
   public reset(): void {
     this.registry = {};
-    this.registrySnapshot = {};
+    this.registrySnapshot = Object.freeze({});
   }
 
   /**
@@ -261,6 +271,13 @@ export class DeviceRegistryManager {
   ): { stateChanged: boolean; wasConnected: boolean; isConnected: boolean } {
     const device = this._ensureDeviceExists(deviceName);
     const wasConnected = device.bridgeConnected;
+
+    // Homie `init` and `sleeping` are diagnostic-only runtime hints. They must
+    // never mutate the bridge/controller reachability booleans.
+    if (homieState !== "ready" && homieState !== "lost") {
+      return { stateChanged: false, wasConnected, isConnected: wasConnected };
+    }
+
     const isConnected = homieState === "ready";
 
     if (wasConnected === isConnected) {
@@ -275,6 +292,7 @@ export class DeviceRegistryManager {
     if (!isConnected) {
       // Once the bridge is offline, the controller cannot be considered reachable.
       device.connected = false;
+      device.controllerLinkConnected = null;
       device.isHealthy = false;
       device.isStale = false;
     }
@@ -335,6 +353,7 @@ export class DeviceRegistryManager {
     device.bridgeLastSeenTime = device.lastSeenTime;
     device.connected = true;
     device.bridgeConnected = true;
+    device.controllerLinkConnected = true;
 
     if (becameHealthy) {
       device.isHealthy = true;
@@ -379,6 +398,7 @@ export class DeviceRegistryManager {
 
     device.bridgeConnected = true;
     device.bridgeLastSeenTime = now;
+    device.controllerLinkConnected = controllerConnected;
 
     const controllerDisconnected = !controllerConnected && controllerWasOperational;
 
@@ -438,6 +458,11 @@ export class DeviceRegistryManager {
           device.isStale = true;
           stateChanged = true;
         }
+        break;
+
+      // A queued retry must keep the stale latch without generating another
+      // semantic state transition on every watchdog tick.
+      case "retry_queued":
         break;
 
       case "unhealthy":

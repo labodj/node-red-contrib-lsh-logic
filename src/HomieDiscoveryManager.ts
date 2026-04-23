@@ -1,153 +1,36 @@
-import type { NodeMessage } from "node-red";
-
+import {
+  buildDeviceCleanupMessages,
+  buildDiscoveryPayloads,
+  type DiscoveryMessage,
+} from "./HomieDiscoveryManager.payloads";
+import {
+  normalizeDeviceDiscoveryConfig,
+  normalizeDiscoveryStateDatatype,
+  parseDiscoveryStateMetadataTopic,
+  parseDiscoveryStateSettable,
+} from "./HomieDiscoveryManager.helpers";
 import { Output } from "./types";
 import { appendLshMessages, createEmptyServiceResult } from "./LshLogicService.helpers";
-import { PACKAGE_VERSION } from "./version";
+import type { DeviceEntry, ServiceResult } from "./types";
 import type {
-  DeviceEntry,
-  DeviceHomeAssistantDiscoveryConfig,
-  HomeAssistantNodeDiscoveryConfig,
-  HomeAssistantActuatorPlatform,
-  ServiceResult,
-} from "./types";
-
-type DiscoveryCategory = "diagnostic";
-type DiscoveryPlatform = HomeAssistantActuatorPlatform | "sensor" | "binary_sensor";
-type ToggleDiscoveryPlatform = HomeAssistantActuatorPlatform;
-type AvailabilityPayload = "ready" | "lost";
-type BooleanLiteral = "true" | "false";
-
-interface DeviceDiscoveryDefinition {
-  name: string;
-  topic: string;
-  icon: string;
-  cat: DiscoveryCategory;
-  class?: string;
-  unit?: string;
-  state_class?: "measurement";
-}
-
-interface HomeAssistantOrigin {
-  name: string;
-  sw_version: string;
-  support_url: string;
-}
-
-interface HomeAssistantDevice {
-  name: string;
-  manufacturer: string;
-  identifiers: [string];
-  model: string;
-  connections: [["mac", string]];
-  sw_version: string;
-}
-
-interface DiscoveryContext {
-  deviceId: string;
-  deviceObjectId: string;
-  baseTopic: string;
-  baseDevice: HomeAssistantDevice;
-}
-
-interface NormalizedNodeDiscoveryConfig {
-  platform?: ToggleDiscoveryPlatform;
-  name?: string;
-  defaultEntityId?: string;
-  icon?: string;
-}
-
-interface NormalizedDeviceDiscoveryConfig {
-  deviceName?: string;
-  defaultPlatform?: ToggleDiscoveryPlatform;
-  nodes: Readonly<Record<string, NormalizedNodeDiscoveryConfig>>;
-}
-
-interface DiscoveryComponentBase {
-  name: string;
-  unique_id: string;
-  default_entity_id: string;
-  state_topic: string;
-  icon?: string;
-  entity_category?: DiscoveryCategory;
-  device_class?: string;
-  unit_of_measurement?: string;
-  state_class?: "measurement";
-}
-
-interface ToggleDiscoveryComponent extends DiscoveryComponentBase {
-  platform: ToggleDiscoveryPlatform;
-  command_topic: string;
-  payload_on: BooleanLiteral;
-  payload_off: BooleanLiteral;
-}
-
-interface SensorDiscoveryComponent extends DiscoveryComponentBase {
-  platform: "sensor";
-}
-
-interface BinarySensorDiscoveryComponent extends DiscoveryComponentBase {
-  platform: "binary_sensor";
-  payload_on: BooleanLiteral;
-  payload_off: BooleanLiteral;
-}
-
-interface RemovedDiscoveryComponent {
-  platform: DiscoveryPlatform;
-}
-
-type DiscoveryComponent =
-  | ToggleDiscoveryComponent
-  | SensorDiscoveryComponent
-  | BinarySensorDiscoveryComponent;
-
-type DiscoveryComponentUpdate = DiscoveryComponent | RemovedDiscoveryComponent;
-
-interface DeviceDiscoveryPayload {
-  device: HomeAssistantDevice;
-  origin: HomeAssistantOrigin;
-  availability_topic: string;
-  payload_available: AvailabilityPayload;
-  payload_not_available: AvailabilityPayload;
-  qos: 2;
-  components: Record<string, DiscoveryComponentUpdate>;
-}
-
-interface SingleSensorDiscoveryPayload {
-  name: string;
-  unique_id: string;
-  default_entity_id: string;
-  state_topic: string;
-  icon: string;
-  entity_category: DiscoveryCategory;
-  device: HomeAssistantDevice;
-  origin: HomeAssistantOrigin;
-}
-
-type DiscoveryPayload = DeviceDiscoveryPayload | SingleSensorDiscoveryPayload;
-type DiscoveryMessagePayload = DiscoveryPayload | "";
-
-type DiscoveryMessage = NodeMessage & {
-  topic: string;
-  payload: DiscoveryMessagePayload;
-  qos: 1;
-  retain: true;
-};
-
-interface DiscoveryComponentEntry {
-  id: string;
-  platform: DiscoveryPlatform;
-  config: DiscoveryComponent;
-}
+  DiscoveryNodeRuntimeMetadata,
+  DiscoveryPlatform,
+  NormalizedDeviceDiscoveryConfig,
+} from "./HomieDiscoveryManager.helpers";
 
 /**
  * State definitions for the Homie Discovery Manager.
  */
 interface DeviceDiscoveryState {
   lastSeenAt: number;
+  runtimeDeviceId: string;
   mac?: string;
   fw_version?: string;
   nodes?: string[];
+  node_metadata?: Record<string, DiscoveryNodeRuntimeMetadata>;
   last_component_platforms?: Record<string, DiscoveryPlatform>;
+  last_discovery_signature?: string;
+  pending_discovery_flush_at?: number;
 }
 
 interface ReadyDeviceDiscoveryState extends DeviceDiscoveryState {
@@ -155,44 +38,6 @@ interface ReadyDeviceDiscoveryState extends DeviceDiscoveryState {
   fw_version: string;
   nodes: string[];
 }
-
-const normalizeOptionalString = (value: string | undefined): string | undefined => {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-};
-
-const normalizeNodeDiscoveryConfig = (
-  config: HomeAssistantNodeDiscoveryConfig,
-): NormalizedNodeDiscoveryConfig => ({
-  platform: config.platform,
-  name: normalizeOptionalString(config.name),
-  defaultEntityId: normalizeOptionalString(config.defaultEntityId),
-  icon: normalizeOptionalString(config.icon),
-});
-
-const normalizeDeviceDiscoveryConfig = (
-  config: DeviceHomeAssistantDiscoveryConfig | undefined,
-): NormalizedDeviceDiscoveryConfig | undefined => {
-  if (!config) {
-    return undefined;
-  }
-
-  const normalizedNodeEntries = Object.entries(config.nodes ?? {})
-    .map(([nodeId, nodeConfig]): [string, NormalizedNodeDiscoveryConfig] => [
-      nodeId.toLowerCase(),
-      normalizeNodeDiscoveryConfig(nodeConfig),
-    ])
-    .sort(([left], [right]) => left.localeCompare(right));
-
-  const normalizedNodes: Record<string, NormalizedNodeDiscoveryConfig> =
-    Object.fromEntries(normalizedNodeEntries);
-
-  return {
-    deviceName: normalizeOptionalString(config.deviceName),
-    defaultPlatform: config.defaultPlatform,
-    nodes: normalizedNodes,
-  };
-};
 
 /**
  * Manages the conversion of Homie devices to Home Assistant MQTT device discovery payloads.
@@ -205,113 +50,11 @@ export class HomieDiscoveryManager {
     new Map();
   private readonly configuredDeviceIds: Set<string> = new Set();
   private readonly pendingCleanupDeviceIds: Set<string> = new Set();
-  private static originCache: HomeAssistantOrigin | null = null;
+  private discoveryConfigDirty = false;
+  private discoveryConfigSignature = "[]";
   private static readonly UNCONFIGURED_DEVICE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
   private static readonly VALID_NODE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
-
-  private static readonly SENSORS_DEF: readonly DeviceDiscoveryDefinition[] = [
-    { name: "MAC Address", topic: "$mac", icon: "mdi:ethernet", cat: "diagnostic" },
-    { name: "Local IP", topic: "$localip", icon: "mdi:ip-network", cat: "diagnostic" },
-    { name: "Homie Version", topic: "$homie", icon: "mdi:tag", cat: "diagnostic" },
-    {
-      name: "Firmware Version",
-      topic: "$fw/version",
-      icon: "mdi:cellphone-arrow-down",
-      cat: "diagnostic",
-    },
-    { name: "Firmware Name", topic: "$fw/name", icon: "mdi:label", cat: "diagnostic" },
-    {
-      name: "Firmware Checksum",
-      topic: "$fw/checksum",
-      icon: "mdi:shield-check-outline",
-      cat: "diagnostic",
-    },
-    {
-      name: "Uptime",
-      topic: "$stats/uptime",
-      icon: "mdi:timer-sand",
-      class: "duration",
-      unit: "s",
-      cat: "diagnostic",
-      state_class: "measurement",
-    },
-    {
-      name: "WiFi Uptime",
-      topic: "$stats/uptimewifi",
-      icon: "mdi:wifi-clock",
-      class: "duration",
-      unit: "s",
-      cat: "diagnostic",
-      state_class: "measurement",
-    },
-    {
-      name: "MQTT Uptime",
-      topic: "$stats/uptimemqtt",
-      icon: "mdi:network-outline-clock",
-      class: "duration",
-      unit: "s",
-      cat: "diagnostic",
-      state_class: "measurement",
-    },
-    {
-      name: "Signal Strength",
-      topic: "$stats/signal",
-      icon: "mdi:wifi",
-      unit: "%",
-      cat: "diagnostic",
-      state_class: "measurement",
-    },
-    {
-      name: "Free Heap",
-      topic: "$stats/freeheap",
-      icon: "mdi:memory",
-      class: "data_size",
-      unit: "B",
-      cat: "diagnostic",
-      state_class: "measurement",
-    },
-    {
-      name: "Stats Interval",
-      topic: "$stats/interval",
-      icon: "mdi:timer-sync-outline",
-      unit: "s",
-      cat: "diagnostic",
-      state_class: "measurement",
-    },
-    {
-      name: "Implementation",
-      topic: "$implementation",
-      icon: "mdi:code-braces",
-      cat: "diagnostic",
-    },
-    {
-      name: "Implementation Version",
-      topic: "$implementation/version",
-      icon: "mdi:tag-outline",
-      cat: "diagnostic",
-    },
-    {
-      name: "Implementation Config",
-      topic: "$implementation/config",
-      icon: "mdi:code-json",
-      cat: "diagnostic",
-    },
-    {
-      name: "OTA Status",
-      topic: "$implementation/ota/status",
-      icon: "mdi:update",
-      cat: "diagnostic",
-    },
-  ];
-
-  private static readonly BINARY_SENSORS_DEF: readonly DeviceDiscoveryDefinition[] = [
-    {
-      name: "OTA Enabled",
-      topic: "$implementation/ota/enabled",
-      icon: "mdi:cellphone-arrow-down-cog",
-      cat: "diagnostic",
-    },
-  ];
+  private static readonly DISCOVERY_METADATA_SETTLE_MS = 150;
 
   constructor(
     private readonly homieBasePath: string,
@@ -319,29 +62,38 @@ export class HomieDiscoveryManager {
     private readonly now: () => number = Date.now,
   ) {}
 
-  private static getOrigin(): HomeAssistantOrigin {
-    if (!this.originCache) {
-      this.originCache = {
-        name: "node-red-contrib-lsh-logic",
-        sw_version: PACKAGE_VERSION,
-        support_url: "https://github.com/labodj/node-red-contrib-lsh-logic",
-      };
-    }
-
-    return this.originCache;
+  private toCanonicalDeviceId(deviceId: string): string {
+    return deviceId.toLowerCase();
   }
 
   public setDiscoveryConfig(deviceConfigMap: ReadonlyMap<string, DeviceEntry>): void {
+    const seenDeviceIds = new Map<string, string>();
+    for (const deviceId of deviceConfigMap.keys()) {
+      const canonicalDeviceId = deviceId.toLowerCase();
+      const previousDeviceId = seenDeviceIds.get(canonicalDeviceId);
+      if (previousDeviceId) {
+        throw new Error(
+          `Configured device names '${previousDeviceId}' and '${deviceId}' collide after case-insensitive normalization used by Home Assistant discovery.`,
+        );
+      }
+      seenDeviceIds.set(canonicalDeviceId, deviceId);
+    }
+
     const previouslyConfiguredDeviceIds = new Set(this.configuredDeviceIds);
+    const nextConfigEntries: Array<[string, NormalizedDeviceDiscoveryConfig | null]> = [];
     this.configuredDeviceIds.clear();
     this.discoveryConfigByDevice.clear();
 
-    for (const [deviceId, deviceEntry] of deviceConfigMap) {
-      this.configuredDeviceIds.add(deviceId);
+    for (const [deviceId, deviceEntry] of Array.from(deviceConfigMap.entries()).sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      const canonicalDeviceId = this.toCanonicalDeviceId(deviceId);
+      this.configuredDeviceIds.add(canonicalDeviceId);
       const normalizedConfig = normalizeDeviceDiscoveryConfig(deviceEntry.haDiscovery);
       if (normalizedConfig) {
-        this.discoveryConfigByDevice.set(deviceId, normalizedConfig);
+        this.discoveryConfigByDevice.set(canonicalDeviceId, normalizedConfig);
       }
+      nextConfigEntries.push([canonicalDeviceId, normalizedConfig ?? null]);
     }
 
     for (const deviceId of previouslyConfiguredDeviceIds) {
@@ -349,6 +101,12 @@ export class HomieDiscoveryManager {
         this.pendingCleanupDeviceIds.add(deviceId);
         this.discoveryState.delete(deviceId);
       }
+    }
+
+    const nextSignature = JSON.stringify(nextConfigEntries);
+    if (nextSignature !== this.discoveryConfigSignature) {
+      this.discoveryConfigDirty = true;
+      this.discoveryConfigSignature = nextSignature;
     }
 
     this.pruneStaleWildcardDiscoveryState(this.now());
@@ -366,13 +124,34 @@ export class HomieDiscoveryManager {
     this.configuredDeviceIds.clear();
     this.discoveryConfigByDevice.clear();
     this.discoveryState.clear();
+    this.discoveryConfigDirty = false;
+    this.discoveryConfigSignature = "[]";
     return result;
   }
 
+  /**
+   * Regenerates retained discovery payloads only when the effective configured
+   * discovery model changed. Cleanup payloads for removed devices are still
+   * emitted immediately when present.
+   */
+  public syncConfigIfNeeded(): ServiceResult {
+    return this.collectDiscoveryPayloads(false);
+  }
+
   public regenerateDiscoveryPayloads(): ServiceResult {
+    return this.collectDiscoveryPayloads(true);
+  }
+
+  /**
+   * Flushes any ready device whose discovery publication was intentionally
+   * delayed to let retained `state/$datatype` and `state/$settable` stabilize.
+   */
+  public flushPendingDiscovery(now: number = this.now()): ServiceResult {
     const result = createEmptyServiceResult();
     const discoveryMessages: DiscoveryMessage[] = [];
-    this.pruneStaleWildcardDiscoveryState(this.now());
+    let flushedDeviceCount = 0;
+
+    this.pruneStaleWildcardDiscoveryState(now);
     this.appendPendingCleanupMessages(result);
 
     for (const [deviceId, deviceData] of this.discoveryState.entries()) {
@@ -380,8 +159,69 @@ export class HomieDiscoveryManager {
         continue;
       }
 
-      const { messages, componentPlatforms } = this.generateDiscoveryPayloads(deviceId, deviceData);
+      if (
+        deviceData.pending_discovery_flush_at === undefined ||
+        deviceData.pending_discovery_flush_at > now
+      ) {
+        continue;
+      }
+
+      const { messages, componentPlatforms, signature } = this.generateDiscoveryPayloads(
+        deviceId,
+        deviceData,
+      );
+      delete deviceData.pending_discovery_flush_at;
+      deviceData.last_component_platforms = componentPlatforms;
+
+      if (signature === deviceData.last_discovery_signature) {
+        continue;
+      }
+
+      deviceData.last_discovery_signature = signature;
       discoveryMessages.push(...messages);
+      flushedDeviceCount++;
+    }
+
+    if (discoveryMessages.length > 0) {
+      appendLshMessages(result, discoveryMessages);
+      result.logs.push(
+        `Generated HA device discovery config for ${flushedDeviceCount} device(s) after metadata settle (${discoveryMessages.length} messages).`,
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Collects retained discovery payloads through the single production code path.
+   * `syncConfigIfNeeded()` uses this with `force=false`, while tests and explicit
+   * maintenance paths may use `force=true` without duplicating the generation logic.
+   */
+  private collectDiscoveryPayloads(force: boolean): ServiceResult {
+    const result = createEmptyServiceResult();
+    const discoveryMessages: DiscoveryMessage[] = [];
+    this.pruneStaleWildcardDiscoveryState(this.now());
+    this.appendPendingCleanupMessages(result);
+
+    if (!force && !this.discoveryConfigDirty) {
+      return result;
+    }
+
+    this.discoveryConfigDirty = false;
+
+    for (const [deviceId, deviceData] of this.discoveryState.entries()) {
+      if (!this.isDeviceReady(deviceData)) {
+        continue;
+      }
+
+      const { messages, componentPlatforms, signature } = this.generateDiscoveryPayloads(
+        deviceId,
+        deviceData,
+      );
+      if (force || signature !== deviceData.last_discovery_signature) {
+        discoveryMessages.push(...messages);
+        deviceData.last_discovery_signature = signature;
+      }
       deviceData.last_component_platforms = componentPlatforms;
     }
 
@@ -413,10 +253,12 @@ export class HomieDiscoveryManager {
   ): ServiceResult {
     const result = createEmptyServiceResult();
     const now = this.now();
+    const canonicalDeviceId = this.toCanonicalDeviceId(deviceId);
     this.pruneStaleWildcardDiscoveryState(now);
 
-    const deviceData = this.getOrCreateDeviceData(deviceId, now);
+    const deviceData = this.getOrCreateDeviceData(deviceId, canonicalDeviceId, now);
     deviceData.lastSeenAt = now;
+    deviceData.runtimeDeviceId = deviceId;
     const { changed: updated, warnings } = this.updateDeviceData(
       deviceId,
       deviceData,
@@ -426,11 +268,25 @@ export class HomieDiscoveryManager {
     result.warnings.push(...warnings);
 
     if (updated && this.isDeviceReady(deviceData)) {
-      const { messages, componentPlatforms } = this.generateDiscoveryPayloads(deviceId, deviceData);
-      result.messages[Output.Lsh] = messages;
-      result.logs.push(
-        `Generated HA device discovery config for ${deviceId} (${messages.length} messages)`,
+      if (this.shouldDeferDiscoveryPublication(deviceData, topicSuffix)) {
+        deviceData.pending_discovery_flush_at =
+          now + HomieDiscoveryManager.DISCOVERY_METADATA_SETTLE_MS;
+        result.discoveryFlushDelayMs = HomieDiscoveryManager.DISCOVERY_METADATA_SETTLE_MS;
+        return result;
+      }
+
+      const { messages, componentPlatforms, signature } = this.generateDiscoveryPayloads(
+        canonicalDeviceId,
+        deviceData,
       );
+      if (signature !== deviceData.last_discovery_signature) {
+        result.messages[Output.Lsh] = messages;
+        deviceData.last_discovery_signature = signature;
+        result.logs.push(
+          `Generated HA device discovery config for ${deviceData.runtimeDeviceId} (${messages.length} messages)`,
+        );
+      }
+      delete deviceData.pending_discovery_flush_at;
       deviceData.last_component_platforms = componentPlatforms;
     }
 
@@ -442,18 +298,44 @@ export class HomieDiscoveryManager {
    * @param deviceId - The device identifier.
    * @returns The discovery state object for the device.
    */
-  private getOrCreateDeviceData(deviceId: string, now: number): DeviceDiscoveryState {
-    let deviceData = this.discoveryState.get(deviceId);
+  private getOrCreateDeviceData(
+    runtimeDeviceId: string,
+    canonicalDeviceId: string,
+    now: number,
+  ): DeviceDiscoveryState {
+    let deviceData = this.discoveryState.get(canonicalDeviceId);
     if (!deviceData) {
       // A wildcard device may legitimately reappear after its transient state
       // was pruned but before the retained cleanup queue is flushed. In that
       // case the pending tombstones must be cancelled so the renewed discovery
       // config is not deleted by a stale cleanup batch.
-      this.pendingCleanupDeviceIds.delete(deviceId);
-      deviceData = { lastSeenAt: now };
-      this.discoveryState.set(deviceId, deviceData);
+      this.pendingCleanupDeviceIds.delete(canonicalDeviceId);
+      deviceData = { lastSeenAt: now, runtimeDeviceId };
+      this.discoveryState.set(canonicalDeviceId, deviceData);
     }
     return deviceData;
+  }
+
+  private shouldDeferDiscoveryPublication(
+    data: ReadyDeviceDiscoveryState,
+    topicSuffix: string,
+  ): boolean {
+    if (parseDiscoveryStateMetadataTopic(topicSuffix) !== null) {
+      return true;
+    }
+
+    if (topicSuffix !== "/$nodes") {
+      return false;
+    }
+
+    return data.nodes.some((nodeId) => {
+      const metadata = data.node_metadata?.[nodeId.toLowerCase()];
+      if (!metadata?.stateDatatype) {
+        return true;
+      }
+
+      return metadata.stateDatatype === "boolean" && metadata.stateSettable === undefined;
+    });
   }
 
   /**
@@ -493,23 +375,7 @@ export class HomieDiscoveryManager {
   }
 
   private buildDeviceCleanupMessages(deviceId: string): DiscoveryMessage[] {
-    const deviceObjectId = `lsh_${deviceId.toLowerCase()}`;
-    const homieStateComponentId = `${deviceObjectId}_homie_state`;
-
-    return [
-      {
-        topic: `${this.discoveryPrefix}/device/${deviceObjectId}/config`,
-        payload: "",
-        qos: 1,
-        retain: true,
-      },
-      {
-        topic: `${this.discoveryPrefix}/sensor/${homieStateComponentId}/config`,
-        payload: "",
-        qos: 1,
-        retain: true,
-      },
-    ];
+    return buildDeviceCleanupMessages(this.discoveryPrefix, this.toCanonicalDeviceId(deviceId));
   }
 
   /**
@@ -525,6 +391,17 @@ export class HomieDiscoveryManager {
     topicSuffix: string,
     payload: string,
   ): { changed: boolean; warnings: string[] } {
+    const metadataTopic = parseDiscoveryStateMetadataTopic(topicSuffix);
+    if (metadataTopic) {
+      return this.updateNodeMetadata(
+        deviceId,
+        data,
+        metadataTopic.nodeId,
+        metadataTopic.field,
+        payload,
+      );
+    }
+
     switch (topicSuffix) {
       case "/$mac": {
         if (data.mac !== payload) {
@@ -565,12 +442,84 @@ export class HomieDiscoveryManager {
         }
         if (!this.areNodesEqual(data.nodes, newNodes)) {
           data.nodes = newNodes;
+          this.pruneNodeMetadata(data, newNodes);
           return { changed: true, warnings };
         }
         return { changed: false, warnings };
       }
     }
     return { changed: false, warnings: [] };
+  }
+
+  private updateNodeMetadata(
+    deviceId: string,
+    data: DeviceDiscoveryState,
+    nodeId: string,
+    field: "stateDatatype" | "stateSettable",
+    payload: string,
+  ): { changed: boolean; warnings: string[] } {
+    const canonicalNodeId = nodeId.toLowerCase();
+    const nodeMetadata = data.node_metadata ?? (data.node_metadata = {});
+    const currentMetadata = nodeMetadata[canonicalNodeId] ?? {};
+
+    if (field === "stateDatatype") {
+      const normalizedDatatype = normalizeDiscoveryStateDatatype(payload);
+      if (normalizedDatatype === null) {
+        return {
+          changed: false,
+          warnings: [
+            `Ignored Homie state datatype for '${deviceId}/${nodeId}' because it was empty.`,
+          ],
+        };
+      }
+
+      if (currentMetadata.stateDatatype === normalizedDatatype) {
+        return { changed: false, warnings: [] };
+      }
+
+      nodeMetadata[canonicalNodeId] = {
+        ...currentMetadata,
+        stateDatatype: normalizedDatatype,
+      };
+      return { changed: true, warnings: [] };
+    }
+
+    const normalizedSettable = parseDiscoveryStateSettable(payload);
+    if (normalizedSettable === null) {
+      return {
+        changed: false,
+        warnings: [
+          `Ignored Homie state settable flag for '${deviceId}/${nodeId}' because it was not 'true' or 'false'.`,
+        ],
+      };
+    }
+
+    if (currentMetadata.stateSettable === normalizedSettable) {
+      return { changed: false, warnings: [] };
+    }
+
+    nodeMetadata[canonicalNodeId] = {
+      ...currentMetadata,
+      stateSettable: normalizedSettable,
+    };
+    return { changed: true, warnings: [] };
+  }
+
+  private pruneNodeMetadata(data: DeviceDiscoveryState, nodes: string[]): void {
+    if (!data.node_metadata) {
+      return;
+    }
+
+    const allowedNodeIds = new Set(nodes.map((nodeId) => nodeId.toLowerCase()));
+    for (const nodeId of Object.keys(data.node_metadata)) {
+      if (!allowedNodeIds.has(nodeId)) {
+        delete data.node_metadata[nodeId];
+      }
+    }
+
+    if (Object.keys(data.node_metadata).length === 0) {
+      delete data.node_metadata;
+    }
   }
 
   private normalizeDiscoveryNodes(payload: string): {
@@ -657,252 +606,19 @@ export class HomieDiscoveryManager {
   ): {
     messages: DiscoveryMessage[];
     componentPlatforms: Record<string, DiscoveryPlatform>;
+    signature: string;
   } {
-    const discoveryConfig = this.discoveryConfigByDevice.get(deviceId);
-    const baseDevice: HomeAssistantDevice = {
-      name: discoveryConfig?.deviceName ?? `LSH ${deviceId.toUpperCase()}`,
-      manufacturer: "Jacopo Labardi",
-      identifiers: [`LSH_${deviceId}`],
-      model: "Labo Smart Home",
-      connections: [["mac", data.mac]],
-      sw_version: data.fw_version,
-    };
-
-    const discoveryContext: DiscoveryContext = {
-      deviceId,
-      deviceObjectId: `lsh_${deviceId.toLowerCase()}`,
-      baseTopic: `${this.homieBasePath}${deviceId}`,
-      baseDevice,
-    };
-
-    const componentEntries = this.buildComponents(data.nodes, discoveryContext, discoveryConfig);
-    const componentPlatforms = this.toComponentPlatformMap(componentEntries);
-    const removedComponents = this.findRemovedComponents(
-      data.last_component_platforms,
-      componentPlatforms,
-    );
-
-    const messages: DiscoveryMessage[] = [];
-    if (Object.keys(removedComponents).length > 0) {
-      messages.push(
-        this.buildDeviceDiscoveryMessage(discoveryContext, componentEntries, removedComponents),
-      );
-    }
-
-    messages.push(this.buildDeviceDiscoveryMessage(discoveryContext, componentEntries));
-    messages.push(this.buildHomieStateSensorMessage(discoveryContext));
-
-    return { messages, componentPlatforms };
-  }
-
-  private buildComponents(
-    nodes: string[],
-    discoveryContext: DiscoveryContext,
-    discoveryConfig: NormalizedDeviceDiscoveryConfig | undefined,
-  ): DiscoveryComponentEntry[] {
-    return [
-      ...this.generateActuatorEntities(nodes, discoveryContext, discoveryConfig),
-      ...this.generateSensors(discoveryContext),
-      ...this.generateBinarySensors(discoveryContext),
-    ];
-  }
-
-  private toComponentPlatformMap(
-    entries: DiscoveryComponentEntry[],
-  ): Record<string, DiscoveryPlatform> {
-    return Object.fromEntries(entries.map((entry) => [entry.id, entry.platform]));
-  }
-
-  private findRemovedComponents(
-    previous: Record<string, DiscoveryPlatform> | undefined,
-    current: Record<string, DiscoveryPlatform>,
-  ): Record<string, DiscoveryPlatform> {
-    if (!previous) {
-      return {};
-    }
-
-    return Object.fromEntries(
-      Object.entries(previous).filter(
-        ([componentId, previousPlatform]) =>
-          !(componentId in current) || current[componentId] !== previousPlatform,
-      ),
-    );
-  }
-
-  private buildDeviceDiscoveryMessage(
-    { deviceObjectId, baseTopic, baseDevice }: DiscoveryContext,
-    entries: DiscoveryComponentEntry[],
-    removedComponents: Record<string, DiscoveryPlatform> = {},
-  ): DiscoveryMessage {
-    const payload: DeviceDiscoveryPayload = {
-      device: baseDevice,
-      origin: HomieDiscoveryManager.getOrigin(),
-      availability_topic: `${baseTopic}/$state`,
-      payload_available: "ready",
-      payload_not_available: "lost",
-      qos: 2,
-      components: Object.fromEntries(entries.map((entry) => [entry.id, entry.config])),
-    };
-
-    for (const [componentId, platform] of Object.entries(removedComponents)) {
-      payload.components[componentId] = { platform };
-    }
-
-    return {
-      topic: `${this.discoveryPrefix}/device/${deviceObjectId}/config`,
-      payload,
-      qos: 1,
-      retain: true,
-    };
-  }
-
-  /**
-   * Publishes the raw Homie `$state` as a standalone diagnostic sensor.
-   * This intentionally avoids shared availability so Home Assistant can
-   * record values like `lost` in history instead of marking the sensor
-   * unavailable at the same moment.
-   */
-  private buildHomieStateSensorMessage({
-    deviceId,
-    baseTopic,
-    baseDevice,
-  }: DiscoveryContext): DiscoveryMessage {
-    const componentId = `lsh_${deviceId.toLowerCase()}_homie_state`;
-    const payload: SingleSensorDiscoveryPayload = {
-      name: `${deviceId.toUpperCase()} Homie State`,
-      unique_id: componentId,
-      default_entity_id: `sensor.${componentId}`,
-      state_topic: `${baseTopic}/$state`,
-      icon: "mdi:state-machine",
-      entity_category: "diagnostic",
-      device: baseDevice,
-      origin: HomieDiscoveryManager.getOrigin(),
-    };
-
-    return {
-      topic: `${this.discoveryPrefix}/sensor/${componentId}/config`,
-      payload,
-      qos: 1,
-      retain: true,
-    };
-  }
-
-  /**
-   * Generates device-discovery component definitions for 'light' entities based on nodes.
-   * @param nodes - List of node names (e.g., 'light1', 'light2').
-   * @param ctx - Context object containing deviceId and base topic information.
-   * @returns Array of component definitions.
-   */
-  private generateActuatorEntities(
-    nodes: string[],
-    { deviceId, baseTopic }: DiscoveryContext,
-    discoveryConfig: NormalizedDeviceDiscoveryConfig | undefined,
-  ): DiscoveryComponentEntry[] {
-    return nodes.reduce<DiscoveryComponentEntry[]>((entries, node) => {
-      if (!node) {
-        return entries;
-      }
-
-      const nodeConfig = discoveryConfig?.nodes[node.toLowerCase()];
-      const platform = nodeConfig?.platform ?? discoveryConfig?.defaultPlatform ?? "light";
-      const componentId = `lsh_${deviceId.toLowerCase()}_${node.toLowerCase()}`;
-      entries.push({
-        id: componentId,
-        platform,
-        config: {
-          platform,
-          name: nodeConfig?.name ?? `${deviceId.toUpperCase()} ${node.toUpperCase()}`,
-          unique_id: componentId,
-          default_entity_id: nodeConfig?.defaultEntityId ?? `${platform}.${componentId}`,
-          state_topic: `${baseTopic}/${node}/state`,
-          command_topic: `${baseTopic}/${node}/state/set`,
-          icon: nodeConfig?.icon,
-          payload_on: "true",
-          payload_off: "false",
-        },
-      });
-
-      return entries;
-    }, []);
-  }
-
-  /**
-   * Generates discovery component definitions for standard diagnostic sensors.
-   * @param ctx - Context object containing deviceId and base topic information.
-   * @returns Array of component definitions.
-   */
-  private generateSensors({ deviceId, baseTopic }: DiscoveryContext): DiscoveryComponentEntry[] {
-    return HomieDiscoveryManager.SENSORS_DEF.map((definition) =>
-      this.buildPayload(deviceId, baseTopic, "sensor", definition),
-    );
-  }
-
-  /**
-   * Generates discovery component definitions for binary sensors.
-   * @param ctx - Context object containing deviceId and base topic information.
-   * @returns Array of component definitions.
-   */
-  private generateBinarySensors({
-    deviceId,
-    baseTopic,
-  }: DiscoveryContext): DiscoveryComponentEntry[] {
-    return HomieDiscoveryManager.BINARY_SENSORS_DEF.map((definition) =>
-      this.buildPayload(deviceId, baseTopic, "binary_sensor", definition, {
-        payload_on: "true",
-        payload_off: "false",
-      }),
-    );
-  }
-
-  /**
-   * Helper to construct a single Home Assistant discovery component definition.
-   * @param deviceId - The device identifier.
-   * @param type - The component type (e.g., 'sensor', 'binary_sensor').
-   * @param def - The definition object for the specific entity.
-   * @param extras - Additional payload properties to merge.
-   * @returns A component definition keyed by a stable component ID.
-   */
-  private buildPayload(
-    deviceId: string,
-    baseTopic: string,
-    type: Exclude<DiscoveryPlatform, ToggleDiscoveryPlatform>,
-    def: DeviceDiscoveryDefinition,
-    extras: Partial<Pick<BinarySensorDiscoveryComponent, "payload_on" | "payload_off">> = {},
-  ): DiscoveryComponentEntry {
-    const nameLc = def.name.toLowerCase().replace(/ /g, "_");
-    const componentId = `lsh_${deviceId.toLowerCase()}_${nameLc}`;
-
-    const config: DiscoveryComponent =
-      type === "binary_sensor"
-        ? {
-            platform: "binary_sensor",
-            name: `${deviceId.toUpperCase()} ${def.name}`,
-            unique_id: componentId,
-            default_entity_id: `${type}.${componentId}`,
-            state_topic: `${baseTopic}/${def.topic}`,
-            icon: def.icon,
-            entity_category: def.cat,
-            payload_on: extras.payload_on ?? "true",
-            payload_off: extras.payload_off ?? "false",
-          }
-        : {
-            platform: "sensor",
-            name: `${deviceId.toUpperCase()} ${def.name}`,
-            unique_id: componentId,
-            default_entity_id: `${type}.${componentId}`,
-            state_topic: `${baseTopic}/${def.topic}`,
-            icon: def.icon,
-            entity_category: def.cat,
-          };
-
-    if (def.class) config.device_class = def.class;
-    if (def.unit) config.unit_of_measurement = def.unit;
-    if (def.state_class) config.state_class = def.state_class;
-
-    return {
-      id: componentId,
-      platform: type,
-      config,
-    };
+    return buildDiscoveryPayloads({
+      canonicalDeviceId: deviceId,
+      runtimeDeviceId: data.runtimeDeviceId,
+      homieBasePath: this.homieBasePath,
+      discoveryPrefix: this.discoveryPrefix,
+      mac: data.mac,
+      fwVersion: data.fw_version,
+      nodes: data.nodes,
+      nodeMetadata: data.node_metadata ?? {},
+      lastComponentPlatforms: data.last_component_platforms,
+      discoveryConfig: this.discoveryConfigByDevice.get(deviceId),
+    });
   }
 }

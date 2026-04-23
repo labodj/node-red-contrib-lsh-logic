@@ -124,6 +124,12 @@ export interface ServiceResult {
   registryChanged?: boolean;
   /** If true, indicates that an array of LSH messages should be sent with a delay between them. */
   staggerLshMessages?: boolean;
+  /**
+   * Optional debounce request for deferred Home Assistant discovery publication.
+   * The adapter uses the latest requested delay to schedule a follow-up flush
+   * without performing overlapping `send()` calls.
+   */
+  discoveryFlushDelayMs?: number;
 }
 
 /**
@@ -347,16 +353,16 @@ export interface Actor {
 export interface ButtonAction {
   /** The ID of the button that triggers this action (e.g., '7'). */
   id: number;
-  /** A list of primary LSH actors to control. */
-  actors: Actor[];
-  /** A list of secondary, external actors to control (e.g., Tasmota, Zigbee devices). */
-  otherActors: string[];
+  /** Optional list of primary LSH actors to control. At least one target must exist across actors and otherActors. */
+  actors?: Actor[];
+  /** Optional list of secondary, external actors to control (e.g., Tasmota, Zigbee devices). */
+  otherActors?: string[];
 }
 
 export type HomeAssistantActuatorPlatform = "light" | "switch" | "fan";
 
 export interface HomeAssistantNodeDiscoveryConfig {
-  /** Optional Home Assistant entity platform override for this Homie node. */
+  /** Optional Home Assistant entity platform override for writable boolean Homie nodes. */
   platform?: HomeAssistantActuatorPlatform;
   /** Optional friendly entity name override shown in Home Assistant. */
   name?: string;
@@ -407,6 +413,8 @@ export interface DeviceState {
   name: string;
   /** The last known controller-backed reachability state. */
   connected: boolean;
+  /** Last bridge-reported controller-link status. `null` means the bridge has not reported it yet in this session. */
+  controllerLinkConnected: boolean | null;
   /** Overall controller-side health flag for alerts and recovery. Ping-timeout staleness is tracked separately via `isStale`, while snapshot authoritativeness is tracked via `lastDetailsTime` and `lastStateTime`. */
   isHealthy: boolean;
   /** `true` if a controller ping was sent but not yet answered within the timeout. A temporary warning state. */

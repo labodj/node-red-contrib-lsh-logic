@@ -68,8 +68,14 @@ export class LshCodec {
   public encode<T>(payload: T, protocol: Protocol): Buffer | T;
   public encode<T>(payload: T, protocol: Protocol): Buffer | T {
     if (protocol === "msgpack") {
-      // Encode to Uint8Array and convert to Buffer for Node-RED.
-      return Buffer.from(encode(payload));
+      // Reuse the Uint8Array backing store so MsgPack commands do not pay an
+      // extra copy before they are handed to Node-RED.
+      const encodedPayload = encode(payload);
+      return Buffer.from(
+        encodedPayload.buffer,
+        encodedPayload.byteOffset,
+        encodedPayload.byteLength,
+      );
     }
 
     // For JSON we return the object and let mqtt-out handle serialization.

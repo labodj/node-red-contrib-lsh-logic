@@ -221,84 +221,6 @@ describe("LshLogicService - Network Click Logic", () => {
     expect(command.payload.s).toEqual([5]);
   });
 
-  it("should merge overlapping subsets on the same device into one deterministic command", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          longClickButtons: [
-            {
-              id: 1,
-              actors: [
-                { name: "actor1", allActuators: false, actuators: [1, 2] },
-                { name: "actor1", allActuators: false, actuators: [2, 3] },
-              ],
-              otherActors: [],
-            },
-          ],
-        },
-        { name: "actor1" },
-      ],
-    };
-
-    const { setDeviceOnline, sendLshState, sendEvents } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-    setDeviceOnline("actor1", { a: [1, 2, 3, 4] });
-    sendLshState("actor1", [0]);
-
-    startClick(sendEvents, "sender");
-    const result = confirmClick(sendEvents, "sender");
-
-    const commands = getOutputMessages(result, Output.Lsh) as Array<{
-      payload: { p: number; s: number[] };
-    }>;
-    expect(commands).toHaveLength(1);
-    expect(commands[0].payload).toEqual({
-      p: LshProtocol.SET_STATE,
-      s: [7],
-    });
-    expect(result.logs).toContain("Smart Toggle: 0/3 active. Decision: ON");
-  });
-
-  it("should collapse allActuators and subset duplicates on the same device to one command", () => {
-    const systemConfig: SystemConfig = {
-      devices: [
-        {
-          name: "sender",
-          longClickButtons: [
-            {
-              id: 1,
-              actors: [
-                { name: "actor1", allActuators: false, actuators: [2] },
-                { name: "actor1", allActuators: true, actuators: [] },
-              ],
-              otherActors: [],
-            },
-          ],
-        },
-        { name: "actor1" },
-      ],
-    };
-
-    const { setDeviceOnline, sendLshState, sendEvents } = createClickHarness(systemConfig);
-    setDeviceOnline("sender");
-    setDeviceOnline("actor1", { a: [1, 2, 3, 4] });
-    sendLshState("actor1", [0b00000001]);
-
-    startClick(sendEvents, "sender");
-    const result = confirmClick(sendEvents, "sender");
-
-    const commands = getOutputMessages(result, Output.Lsh) as Array<{
-      payload: { p: number; s: number[] };
-    }>;
-    expect(commands).toHaveLength(1);
-    expect(commands[0].payload).toEqual({
-      p: LshProtocol.SET_STATE,
-      s: [15],
-    });
-    expect(result.logs).toContain("Smart Toggle: 1/4 active. Decision: ON");
-  });
-
   it("should use SET_SINGLE_ACTUATOR when a single actuator is targeted", () => {
     const systemConfig: SystemConfig = {
       devices: [
@@ -461,28 +383,6 @@ describe("LshLogicService - Network Click Logic", () => {
         },
       },
       {
-        expectedMessage: "Target actor 'ghost' is unknown to the registry.",
-        run: () => {
-          const systemConfig: SystemConfig = {
-            devices: [
-              {
-                name: "sender",
-                longClickButtons: [
-                  {
-                    id: 1,
-                    actors: [{ name: "ghost", allActuators: true, actuators: [] }],
-                    otherActors: [],
-                  },
-                ],
-              },
-            ],
-          };
-          const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
-          setDeviceOnline("sender");
-          return startClick(sendEvents, "sender");
-        },
-      },
-      {
         expectedMessage: "Target actor 'actor1' has no authoritative actuator state yet.",
         run: () => {
           const { setDeviceOnline, sendDeviceDetails, sendEvents } = createClickHarness();
@@ -504,6 +404,10 @@ describe("LshLogicService - Network Click Logic", () => {
 
           nowSpy.mockReturnValue(START_TIME + (config.interrogateThreshold + 1) * 1000);
           service.runWatchdogCheck();
+          service.recordDispatchedControllerPing(
+            "actor1",
+            START_TIME + (config.interrogateThreshold + 1) * 1000,
+          );
 
           nowSpy.mockReturnValue(
             START_TIME + (config.interrogateThreshold + config.pingTimeout + 2) * 1000,
@@ -542,30 +446,6 @@ describe("LshLogicService - Network Click Logic", () => {
         },
       },
       {
-        expectedMessage: "Target actor 'actor1' has no actuator IDs configured.",
-        run: () => {
-          const systemConfig: SystemConfig = {
-            devices: [
-              {
-                name: "sender",
-                longClickButtons: [
-                  {
-                    id: 1,
-                    actors: [{ name: "actor1", allActuators: false, actuators: [] }],
-                    otherActors: [],
-                  },
-                ],
-              },
-              { name: "actor1" },
-            ],
-          };
-          const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
-          setDeviceOnline("sender");
-          setDeviceOnline("actor1", { a: [1, 2] });
-          return startClick(sendEvents, "sender");
-        },
-      },
-      {
         expectedButtonId: 99,
         run: () => {
           const systemConfig: SystemConfig = {
@@ -574,21 +454,6 @@ describe("LshLogicService - Network Click Logic", () => {
           const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
           setDeviceOnline("sender");
           return startClick(sendEvents, "sender", ClickType.Long, 99);
-        },
-      },
-      {
-        run: () => {
-          const systemConfig: SystemConfig = {
-            devices: [
-              {
-                name: "sender",
-                longClickButtons: [{ id: 1, actors: [], otherActors: [] }],
-              },
-            ],
-          };
-          const { setDeviceOnline, sendEvents } = createClickHarness(systemConfig);
-          setDeviceOnline("sender");
-          return startClick(sendEvents, "sender");
         },
       },
       {

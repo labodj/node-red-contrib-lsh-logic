@@ -1,6 +1,6 @@
 import * as chokidar from "chokidar";
 import * as fs from "fs/promises";
-import type { NodeAPI } from "node-red";
+import type { NodeAPI, NodeMessage } from "node-red";
 import { LshLogicService } from "../LshLogicService";
 import { LshCodec } from "../LshCodec";
 import type { LshLogicNode } from "../lsh-logic";
@@ -12,8 +12,10 @@ import {
   createServiceResult,
   getCloseHandler,
   getInputHandler,
+  MOCK_CONFIG_CONTENT,
   waitForInitialization,
 } from "./helpers/lshLogicAdapterTestUtils";
+import { flushMicrotasks } from "./helpers/nodeRedTestUtils";
 
 jest.mock("fs/promises");
 jest.mock("chokidar", () => ({
@@ -81,6 +83,156 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     });
   });
 
+  it("should keep the file watcher active so a startup config failure can recover after the file is fixed", async () => {
+    const cleanupSpy = jest
+      .spyOn(LshLogicService.prototype, "cleanupPendingClicks")
+      .mockReturnValue(null);
+    jest
+      .mocked(fs.readFile)
+      .mockRejectedValueOnce(new Error("File not found"))
+      .mockResolvedValue(MOCK_CONFIG_CONTENT);
+
+    await initializeNode();
+
+    jest.advanceTimersByTime(defaultNodeConfig.clickCleanupInterval * 1000);
+    expect(cleanupSpy).not.toHaveBeenCalled();
+
+    expect(mockNodeInstance.status).toHaveBeenCalledWith({
+      fill: "red",
+      shape: "ring",
+      text: "Config Error",
+    });
+
+    mockNodeInstance.status.mockClear();
+
+    const changeHandler = adapterHarness.mockWatcher.on.mock.calls.find(
+      ([event]) => event === "change",
+    )?.[1] as ((changedPath: string) => void) | undefined;
+
+    expect(changeHandler).toBeDefined();
+    changeHandler?.("/tmp/fixed-config.json");
+    jest.advanceTimersByTime(250);
+    await flushMicrotasks(16);
+
+    expect(mockNodeInstance.status).toHaveBeenCalledWith({
+      fill: "green",
+      shape: "dot",
+      text: "Ready",
+    });
+
+    jest.advanceTimersByTime(defaultNodeConfig.clickCleanupInterval * 1000);
+    expect(cleanupSpy).toHaveBeenCalled();
+  });
+
+  it("should re-enter the full startup bootstrap flow when a startup config failure is later fixed", async () => {
+    jest
+      .mocked(fs.readFile)
+      .mockRejectedValueOnce(new Error("File not found"))
+      .mockResolvedValue(MOCK_CONFIG_CONTENT);
+
+    jest.spyOn(LshLogicService.prototype, "needsStartupBootReplay").mockReturnValue(true);
+    const startupSpy = jest
+      .spyOn(LshLogicService.prototype, "getStartupCommands")
+      .mockReturnValue(createServiceResult());
+    const verifySpy = jest
+      .spyOn(LshLogicService.prototype, "verifyInitialDeviceStates")
+      .mockReturnValue(createServiceResult());
+    const watchdogSpy = jest
+      .spyOn(LshLogicService.prototype, "runWatchdogCheck")
+      .mockReturnValue(createServiceResult());
+
+    await initializeNode({
+      ...defaultNodeConfig,
+      watchdogInterval: 1,
+      initialStateTimeout: 2,
+      pingTimeout: 3,
+    });
+
+    const changeHandler = adapterHarness.mockWatcher.on.mock.calls.find(
+      ([event]) => event === "change",
+    )?.[1] as ((changedPath: string) => void) | undefined;
+
+    expect(changeHandler).toBeDefined();
+    changeHandler?.("/tmp/fixed-config.json");
+    jest.advanceTimersByTime(250);
+    await flushMicrotasks(16);
+
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Configuration successfully recovered from /tmp/fixed-config.json. Restarting the full startup bootstrap flow.",
+    );
+    expect(mockNodeInstance.log).not.toHaveBeenCalledWith(
+      "Running post-reload device recovery: reconciling snapshots for the updated runtime configuration.",
+    );
+
+    jest.advanceTimersByTime(499);
+    await flushMicrotasks(6);
+    expect(startupSpy).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(1);
+    await flushMicrotasks(6);
+    expect(startupSpy).toHaveBeenCalledTimes(1);
+
+    jest.advanceTimersByTime(1000);
+    await flushMicrotasks(6);
+    expect(watchdogSpy).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(2000);
+    await flushMicrotasks(6);
+    expect(verifySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("should not mark the node ready until the newest queued startup reload has actually applied", async () => {
+    let resolveFirstRead: ((value: string) => void) | undefined;
+    let resolveSecondRead: ((value: string) => void) | undefined;
+
+    const firstRead = new Promise<string>((resolve) => {
+      resolveFirstRead = resolve;
+    });
+    const secondRead = new Promise<string>((resolve) => {
+      resolveSecondRead = resolve;
+    });
+
+    jest
+      .mocked(fs.readFile)
+      .mockImplementationOnce(async () => firstRead)
+      .mockImplementationOnce(async () => secondRead);
+
+    await initializeNode();
+
+    const changeHandler = adapterHarness.mockWatcher.on.mock.calls.find(
+      ([event]) => event === "change",
+    )?.[1] as ((changedPath: string) => void) | undefined;
+
+    expect(changeHandler).toBeDefined();
+    mockNodeInstance.status.mockClear();
+    mockNodeInstance.log.mockClear();
+
+    changeHandler?.("/tmp/reloaded-config.json");
+    jest.advanceTimersByTime(250);
+    await flushMicrotasks(6);
+
+    resolveFirstRead?.(JSON.stringify({ devices: [{ name: "initial-device" }] }));
+    await flushMicrotasks(10);
+
+    expect(mockNodeInstance.status).not.toHaveBeenCalledWith({
+      fill: "green",
+      shape: "dot",
+      text: "Ready",
+    });
+    expect(mockNodeInstance.log).toHaveBeenCalledWith(
+      "Initial config load was superseded by a newer queued reload. Waiting for the latest load to determine readiness.",
+    );
+
+    resolveSecondRead?.(JSON.stringify({ devices: [{ name: "reloaded-device" }] }));
+    await flushMicrotasks(12);
+
+    expect(mockNodeInstance.status).toHaveBeenCalledWith({
+      fill: "green",
+      shape: "dot",
+      text: "Ready",
+    });
+  });
+
   it("should decode Homie buffer payloads as text before passing them to the service", async () => {
     const processMessageSpy = jest
       .spyOn(LshLogicService.prototype, "processMessage")
@@ -94,7 +246,8 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
       payload: Buffer.from("ready"),
     };
 
-    await getInputHandler(mockNodeInstance)(message, jest.fn(), done);
+    getInputHandler(mockNodeInstance)(message, jest.fn(), done);
+    await flushMicrotasks();
 
     expect(processMessageSpy).toHaveBeenCalledWith("homie/device-1/$state", "ready", {
       retained: false,
@@ -114,7 +267,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     const done = jest.fn();
     const payload = new LshCodec().encode({ p: 6, i: 1, t: 1 }, "msgpack");
 
-    await getInputHandler(mockNodeInstance)(
+    getInputHandler(mockNodeInstance)(
       {
         topic: "LSH/device-1/events",
         payload,
@@ -122,6 +275,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
       jest.fn(),
       done,
     );
+    await flushMicrotasks();
 
     expect(mockNodeInstance.log).not.toHaveBeenCalled();
     expect(processMessageSpy).toHaveBeenCalledWith(
@@ -234,10 +388,32 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
     const done = jest.fn();
 
-    await getInputHandler(mockNodeInstance)({ payload: "some_payload" }, jest.fn(), done);
+    getInputHandler(mockNodeInstance)({ payload: "some_payload" }, jest.fn(), done);
+    await flushMicrotasks();
 
     expect(processMessageSpy).toHaveBeenCalledWith("", "some_payload", { retained: false });
     expect(done).toHaveBeenCalledWith();
+  });
+
+  it("should reject inbound messages with a non-string topic explicitly", async () => {
+    const processMessageSpy = jest.spyOn(LshLogicService.prototype, "processMessage");
+
+    await initializeNode();
+
+    const done = jest.fn();
+
+    await getInputHandler(mockNodeInstance)(
+      { topic: { bad: true }, payload: "some_payload" } as unknown as NodeMessage,
+      jest.fn(),
+      done,
+    );
+
+    expect(processMessageSpy).not.toHaveBeenCalled();
+    expect(mockNodeInstance.error).toHaveBeenCalledWith(
+      "Rejected inbound message: Inbound msg.topic must be a string when provided, got object.",
+    );
+    expect(done.mock.calls[0][0]).toBeInstanceOf(Error);
+    processMessageSpy.mockRestore();
   });
 
   it("should refresh exposed state for retained Homie baselines even when stateChanged stays false", async () => {
@@ -250,7 +426,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     mockNodeInstance.__context.flow.set.mockClear();
 
     const done = jest.fn();
-    await getInputHandler(mockNodeInstance)(
+    getInputHandler(mockNodeInstance)(
       {
         topic: "homie/test-device/$state",
         payload: "ready",
@@ -259,6 +435,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
       jest.fn(),
       done,
     );
+    await flushMicrotasks();
 
     expect(mockNodeInstance.__context.flow.set).toHaveBeenCalledWith(
       "lsh_state",
@@ -303,12 +480,20 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
           "LSH/test-device/bridge",
         ],
         homie: ["homie/test-device/$state"],
-        discovery: ["homie/+/$nodes", "homie/+/$mac", "homie/+/$fw/version"],
+        discovery: [
+          "homie/+/$nodes",
+          "homie/+/$mac",
+          "homie/+/$fw/version",
+          "homie/+/+/state/$datatype",
+          "homie/+/+/state/$settable",
+        ],
         all: expect.arrayContaining([
           "homie/test-device/$state",
           "homie/+/$nodes",
           "homie/+/$mac",
           "homie/+/$fw/version",
+          "homie/+/+/state/$datatype",
+          "homie/+/+/state/$settable",
           "LSH/test-device/conf",
           "LSH/test-device/state",
           "LSH/test-device/events",

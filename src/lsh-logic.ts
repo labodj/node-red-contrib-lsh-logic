@@ -12,8 +12,14 @@ import type { Node, NodeAPI, NodeMessage } from "node-red";
 
 import { LshLogicService } from "./LshLogicService";
 import { LshCodec } from "./LshCodec";
+import { normalizeNodeConfig } from "./lsh-logic.config";
+import {
+  buildTopicSetSignature,
+  getHomieDiscoveryTopics,
+  normalizeInboundTopic,
+} from "./lsh-logic.helpers";
 import { createAppValidators } from "./schemas";
-import { Output } from "./types";
+import { LshProtocol, Output } from "./types";
 import type {
   LshLogicNodeDef,
   MqttSubscribeMsg,
@@ -24,74 +30,10 @@ import type {
 } from "./types";
 import { sleep } from "./utils";
 
-type NumericConfigKey =
-  | "clickTimeout"
-  | "clickCleanupInterval"
-  | "watchdogInterval"
-  | "interrogateThreshold"
-  | "pingTimeout"
-  | "initialStateTimeout";
-
 type ConfigLoadOutcome = "applied" | "skipped";
 
 const CONFIG_RELOAD_DEBOUNCE_MS = 200;
 const STARTUP_BOOT_DELAY_MS = 500;
-
-const normalizeRequiredString = (value: string, fieldName: string): string => {
-  const normalized = value.trim();
-  if (normalized.length === 0) {
-    throw new Error(`${fieldName} cannot be empty.`);
-  }
-  return normalized;
-};
-
-const validateTopicBase = (value: string, fieldName: string): string => {
-  const normalized = normalizeRequiredString(value, fieldName);
-  if (!normalized.endsWith("/")) {
-    throw new Error(`${fieldName} must end with '/'.`);
-  }
-  return normalized;
-};
-
-const normalizePositiveNumber = (value: number, fieldName: string): number => {
-  const normalized = Number(value);
-  if (!Number.isFinite(normalized) || normalized <= 0) {
-    throw new Error(`${fieldName} must be a positive number.`);
-  }
-  return normalized;
-};
-
-const normalizeNodeConfig = (config: LshLogicNodeDef): LshLogicNodeDef => {
-  const normalizedConfig = {
-    ...config,
-    homieBasePath: validateTopicBase(config.homieBasePath, "Homie Base Path"),
-    lshBasePath: validateTopicBase(config.lshBasePath, "LSH Base Path"),
-    serviceTopic: normalizeRequiredString(config.serviceTopic, "Service Topic"),
-    otherDevicesPrefix: normalizeRequiredString(config.otherDevicesPrefix, "External State Prefix"),
-    systemConfigPath: normalizeRequiredString(config.systemConfigPath, "System Config"),
-    exposeStateKey: config.exposeStateKey.trim(),
-    exportTopicsKey: config.exportTopicsKey.trim(),
-    exposeConfigKey: config.exposeConfigKey.trim(),
-    haDiscoveryPrefix: config.haDiscovery
-      ? normalizeRequiredString(config.haDiscoveryPrefix, "Discovery Prefix")
-      : config.haDiscoveryPrefix.trim(),
-  };
-
-  const numericFields: Record<NumericConfigKey, string> = {
-    clickTimeout: "Click Confirm Timeout",
-    clickCleanupInterval: "Click Cleanup",
-    watchdogInterval: "Watchdog Interval",
-    interrogateThreshold: "Ping Threshold",
-    pingTimeout: "Ping Timeout",
-    initialStateTimeout: "Initial Replay Window",
-  };
-
-  for (const [key, label] of Object.entries(numericFields) as Array<[NumericConfigKey, string]>) {
-    normalizedConfig[key] = normalizePositiveNumber(normalizedConfig[key], label);
-  }
-
-  return normalizedConfig;
-};
 
 /**
  * The adapter class that bridges the Node-RED environment and the LshLogicService.
@@ -113,13 +55,31 @@ export class LshLogicNode {
   private warmupTimer: NodeJS.Timeout | null = null;
   private startupBootTimer: NodeJS.Timeout | null = null;
   private initialVerificationTimer: NodeJS.Timeout | null = null;
+  private runtimeRecoveryTimer: NodeJS.Timeout | null = null;
   private configReloadTimer: NodeJS.Timeout | null = null;
+  private discoveryFlushTimer: NodeJS.Timeout | null = null;
   private configLoadQueue: Promise<void> = Promise.resolve();
+  private sendQueue: Promise<void> = Promise.resolve();
+  private lowPriorityLshDrainPromise: Promise<void> | null = null;
+  private pendingLowPriorityLshMessages: Array<{
+    generation: number;
+    message: NodeMessage;
+    controllerPingDeviceName: string | null;
+    bridgeProbe: boolean;
+    snapshotRecoveryDeviceName: string | null;
+    startupVerificationDeviceCommand: boolean;
+  }> = [];
+  private lowPriorityLshGeneration: number = 0;
+  private lastConfigurationOutputSignature: string | null = null;
   private latestConfigLoadVersion: number = 0;
   private isWarmingUp: boolean = false;
   private isClosing: boolean = false;
+  private warmupDeadlineAt: number | null = null;
+  private timersStarted: boolean = false;
   private watchdogCycleQueued: boolean = false;
   private watchdogCyclePromise: Promise<void> | null = null;
+  private runtimeRecoveryQueuedAfterStartup: boolean = false;
+  private tracksStartupVerificationRecoveryWindow = false;
 
   /**
    * Creates an instance of the LshLogicNode.
@@ -155,7 +115,6 @@ export class LshLogicNode {
     );
 
     void this.initialize(validators.validateSystemConfig);
-    this.setupTimers();
     this.registerNodeEventHandlers();
   }
 
@@ -165,11 +124,19 @@ export class LshLogicNode {
       const userDir = this.RED.settings.userDir || process.cwd();
       const configPath = path.resolve(userDir, this.config.systemConfigPath);
 
-      await this.enqueueConfigLoad(configPath, validateSystemConfig, true);
       this.setupFileWatcher(configPath, validateSystemConfig);
+      const outcome = await this.enqueueConfigLoad(configPath, validateSystemConfig, true);
 
-      this.node.status({ fill: "green", shape: "dot", text: "Ready" });
-      this.node.log("Node initialized and configuration loaded.");
+      if (outcome === "applied") {
+        this.ensureTimersStarted();
+        this.node.status({ fill: "green", shape: "dot", text: "Ready" });
+        this.node.log("Node initialized and configuration loaded.");
+        return;
+      }
+
+      this.node.log(
+        "Initial config load was superseded by a newer queued reload. Waiting for the latest load to determine readiness.",
+      );
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.node.error(`Critical error during initialization: ${msg}`);
@@ -191,6 +158,19 @@ export class LshLogicNode {
     this.watchdogInterval = setInterval(() => {
       void this.runWatchdogCycle();
     }, watchdogIntervalMs);
+  }
+
+  /**
+   * Starts periodic cleanup/watchdog timers only after the runtime has applied
+   * a valid configuration at least once.
+   */
+  private ensureTimersStarted(): void {
+    if (this.timersStarted) {
+      return;
+    }
+
+    this.setupTimers();
+    this.timersStarted = true;
   }
 
   private async runWatchdogCycle(): Promise<void> {
@@ -266,7 +246,15 @@ export class LshLogicNode {
       return;
     }
 
-    const topic = msg.topic || "";
+    const topicResult = normalizeInboundTopic(msg);
+    if (!topicResult.ok) {
+      const error = new Error(topicResult.error);
+      this.node.error(`Rejected inbound message: ${topicResult.error}`);
+      done(error);
+      return;
+    }
+
+    const topic = topicResult.topic;
     let processedPayload: unknown;
 
     try {
@@ -297,8 +285,14 @@ export class LshLogicNode {
       return;
     }
 
-    // Forward the original message to the debug output.
-    this.send({ [Output.Debug]: msg });
+    // Forward debug output through the same serialized send queue used by all
+    // runtime output paths so Node-RED never receives overlapping send calls.
+    await this.enqueueSendOperation(() => {
+      if (this.isClosing) {
+        return;
+      }
+      this.send({ [Output.Debug]: msg });
+    });
     done();
   }
 
@@ -312,6 +306,120 @@ export class LshLogicNode {
    * @param result The ServiceResult object from a service method call.
    */
   public async processServiceResult(result: ServiceResult): Promise<void> {
+    await this.processServiceResultNow(result);
+  }
+
+  /**
+   * Serializes actual `send()` calls into Node-RED without forcing low-priority
+   * staggered traffic to block later high-priority outputs.
+   */
+  private enqueueSendOperation<T>(work: () => T | Promise<T>): Promise<T> {
+    const queuedWork = this.sendQueue.then(work, work);
+    this.sendQueue = queuedWork.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queuedWork;
+  }
+
+  /**
+   * Drains low-priority bulk LSH traffic in the background, one message at a
+   * time. Future watchdog/startup bulk messages remain serialized, but live
+   * high-priority outputs may interleave between batches while the drain sleeps.
+   */
+  private scheduleLowPriorityLshDrain(messages: NodeMessage[]): void {
+    const generation = this.lowPriorityLshGeneration;
+    const queuedMessages = messages.map((message) => {
+      const controllerPingDeviceName = this.getControllerPingDeviceName(message);
+      const snapshotRecoveryDeviceName = this.getSnapshotRecoveryDeviceName(message);
+
+      return {
+        generation,
+        message,
+        controllerPingDeviceName,
+        bridgeProbe: this.isBridgeProbeMessage(message),
+        snapshotRecoveryDeviceName,
+        startupVerificationDeviceCommand:
+          this.tracksStartupVerificationRecoveryWindow &&
+          (controllerPingDeviceName !== null || snapshotRecoveryDeviceName !== null),
+      };
+    });
+    for (const queuedMessage of queuedMessages) {
+      if (queuedMessage.controllerPingDeviceName) {
+        this.service.recordQueuedControllerPing(queuedMessage.controllerPingDeviceName);
+      }
+    }
+    this.pendingLowPriorityLshMessages.push(...queuedMessages);
+    if (this.lowPriorityLshDrainPromise) {
+      return;
+    }
+
+    this.lowPriorityLshDrainPromise = (async () => {
+      try {
+        while (!this.isClosing && this.pendingLowPriorityLshMessages.length > 0) {
+          const nextMessage = this.pendingLowPriorityLshMessages.shift();
+          if (!nextMessage) {
+            continue;
+          }
+
+          // A successful config load invalidates any older watchdog/startup burst
+          // traffic so removed or reshaped devices never keep draining stale work.
+          if (nextMessage.generation !== this.lowPriorityLshGeneration) {
+            if (nextMessage.controllerPingDeviceName) {
+              this.service.cancelQueuedControllerPing(nextMessage.controllerPingDeviceName);
+            }
+            if (nextMessage.bridgeProbe) {
+              this.service.cancelQueuedBridgeProbe();
+            }
+            if (nextMessage.snapshotRecoveryDeviceName) {
+              this.service.cancelQueuedSnapshotRecovery(nextMessage.snapshotRecoveryDeviceName);
+            }
+            continue;
+          }
+
+          await this.enqueueSendOperation(() => {
+            if (this.isClosing || nextMessage.generation !== this.lowPriorityLshGeneration) {
+              if (nextMessage.controllerPingDeviceName) {
+                this.service.cancelQueuedControllerPing(nextMessage.controllerPingDeviceName);
+              }
+              if (nextMessage.bridgeProbe) {
+                this.service.cancelQueuedBridgeProbe();
+              }
+              if (nextMessage.snapshotRecoveryDeviceName) {
+                this.service.cancelQueuedSnapshotRecovery(nextMessage.snapshotRecoveryDeviceName);
+              }
+              return;
+            }
+            if (nextMessage.controllerPingDeviceName) {
+              this.service.recordDispatchedControllerPing(nextMessage.controllerPingDeviceName);
+            }
+            if (nextMessage.bridgeProbe) {
+              this.service.recordDispatchedBridgeProbe();
+            }
+            if (nextMessage.snapshotRecoveryDeviceName) {
+              this.service.recordDispatchedSnapshotRecovery(nextMessage.snapshotRecoveryDeviceName);
+            }
+            if (nextMessage.startupVerificationDeviceCommand) {
+              this.extendWarmupForStartupVerificationDispatch();
+            }
+            this.send({ [Output.Lsh]: nextMessage.message });
+          });
+
+          if (this.isClosing || this.pendingLowPriorityLshMessages.length === 0) {
+            continue;
+          }
+
+          // Sleep outside the send queue so live high-priority results can send
+          // before the next low-priority watchdog/startup frame.
+          await sleep(Math.random() * 200 + 50);
+        }
+      } finally {
+        this.lowPriorityLshDrainPromise = null;
+      }
+    })();
+  }
+
+  private async processServiceResultNow(result: ServiceResult): Promise<void> {
     if (this.isClosing) {
       return;
     }
@@ -322,6 +430,10 @@ export class LshLogicNode {
 
     if (result.stateChanged || result.registryChanged) {
       this.updateExposedState();
+    }
+
+    if (result.discoveryFlushDelayMs !== undefined) {
+      this.scheduleDiscoveryFlush(result.discoveryFlushDelayMs);
     }
 
     if (this.isWarmingUp && result.messages[Output.Alerts]) {
@@ -349,26 +461,59 @@ export class LshLogicNode {
         this.node.log(
           `Sending ${lshMessages.length} messages in a staggered sequence to prevent a thundering herd.`,
         );
-        for (const msg of lshMessages) {
-          if (this.isClosing) {
-            return;
-          }
-          this.send({ [Output.Lsh]: msg });
-          // Sleep for a short, random interval to avoid a "thundering herd."
-          await sleep(Math.random() * 200 + 50);
-          if (this.isClosing) {
-            return;
-          }
-        }
-        // The staggered messages have been sent, so remove them from the result object.
+        this.scheduleLowPriorityLshDrain(lshMessages);
+        // The low-priority LSH frames are now owned by the background drain.
         delete result.messages[Output.Lsh];
+      }
+
+      if (Object.keys(result.messages).length === 0) {
+        return;
       }
 
       // Send any remaining messages (or all if no staggering was needed).
       if (this.isClosing) {
         return;
       }
-      this.send(result.messages);
+      await this.enqueueSendOperation(() => {
+        if (this.isClosing) {
+          return;
+        }
+        this.markImmediateLshDispatches(result.messages[Output.Lsh]);
+        this.send(result.messages);
+      });
+    }
+  }
+
+  private scheduleDiscoveryFlush(delayMs: number): void {
+    if (this.isClosing) {
+      return;
+    }
+
+    this.clearDiscoveryFlushTimer();
+    this.discoveryFlushTimer = setTimeout(() => {
+      void (async () => {
+        this.discoveryFlushTimer = null;
+        if (this.isClosing) {
+          return;
+        }
+
+        try {
+          const result = this.service.flushPendingDiscovery();
+          await this.processServiceResult(result);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.node.error(
+            `Error while flushing deferred Home Assistant discovery: ${errorMessage}`,
+          );
+        }
+      })();
+    }, delayMs);
+  }
+
+  private clearDiscoveryFlushTimer(): void {
+    if (this.discoveryFlushTimer) {
+      clearTimeout(this.discoveryFlushTimer);
+      this.discoveryFlushTimer = null;
     }
   }
 
@@ -389,8 +534,8 @@ export class LshLogicNode {
 
   /**
    * Loads, parses, and validates the `system-config.json` file.
-   * Startup verification is only scheduled during bootstrap; runtime reloads stay
-   * intentionally best-effort and do not restart the full warm-up cycle.
+   * Startup loads own the full warm-up / replay sequence. Runtime reloads do not
+   * restart warm-up, but they still schedule a focused post-reload recovery pass.
    * @param filePath The absolute path to the configuration file.
    * @param validateFn The pre-compiled validation function for the config.
    * @param scheduleStartupVerification Whether to start the bootstrap verification timers.
@@ -401,6 +546,8 @@ export class LshLogicNode {
     scheduleStartupVerification: boolean,
     loadVersion: number,
   ): Promise<ConfigLoadOutcome> {
+    const hadValidConfigBeforeLoad = this.service.getSystemConfig() !== null;
+    let shouldRefreshAdapterState = false;
     try {
       this.node.log(`Loading config from: ${filePath}`);
       const fileContent = await fs.readFile(filePath, "utf-8");
@@ -416,14 +563,24 @@ export class LshLogicNode {
         return "skipped";
       }
 
-      // Clear any pending startup timers only when this load is still current.
-      this.clearStartupTimers();
+      // Only a startup-owned load is allowed to reset the bootstrap timers.
+      // Runtime reloads must preserve any already-running warm-up / replay flow.
+      if (scheduleStartupVerification) {
+        this.clearStartupTimers();
+      }
+      this.clearDiscoveryFlushTimer();
+      this.invalidateLowPriorityLshDrain();
       const logMessage = this.service.updateSystemConfig(parsedConfig as SystemConfig);
       this.node.log(logMessage);
       await this.processServiceResult(this.service.syncDiscoveryConfig());
+      shouldRefreshAdapterState = true;
 
       if (scheduleStartupVerification) {
         this.scheduleInitialVerification();
+      } else if (this.isStartupRecoveryStillPending()) {
+        this.runtimeRecoveryQueuedAfterStartup = true;
+      } else {
+        this.scheduleRuntimeRecoveryVerification();
       }
       return "applied";
     } catch (error) {
@@ -431,13 +588,18 @@ export class LshLogicNode {
         return "skipped";
       }
 
-      await this.processServiceResult(this.service.clearSystemConfig());
+      if (!hadValidConfigBeforeLoad || scheduleStartupVerification) {
+        await this.processServiceResult(this.service.clearSystemConfig());
+        shouldRefreshAdapterState = true;
+      } else {
+        this.node.warn("Keeping the last valid runtime configuration because a hot-reload failed.");
+      }
       throw error;
     } finally {
-      if (!this.isConfigLoadStale(loadVersion)) {
+      if (!this.isConfigLoadStale(loadVersion) && shouldRefreshAdapterState) {
         this.updateExposedState();
         this.updateExposedConfig();
-        this.updateExportedTopics();
+        await this.updateExportedTopics();
       }
     }
   }
@@ -466,6 +628,150 @@ export class LshLogicNode {
 
   private isConfigLoadStale(loadVersion: number): boolean {
     return this.isClosing || loadVersion !== this.latestConfigLoadVersion;
+  }
+
+  /**
+   * Returns whether the startup-owned recovery flow still has a BOOT settle or
+   * verification timer pending. Warm-up alone is not enough: late warm-up loads
+   * still need their own strong runtime recovery pass.
+   */
+  private isStartupRecoveryStillPending(): boolean {
+    return this.startupBootTimer !== null || this.initialVerificationTimer !== null;
+  }
+
+  /**
+   * Drops any queued low-priority startup/watchdog traffic from older config
+   * generations so a hot reload never drains stale commands for removed or
+   * reshaped devices.
+   */
+  private invalidateLowPriorityLshDrain(): void {
+    for (const pendingMessage of this.pendingLowPriorityLshMessages) {
+      if (pendingMessage.controllerPingDeviceName) {
+        this.service.cancelQueuedControllerPing(pendingMessage.controllerPingDeviceName);
+      }
+      if (pendingMessage.bridgeProbe) {
+        this.service.cancelQueuedBridgeProbe();
+      }
+      if (pendingMessage.snapshotRecoveryDeviceName) {
+        this.service.cancelQueuedSnapshotRecovery(pendingMessage.snapshotRecoveryDeviceName);
+      }
+    }
+    this.lowPriorityLshGeneration++;
+    this.pendingLowPriorityLshMessages = [];
+  }
+
+  /**
+   * Returns the target device when an outgoing LSH message is a controller-level
+   * `PING` directed at a device topic. Bridge-level service pings intentionally
+   * return `null` because they do not participate in watchdog timeout tracking.
+   */
+  private getControllerPingDeviceName(message: NodeMessage): string | null {
+    if (typeof message.topic !== "string" || !message.topic.startsWith(this.config.lshBasePath)) {
+      return null;
+    }
+
+    if (!message.topic.endsWith("/IN")) {
+      return null;
+    }
+
+    const decodedPayload = this.codec.decode(message.payload, this.config.protocol);
+    const payload =
+      decodedPayload && typeof decodedPayload === "object"
+        ? (decodedPayload as { p?: unknown })
+        : null;
+    if (!payload || payload.p !== LshProtocol.PING) {
+      return null;
+    }
+
+    const deviceName = message.topic.slice(this.config.lshBasePath.length, -"/IN".length);
+    return deviceName.length > 0 ? deviceName : null;
+  }
+
+  /**
+   * Returns `true` when an outgoing LSH message is the global service-topic
+   * bridge probe broadcast used by the watchdog to distinguish bridge health
+   * from controller silence.
+   */
+  private isBridgeProbeMessage(message: NodeMessage): boolean {
+    if (typeof message.topic !== "string" || message.topic !== this.config.serviceTopic) {
+      return false;
+    }
+
+    const decodedPayload = this.codec.decode(message.payload, this.config.protocol);
+    const payload =
+      decodedPayload && typeof decodedPayload === "object"
+        ? (decodedPayload as { p?: unknown })
+        : null;
+    return payload?.p === LshProtocol.PING;
+  }
+
+  /**
+   * Returns the target device when an outgoing LSH message is a snapshot
+   * recovery command (`REQUEST_DETAILS` or `REQUEST_STATE`) directed at a
+   * device topic.
+   */
+  private getSnapshotRecoveryDeviceName(message: NodeMessage): string | null {
+    if (typeof message.topic !== "string" || !message.topic.startsWith(this.config.lshBasePath)) {
+      return null;
+    }
+
+    if (!message.topic.endsWith("/IN")) {
+      return null;
+    }
+
+    const decodedPayload = this.codec.decode(message.payload, this.config.protocol);
+    const payload =
+      decodedPayload && typeof decodedPayload === "object"
+        ? (decodedPayload as { p?: unknown })
+        : null;
+    if (!payload) {
+      return null;
+    }
+
+    if (payload.p !== LshProtocol.REQUEST_DETAILS && payload.p !== LshProtocol.REQUEST_STATE) {
+      return null;
+    }
+
+    const deviceName = message.topic.slice(this.config.lshBasePath.length, -"/IN".length);
+    return deviceName.length > 0 ? deviceName : null;
+  }
+
+  /**
+   * Starts watchdog and recovery timeout accounting only once the relevant LSH
+   * message is actually being emitted by the adapter.
+   */
+  private markImmediateLshDispatches(lshMessages: OutputMessages[Output.Lsh] | undefined): void {
+    if (!lshMessages) {
+      return;
+    }
+
+    const messages = Array.isArray(lshMessages) ? lshMessages : [lshMessages];
+    for (const message of messages) {
+      let startupVerificationDeviceCommandDispatched = false;
+
+      const deviceName = this.getControllerPingDeviceName(message);
+      if (deviceName) {
+        this.service.recordDispatchedControllerPing(deviceName);
+        startupVerificationDeviceCommandDispatched = true;
+      }
+
+      if (this.isBridgeProbeMessage(message)) {
+        this.service.recordDispatchedBridgeProbe();
+      }
+
+      const snapshotRecoveryDeviceName = this.getSnapshotRecoveryDeviceName(message);
+      if (snapshotRecoveryDeviceName) {
+        this.service.recordDispatchedSnapshotRecovery(snapshotRecoveryDeviceName);
+        startupVerificationDeviceCommandDispatched = true;
+      }
+
+      if (
+        startupVerificationDeviceCommandDispatched &&
+        this.tracksStartupVerificationRecoveryWindow
+      ) {
+        this.extendWarmupForStartupVerificationDispatch();
+      }
+    }
   }
 
   /**
@@ -511,19 +817,54 @@ export class LshLogicNode {
       this.initialVerificationTimer = null;
     }
     this.isWarmingUp = false;
+    this.warmupDeadlineAt = null;
+    this.runtimeRecoveryQueuedAfterStartup = false;
+    this.tracksStartupVerificationRecoveryWindow = false;
+  }
+
+  private clearRuntimeRecoveryTimer(): void {
+    if (this.runtimeRecoveryTimer) {
+      clearTimeout(this.runtimeRecoveryTimer);
+      this.runtimeRecoveryTimer = null;
+    }
   }
 
   private startWarmup(durationMs: number): void {
+    this.setWarmupDeadline(Date.now() + durationMs);
+  }
+
+  private setWarmupDeadline(deadlineAt: number): void {
     if (this.warmupTimer) {
       clearTimeout(this.warmupTimer);
     }
 
     this.isWarmingUp = true;
+    this.warmupDeadlineAt = deadlineAt;
+    const delayMs = Math.max(deadlineAt - Date.now(), 0);
     this.warmupTimer = setTimeout(() => {
       this.isWarmingUp = false;
+      this.warmupDeadlineAt = null;
       this.node.log("Warm-up period finished. Node is now fully operational.");
       this.warmupTimer = null;
-    }, durationMs);
+    }, delayMs);
+  }
+
+  /**
+   * During startup verification, suppress recovery noise until `pingTimeout`
+   * after the last controller-side verification command that actually leaves
+   * the adapter. This covers both direct `PING`s and snapshot repair requests.
+   */
+  private extendWarmupForStartupVerificationDispatch(now = Date.now()): void {
+    if (!this.isWarmingUp) {
+      return;
+    }
+
+    const nextDeadline = now + this.config.pingTimeout * 1000;
+    if (this.warmupDeadlineAt !== null && this.warmupDeadlineAt >= nextDeadline) {
+      return;
+    }
+
+    this.setWarmupDeadline(nextDeadline);
   }
 
   private async runStartupSequence(
@@ -557,13 +898,63 @@ export class LshLogicNode {
     }, initialStateTimeoutMs);
   }
 
+  /**
+   * Schedules a strong runtime recovery pass after a successful hot reload
+   * without restarting warm-up. This keeps runtime reloads self-healing for
+   * newly added or reshaped devices while preserving normal live alerting.
+   */
+  private scheduleRuntimeRecoveryVerification(): void {
+    this.clearRuntimeRecoveryTimer();
+    this.runtimeRecoveryQueuedAfterStartup = false;
+    this.runtimeRecoveryTimer = setTimeout(() => {
+      void this.runRuntimeRecoverySequence(this.config.initialStateTimeout * 1000);
+    }, STARTUP_BOOT_DELAY_MS);
+  }
+
+  private async runRuntimeRecoverySequence(initialStateTimeoutMs: number): Promise<void> {
+    this.runtimeRecoveryTimer = null;
+    if (this.isClosing) {
+      return;
+    }
+
+    this.node.log(
+      "Running post-reload device recovery: reconciling snapshots for the updated runtime configuration.",
+    );
+
+    if (!this.service.needsStartupBootReplay()) {
+      await this.runInitialVerification();
+      return;
+    }
+
+    this.node.log(
+      "Config reload left one or more devices without authoritative snapshots. Requesting a bridge-local BOOT resync before runtime verification.",
+    );
+    await this.processServiceResult(this.service.getStartupCommands());
+
+    if (this.initialVerificationTimer) {
+      clearTimeout(this.initialVerificationTimer);
+    }
+    this.initialVerificationTimer = setTimeout(() => {
+      void this.runInitialVerification();
+    }, initialStateTimeoutMs);
+  }
+
   private async runInitialVerification(): Promise<void> {
     this.initialVerificationTimer = null;
     this.node.log(
       "Running initial device state verification: repairing incomplete snapshots and pinging unreachable devices...",
     );
-    const result = this.service.verifyInitialDeviceStates();
-    await this.processServiceResult(result);
+    this.tracksStartupVerificationRecoveryWindow = true;
+    try {
+      const result = this.service.verifyInitialDeviceStates();
+      await this.processServiceResult(result);
+    } finally {
+      this.tracksStartupVerificationRecoveryWindow = false;
+    }
+
+    if (this.runtimeRecoveryQueuedAfterStartup && !this.isClosing) {
+      this.scheduleRuntimeRecoveryVerification();
+    }
   }
 
   /**
@@ -607,17 +998,31 @@ export class LshLogicNode {
   public async handleConfigFileChange(path: string, validateFn: ValidateFunction): Promise<void> {
     this.node.log(`Configuration file changed: ${path}. Reloading...`);
     this.node.status({ fill: "yellow", shape: "dot", text: "Reloading config..." });
+    const isStartupRecoveryReload = !this.timersStarted && this.service.getSystemConfig() === null;
     try {
-      const outcome = await this.enqueueConfigLoad(path, validateFn, false);
+      const outcome = await this.enqueueConfigLoad(path, validateFn, isStartupRecoveryReload);
       if (outcome === "skipped") {
         return;
       }
-      this.node.log(`Configuration successfully reloaded from ${path}.`);
+      this.ensureTimersStarted();
+      this.node.log(
+        isStartupRecoveryReload
+          ? `Configuration successfully recovered from ${path}. Restarting the full startup bootstrap flow.`
+          : `Configuration successfully reloaded from ${path}.`,
+      );
       this.node.status({ fill: "green", shape: "dot", text: "Ready" });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.node.error(`Error reloading ${path}: ${message}`);
-      this.node.status({ fill: "red", shape: "ring", text: `Config reload failed` });
+      if (this.service.getSystemConfig() !== null) {
+        this.node.status({
+          fill: "yellow",
+          shape: "ring",
+          text: "Reload failed, using last config",
+        });
+      } else {
+        this.node.status({ fill: "red", shape: "ring", text: "Config reload failed" });
+      }
     }
   }
 
@@ -667,13 +1072,21 @@ export class LshLogicNode {
     this.isClosing = true;
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
+    this.timersStarted = false;
     this.watchdogCycleQueued = false;
+    this.clearDiscoveryFlushTimer();
     this.clearStartupTimers();
+    this.clearRuntimeRecoveryTimer();
+    this.invalidateLowPriorityLshDrain();
     if (this.configReloadTimer) clearTimeout(this.configReloadTimer);
     if (this.watcher) {
       await this.watcher.close();
     }
     await this.configLoadQueue;
+    if (this.lowPriorityLshDrainPromise) {
+      await this.lowPriorityLshDrainPromise;
+    }
+    await this.sendQueue;
     if (this.watchdogCyclePromise) {
       await this.watchdogCyclePromise;
     }
@@ -720,13 +1133,18 @@ export class LshLogicNode {
     this.getContext(exposeConfigContext).set(exposeConfigKey, exposedData);
   }
 
-  private updateExportedTopics(): void {
+  private async updateExportedTopics(): Promise<void> {
     const { exportTopics, exportTopicsKey, lshBasePath, homieBasePath } = this.config;
     if (this.isClosing) {
       return;
     }
 
-    const deviceNames = this.service.getConfiguredDeviceNames() || [];
+    // Subscription sets are semantic sets, not ordered lists. Sorting keeps the
+    // runtime comparison stable across config reordering and prevents needless
+    // unsubscribe/resubscribe churn for equivalent topic sets.
+    const deviceNames = [...(this.service.getConfiguredDeviceNames() || [])].sort((left, right) =>
+      left.localeCompare(right),
+    );
 
     // Explicitly define the sub-topics to subscribe to for each LSH device, excluding '/IN'.
     const lshSubTopics = ["conf", "state", "events", "bridge"];
@@ -735,22 +1153,19 @@ export class LshLogicNode {
     ); // These require QoS 2.
 
     const homieTopics = deviceNames.map((name) => `${homieBasePath}${name}/$state`); // These require QoS 1
-    const discoveryTopics = this.config.haDiscovery
-      ? [`${homieBasePath}+/$nodes`, `${homieBasePath}+/$mac`, `${homieBasePath}+/$fw/version`]
-      : [];
+    const discoveryTopics = this.config.haDiscovery ? getHomieDiscoveryTopics(homieBasePath) : [];
+
+    const outputMessages: Array<MqttSubscribeMsg | MqttUnsubscribeMsg> = [
+      {
+        action: "unsubscribe",
+        topic: true,
+      },
+    ];
 
     // Create the message to unsubscribe from ALL current topics.
     // The `mqtt-in` node accepts `topic: true` for this action.
     // We disable the lint rule because this structure is specific to the `mqtt-in` node
     // and intentionally not a standard Node-RED message type.
-
-    const unsubscribeAllMessage: MqttUnsubscribeMsg = {
-      action: "unsubscribe",
-      topic: true,
-    };
-
-    const outputMessages: Array<MqttSubscribeMsg | MqttUnsubscribeMsg> = [unsubscribeAllMessage];
-    this.node.log("Generated 'unsubscribe all' message.");
 
     // If there are Homie topics, create a specific subscribe message with QoS 1.
     if (homieTopics.length > 0) {
@@ -760,7 +1175,6 @@ export class LshLogicNode {
         qos: 1, // Set QoS to 1 for Homie topics
       };
       outputMessages.push(subscribeQos1Message);
-      this.node.log(`Generated 'subscribe' message for ${homieTopics.length} topic(s) with QoS 1.`);
     }
 
     // If there are LSH topics, create a specific subscribe message with QoS 2.
@@ -771,7 +1185,6 @@ export class LshLogicNode {
         qos: 2, // Set QoS to 2 for LSH topics
       };
       outputMessages.push(subscribeQos2Message);
-      this.node.log(`Generated 'subscribe' message for ${lshTopics.length} topic(s) with QoS 2.`);
     }
 
     if (discoveryTopics.length > 0) {
@@ -781,11 +1194,29 @@ export class LshLogicNode {
         qos: 1,
       };
       outputMessages.push(subscribeDiscoveryMessage);
-      this.node.log(`Generated 'subscribe' message for HA Discovery topics.`);
     }
 
-    // Send the sequence of messages on the Configuration output.
-    this.send({ [Output.Configuration]: outputMessages });
+    const nextConfigurationOutputSignature = buildTopicSetSignature(
+      outputMessages.map((message) => JSON.stringify(message)),
+    );
+    if (nextConfigurationOutputSignature !== this.lastConfigurationOutputSignature) {
+      this.lastConfigurationOutputSignature = nextConfigurationOutputSignature;
+      this.node.log("MQTT topic set changed. Reconfiguring runtime subscriptions.");
+
+      // Configuration traffic must obey the same send serialization contract as
+      // runtime outputs, otherwise a reload can interleave subscribe churn with
+      // live lifecycle messages.
+      await this.enqueueSendOperation(() => {
+        if (this.isClosing) {
+          return;
+        }
+        this.send({ [Output.Configuration]: outputMessages });
+      });
+    } else {
+      this.node.log(
+        "MQTT topic set unchanged after config update. Skipping runtime subscription reconfiguration.",
+      );
+    }
 
     // Update the context variable for passive inspection.
     if (exportTopics !== "none" && exportTopicsKey) {

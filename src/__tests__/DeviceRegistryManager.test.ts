@@ -27,6 +27,7 @@ describe("DeviceRegistryManager", () => {
     expect(registry["new-device"].name).toBe("new-device");
     // A new device should start as disconnected until proven otherwise.
     expect(registry["new-device"].connected).toBe(false);
+    expect(registry["new-device"].controllerLinkConnected).toBeNull();
   });
 
   it("should store device details, initialize indexes, and leave state unauthoritative until a state frame arrives", () => {
@@ -133,7 +134,24 @@ describe("DeviceRegistryManager", () => {
       expect(lostResult.stateChanged).toBe(true);
       expect(lostDevice?.bridgeConnected).toBe(false);
       expect(lostDevice?.connected).toBe(false);
+      expect(lostDevice?.controllerLinkConnected).toBeNull();
       expect(lostDevice?.isHealthy).toBe(false);
+    });
+
+    it("should ignore diagnostic-only init/sleeping states for reachability", () => {
+      manager.updateBridgeConnectionState("device-1", "ready");
+
+      const initResult = manager.updateBridgeConnectionState("device-1", "init");
+      const sleepingResult = manager.updateBridgeConnectionState("device-1", "sleeping");
+      const device = manager.getDevice("device-1");
+
+      expect(initResult).toEqual({ stateChanged: false, wasConnected: true, isConnected: true });
+      expect(sleepingResult).toEqual({
+        stateChanged: false,
+        wasConnected: true,
+        isConnected: true,
+      });
+      expect(device?.bridgeConnected).toBe(true);
     });
 
     it("should not report a change if the state is the same", () => {
@@ -278,6 +296,19 @@ describe("DeviceRegistryManager", () => {
       const result = manager.updateHealthFromResult(nonExistentDevice, anyWatchdogResult);
       expect(result.stateChanged).toBe(false);
       expect(manager.getDevice(nonExistentDevice)).toBeUndefined();
+    });
+  });
+
+  describe("recordBridgePingReply", () => {
+    it("should persist the bridge-reported controller link status", () => {
+      manager.recordBridgePingReply("device-1", false, false);
+      expect(manager.getDevice("device-1")?.controllerLinkConnected).toBe(false);
+
+      manager.recordControllerActivity("device-1");
+      expect(manager.getDevice("device-1")?.controllerLinkConnected).toBe(true);
+
+      manager.updateBridgeConnectionState("device-1", "lost");
+      expect(manager.getDevice("device-1")?.controllerLinkConnected).toBeNull();
     });
   });
 

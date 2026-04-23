@@ -12,14 +12,26 @@ describe("schemas", () => {
         }),
       () =>
         validators.validateSystemConfig({
+          devices: [{ name: "Foo" }, { name: "foo" }],
+        }),
+      () =>
+        validators.validateSystemConfig({
           devices: [
             {
               name: "c1",
               longClickButtons: [
-                { id: 1, actors: [], otherActors: [] },
-                { id: 1, actors: [], otherActors: [] },
+                {
+                  id: 1,
+                  actors: [{ name: "actor-1", allActuators: true, actuators: [] }],
+                },
+                {
+                  id: 1,
+                  actors: [{ name: "actor-2", allActuators: true, actuators: [] }],
+                },
               ],
             },
+            { name: "actor-1" },
+            { name: "actor-2" },
           ],
         }),
       () =>
@@ -104,8 +116,14 @@ describe("schemas", () => {
       devices: [
         {
           name: "c1",
-          longClickButtons: [{ id: 0, actors: [], otherActors: [] }],
+          longClickButtons: [
+            {
+              id: 0,
+              actors: [{ name: "actor-1", allActuators: true, actuators: [] }],
+            },
+          ],
         },
+        { name: "actor-1" },
       ],
     });
     const detailsValid = validators.validateDeviceDetails({
@@ -195,6 +213,84 @@ describe("schemas", () => {
     expect(isValid).toBe(true);
   });
 
+  it("rejects device names that are not valid MQTT topic segments", () => {
+    const invalidNames = ["bad/name", "bad+name", "bad#name", "bad name"];
+
+    for (const name of invalidNames) {
+      const isValid = validators.validateSystemConfig({
+        devices: [{ name }],
+      });
+
+      expect(isValid).toBe(false);
+    }
+  });
+
+  it("accepts button actions that omit otherActors when LSH actors are present", () => {
+    const isValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "c1",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "actor-1", allActuators: true, actuators: [] }],
+            },
+          ],
+        },
+        { name: "actor-1" },
+      ],
+    });
+
+    expect(isValid).toBe(true);
+  });
+
+  it("rejects button actions with no targets at all", () => {
+    const isValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "c1",
+          longClickButtons: [{ id: 1 }],
+        },
+      ],
+    });
+
+    expect(isValid).toBe(false);
+  });
+
+  it("rejects actor references that do not match configured devices exactly", () => {
+    const unknownActorValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "ghost", allActuators: true, actuators: [] }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const wrongCaseActorValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "sender",
+          longClickButtons: [
+            {
+              id: 1,
+              actors: [{ name: "Actor-1", allActuators: true, actuators: [] }],
+            },
+          ],
+        },
+        { name: "actor-1" },
+      ],
+    });
+
+    expect(unknownActorValid).toBe(false);
+    expect(wrongCaseActorValid).toBe(false);
+  });
+
   it("rejects unsupported Home Assistant platform overrides in system config", () => {
     const isValid = validators.validateSystemConfig({
       devices: [
@@ -208,5 +304,50 @@ describe("schemas", () => {
     });
 
     expect(isValid).toBe(false);
+  });
+
+  it("rejects Home Assistant discovery node overrides that collide case-insensitively", () => {
+    const isValid = validators.validateSystemConfig({
+      devices: [
+        {
+          name: "c1",
+          haDiscovery: {
+            nodes: {
+              Relay: {
+                platform: "switch",
+              },
+              relay: {
+                platform: "fan",
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(isValid).toBe(false);
+  });
+
+  it("rejects Home Assistant discovery node overrides that are not valid Homie node ids", () => {
+    const invalidNodeIds = ["bad node", "topic/evil"];
+
+    for (const nodeId of invalidNodeIds) {
+      const isValid = validators.validateSystemConfig({
+        devices: [
+          {
+            name: "c1",
+            haDiscovery: {
+              nodes: {
+                [nodeId]: {
+                  platform: "switch",
+                },
+              },
+            },
+          },
+        ],
+      });
+
+      expect(isValid).toBe(false);
+    }
   });
 });

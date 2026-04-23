@@ -61,6 +61,15 @@ describe("LshCodec", () => {
       expect(codec.decode(result, "msgpack")).toEqual(data);
     });
 
+    it("keeps MsgPack payloads backed by an ArrayBuffer view", () => {
+      const data = { p: 1, n: "test" };
+      const result = codec.encode(data, "msgpack");
+
+      expect(Buffer.isBuffer(result)).toBe(true);
+      expect(result.buffer).toBeInstanceOf(ArrayBuffer);
+      expect(result.byteLength).toBeGreaterThan(0);
+    });
+
     it("returns the object unchanged when protocol is json", () => {
       const data = { p: 1, n: "test" };
 

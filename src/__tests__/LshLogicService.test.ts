@@ -99,6 +99,38 @@ describe("LshLogicService - Core & Config", () => {
       expect(logMessage).toContain("Pruned stale devices from registry");
     });
 
+    it("should reject runtime configs with invalid or case-colliding device names", () => {
+      expect(() =>
+        service.updateSystemConfig({
+          devices: [{ name: "bad/name" }],
+        }),
+      ).toThrow(/valid single MQTT topic segments/);
+
+      expect(() =>
+        service.updateSystemConfig({
+          devices: [{ name: "Foo" }, { name: "foo" }],
+        }),
+      ).toThrow(/collide after case-insensitive normalization/);
+    });
+
+    it("should reject runtime configs whose actors reference unknown devices", () => {
+      expect(() =>
+        service.updateSystemConfig({
+          devices: [
+            {
+              name: "sender",
+              longClickButtons: [
+                {
+                  id: 1,
+                  actors: [{ name: "ghost", allActuators: true, actuators: [] }],
+                },
+              ],
+            },
+          ],
+        }),
+      ).toThrow(/Configured actor 'ghost'/);
+    });
+
     it("should discard pending click transactions whenever the config is reloaded", () => {
       const initialConfig = {
         devices: [
@@ -168,7 +200,10 @@ describe("LshLogicService - Core & Config", () => {
 
       service.processMessage("homie/c1/$mac", "AA:BB:CC:DD:EE:FF");
       service.processMessage("homie/c1/$fw/version", "1.0.0");
+      service.processMessage("homie/c1/1/state/$datatype", "boolean");
+      service.processMessage("homie/c1/1/state/$settable", "true");
       service.processMessage("homie/c1/$nodes", "1");
+      service.syncDiscoveryConfig();
 
       service.updateSystemConfig({
         devices: [
@@ -209,6 +244,40 @@ describe("LshLogicService - Core & Config", () => {
       );
     });
 
+    it("should skip HA discovery regeneration when a reload leaves the discovery model unchanged", () => {
+      loadConfig({
+        devices: [{ name: "c1" }],
+      });
+
+      service.processMessage("homie/c1/$mac", "AA:BB:CC:DD:EE:FF");
+      service.processMessage("homie/c1/$fw/version", "1.0.0");
+      service.processMessage("homie/c1/1/state/$datatype", "boolean");
+      service.processMessage("homie/c1/1/state/$settable", "true");
+      service.processMessage("homie/c1/$nodes", "1");
+      service.syncDiscoveryConfig();
+
+      service.updateSystemConfig({
+        devices: [
+          {
+            name: "c1",
+            longClickButtons: [
+              {
+                id: 1,
+                actors: [{ name: "other-device", allActuators: true, actuators: [] }],
+                otherActors: [],
+              },
+            ],
+          },
+          { name: "other-device" },
+        ],
+      });
+
+      const syncResult = service.syncDiscoveryConfig();
+
+      expect(syncResult.messages[Output.Lsh]).toBeUndefined();
+      expect(syncResult.logs).toEqual([]);
+    });
+
     it("should clear config, registry and stale watchdog state together", () => {
       const nowSpy = jest.spyOn(Date, "now");
       nowSpy.mockReturnValue(1_000);
@@ -229,7 +298,12 @@ describe("LshLogicService - Core & Config", () => {
       nowSpy.mockReturnValue(6_000);
       const result = service.runWatchdogCheck();
 
-      expect(result.messages[Output.Lsh]).toBeUndefined();
+      expect(getOutputMessages(result, Output.Lsh)).toEqual([
+        expect.objectContaining({
+          topic: defaultServiceConfig.serviceTopic,
+          payload: { p: LshProtocol.PING },
+        }),
+      ]);
     });
 
     it("should prune expired wildcard discovery state during watchdog cycles even when no devices are configured", () => {
@@ -294,6 +368,12 @@ describe("LshLogicService - Core & Config", () => {
       loadConfig(createSystemConfig("device-nodes"));
       service.processMessage("homie/device-nodes/$mac", "AA:BB:CC:DD:EE:FF");
       service.processMessage("homie/device-nodes/$fw/version", "1.0.0");
+      service.processMessage("homie/device-nodes/relay/state/$datatype", "boolean");
+      service.processMessage("homie/device-nodes/relay/state/$settable", "true");
+      service.processMessage("homie/device-nodes/KitchenLight/state/$datatype", "boolean");
+      service.processMessage("homie/device-nodes/KitchenLight/state/$settable", "true");
+      service.processMessage("homie/device-nodes/valid_2/state/$datatype", "boolean");
+      service.processMessage("homie/device-nodes/valid_2/state/$settable", "true");
 
       const result = service.processMessage(
         "homie/device-nodes/$nodes",
@@ -431,6 +511,24 @@ describe("LshLogicService - Core & Config", () => {
           payload: { p: LshProtocol.PING },
         }),
       ]);
+    });
+
+    it("should not send direct controller recovery commands when the bridge says controller_connected=false", () => {
+      loadConfig(createSystemConfig("dev1"));
+      service.processMessage("homie/dev1/$state", "ready");
+      service.processMessage("LSH/dev1/bridge", {
+        event: "service_ping_reply",
+        controller_connected: false,
+        runtime_synchronized: false,
+        bootstrap_phase: "waiting_details",
+      });
+
+      const result = service.verifyInitialDeviceStates();
+
+      expect(result.messages[Output.Lsh]).toBeUndefined();
+      expect(result.logs).toContain(
+        "Initial state verification: 1 device(s) have a reachable bridge but the downstream controller link is still down. Skipping direct controller recovery commands.",
+      );
     });
 
     it("should log success when all configured devices are reachable with authoritative snapshots", () => {
@@ -785,7 +883,9 @@ describe("LshLogicService - Core & Config", () => {
           },
           assertDevice: () => {
             const device = service.getDeviceRegistry().actor1;
-            expect(device.connected).toBe(false);
+            expect(device.bridgeConnected).toBe(true);
+            expect(device.connected).toBe(true);
+            expect(device.isHealthy).toBe(true);
             expect(device.lastHomieState).toBe("sleeping");
           },
           verifyRepeatNoop: true,
@@ -802,7 +902,7 @@ describe("LshLogicService - Core & Config", () => {
         expect(result.stateChanged).toBe(true);
         expect(result.messages).toEqual({});
         expect(result.logs).toContain(
-          `Device 'actor1' reported Homie lifecycle state '${state}'. Ignoring it for alerts and resync.`,
+          `Device 'actor1' reported Homie lifecycle state '${state}'. Ignoring it for reachability, alerts and resync.`,
         );
         assertDevice();
 
@@ -1037,6 +1137,8 @@ describe("LshLogicService - Core & Config", () => {
 
       service.processMessage(`homie/${deviceId}/$mac`, "AA:BB:CC");
       service.processMessage(`homie/${deviceId}/$fw/version`, "1.0.0");
+      service.processMessage(`homie/${deviceId}/lamp/state/$datatype`, "boolean");
+      service.processMessage(`homie/${deviceId}/lamp/state/$settable`, "true");
       const result = service.processMessage(`homie/${deviceId}/$nodes`, "lamp");
 
       const messages = getOutputMessages(result, Output.Lsh);
@@ -1098,6 +1200,10 @@ describe("LshLogicService - Core & Config", () => {
 
       service.processMessage(`homie/${deviceId}/$mac`, "AA:BB:CC");
       service.processMessage(`homie/${deviceId}/$fw/version`, "1.0.0");
+      service.processMessage(`homie/${deviceId}/lamp/state/$datatype`, "boolean");
+      service.processMessage(`homie/${deviceId}/lamp/state/$settable`, "true");
+      service.processMessage(`homie/${deviceId}/relay/state/$datatype`, "boolean");
+      service.processMessage(`homie/${deviceId}/relay/state/$settable`, "true");
       service.processMessage(`homie/${deviceId}/$nodes`, "lamp,relay");
 
       const result = service.processMessage(`homie/${deviceId}/$nodes`, "lamp");

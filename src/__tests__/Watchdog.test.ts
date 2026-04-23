@@ -14,6 +14,7 @@ describe("Watchdog", () => {
   const mockDevice: DeviceState = {
     name: "test-device",
     connected: true,
+    controllerLinkConnected: true,
     isHealthy: true,
     isStale: false,
     lastSeenTime: 0,
@@ -56,8 +57,23 @@ describe("Watchdog", () => {
     };
 
     watchdog.checkDeviceHealth(device, NOW);
+    watchdog.onPingDispatched(device.name, NOW);
 
     const future = NOW + 1000;
+    const result = watchdog.checkDeviceHealth(device, future);
+    expect(result.status).toBe("ok");
+  });
+
+  it("should not time out a ping before the adapter reports the actual dispatch time", () => {
+    const device = {
+      ...mockDevice,
+      lastSeenTime: NOW - (INTERROGATE_SEC + 1) * 1000,
+    };
+
+    const firstResult = watchdog.checkDeviceHealth(device, NOW);
+    expect(firstResult.status).toBe("needs_ping");
+
+    const future = NOW + (TIMEOUT_SEC + 1) * 1000;
     const result = watchdog.checkDeviceHealth(device, future);
     expect(result.status).toBe("ok");
   });
@@ -70,6 +86,7 @@ describe("Watchdog", () => {
     };
 
     watchdog.checkDeviceHealth(device, NOW);
+    watchdog.onPingDispatched(device.name, NOW);
 
     const future = NOW + 1000;
     const result = watchdog.checkDeviceHealth(device, future);
@@ -83,10 +100,31 @@ describe("Watchdog", () => {
     };
 
     watchdog.checkDeviceHealth(device, NOW);
+    watchdog.onPingDispatched(device.name, NOW);
 
     const future = NOW + (TIMEOUT_SEC + 1) * 1000;
     const result = watchdog.checkDeviceHealth(device, future);
     expect(result.status).toBe("stale");
+  });
+
+  it('should not requeue duplicate retries while a stale device retry is still "queued"', () => {
+    const device = {
+      ...mockDevice,
+      lastSeenTime: NOW - (INTERROGATE_SEC + 1) * 1000,
+    };
+
+    watchdog.checkDeviceHealth(device, NOW);
+    watchdog.onPingDispatched(device.name, NOW);
+
+    const timeoutResult = watchdog.checkDeviceHealth(device, NOW + (TIMEOUT_SEC + 1) * 1000);
+    expect(timeoutResult.status).toBe("stale");
+
+    const staleDevice = { ...device, isStale: true };
+    const queuedRetryResult = watchdog.checkDeviceHealth(
+      staleDevice,
+      NOW + (TIMEOUT_SEC + 2) * 1000,
+    );
+    expect(queuedRetryResult.status).toBe("retry_queued");
   });
 
   it('should return "needs_ping" for a device that exists but has never communicated (lastSeenTime is 0)', () => {
@@ -113,6 +151,7 @@ describe("Watchdog", () => {
     const result1 = watchdog.checkDeviceHealth(device, NOW);
     expect(result1.status).toBe("needs_ping");
 
+    watchdog.onPingDispatched(device.name, NOW);
     watchdog.onDeviceActivity(device.name);
     device.lastSeenTime = NOW + 1;
     const result2 = watchdog.checkDeviceHealth(device, NOW + 1);
@@ -141,15 +180,41 @@ describe("Watchdog", () => {
     );
   });
 
-  it("keeps probing the controller when the bridge is alive but controller reachability is false", () => {
+  it("stops controller pings when the bridge explicitly reports controller_connected=false", () => {
     const bridgeOnlyDevice: DeviceState = {
       ...mockDevice,
       connected: false,
       bridgeConnected: true,
+      controllerLinkConnected: false,
       lastSeenTime: NOW - (INTERROGATE_SEC + 10) * 1000,
     };
 
-    expect(watchdog.checkDeviceHealth(bridgeOnlyDevice, NOW).status).toBe("needs_ping");
+    expect(watchdog.checkDeviceHealth(bridgeOnlyDevice, NOW).status).toBe("ok");
+  });
+
+  it("rate-limits bridge probes independently from controller pings", () => {
+    expect(watchdog.shouldProbeBridge(NOW)).toBe(true);
+    watchdog.onBridgeProbeQueued();
+    expect(watchdog.shouldProbeBridge(NOW + 1)).toBe(false);
+    watchdog.onBridgeProbeDispatched(NOW + 100);
+    expect(watchdog.shouldProbeBridge(NOW + 1_000)).toBe(false);
+    expect(watchdog.shouldProbeBridge(NOW + (TIMEOUT_SEC + 1) * 1000)).toBe(true);
+  });
+
+  it("treats bridge probe cooldown as global because the emitted probe is broadcast", () => {
+    expect(watchdog.shouldProbeBridge(NOW)).toBe(true);
+    watchdog.onBridgeProbeQueued();
+    expect(watchdog.shouldProbeBridge(NOW + 1_000)).toBe(false);
+  });
+
+  it("cancels a queued bridge probe when pending low-priority work is invalidated", () => {
+    expect(watchdog.shouldProbeBridge(NOW)).toBe(true);
+    watchdog.onBridgeProbeQueued();
+    expect(watchdog.shouldProbeBridge(NOW + 1_000)).toBe(false);
+
+    watchdog.cancelQueuedBridgeProbe();
+
+    expect(watchdog.shouldProbeBridge(NOW + 1_001)).toBe(true);
   });
 
   it("prunes pending ping bookkeeping for devices removed from config", () => {
