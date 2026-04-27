@@ -23,6 +23,7 @@ interface DeviceDiscoveryDefinition {
   unit?: string;
   state_class?: "measurement" | "total_increasing";
   value_template?: string;
+  json_attributes_topic?: boolean;
 }
 
 interface HomeAssistantOrigin {
@@ -60,6 +61,7 @@ interface DiscoveryComponentBase {
   state_class?: "measurement" | "total_increasing";
   force_update?: boolean;
   value_template?: string;
+  json_attributes_topic?: string;
 }
 
 interface ToggleDiscoveryComponent extends DiscoveryComponentBase {
@@ -280,10 +282,36 @@ const SENSORS_DEF: readonly DeviceDiscoveryDefinition[] = [
     cat: "diagnostic",
   },
   {
+    id: "reset_reason",
+    name: "Reset Reason",
+    topic: "$implementation/reset/reason",
+    icon: "mdi:restart-alert",
+    cat: "diagnostic",
+  },
+  {
+    id: "wifi_last_disconnect_reason",
+    name: "WiFi Last Disconnect Reason",
+    topic: "$implementation/wifi/last_disconnect_reason",
+    icon: "mdi:wifi-alert",
+    cat: "diagnostic",
+  },
+  {
+    id: "mqtt_last_disconnect_reason",
+    name: "MQTT Last Disconnect Reason",
+    topic: "$implementation/mqtt/last_disconnect_reason",
+    icon: "mdi:lan-disconnect",
+    cat: "diagnostic",
+  },
+  {
     name: "Implementation Config",
     topic: "$implementation/config",
     icon: "mdi:code-json",
     cat: "diagnostic",
+    // Home Assistant states are capped at 255 characters. The fork's
+    // implementation config is a useful diagnostic JSON document but is often
+    // longer than that, so expose a short state and keep the JSON as attributes.
+    value_template: "{{ 'configured' }}",
+    json_attributes_topic: true,
   },
   {
     name: "OTA Status",
@@ -362,6 +390,7 @@ const buildPayload = (
   if (definition.unit) config.unit_of_measurement = definition.unit;
   if (definition.state_class) config.state_class = definition.state_class;
   if (definition.value_template) config.value_template = definition.value_template;
+  if (definition.json_attributes_topic) config.json_attributes_topic = config.state_topic;
 
   return {
     id: componentId,

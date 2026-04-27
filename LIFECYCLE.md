@@ -16,6 +16,7 @@ and how startup, reload, watchdog, and live traffic interact.
 - The lifecycle always prefers the lightest repair that can close the gap.
 - Home Assistant discovery classifies Homie nodes from retained metadata: writable boolean `state` nodes become toggle entities, settable enum/integer/float/string nodes become select/number/text entities, read-only booleans become binary sensors, and other nodes become sensors.
 - Discovery updates are briefly debounced during retained Homie metadata replay, so `$description`, `$mac`, `$fw/version` and `$implementation/config` normally produce one complete retained Home Assistant update instead of several incremental rewrites.
+- Fork reset and last-disconnect diagnostics (`$implementation/reset/reason`, `$implementation/wifi/last_disconnect_reason` and `$implementation/mqtt/last_disconnect_reason`) are exposed as Home Assistant diagnostic sensors without participating in runtime reachability decisions.
 - Fork MQTT drop counters (`$stats/mqttinbounddropped` and `$stats/mqttackdropped`) are since-boot counters exposed as total-increasing Home Assistant diagnostic sensors. A bridge reboot resets them to `0`, which Home Assistant treats as a new counter cycle.
 
 ## Recovery Paths

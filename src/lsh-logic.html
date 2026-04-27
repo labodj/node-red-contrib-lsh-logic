@@ -546,8 +546,9 @@
     fork runtime diagnostics. Writable boolean <code>state</code> properties become toggle entities,
     settable enum/number/string properties become select/number/text entities, read-only booleans
     become binary sensors, and read-only numeric properties become measurement sensors when Homie
-    metadata provides units. Since-boot MQTT drop counters exposed by the Homie fork are published
-    as total-increasing diagnostic sensors.
+    metadata provides units. Reset and last WiFi/MQTT disconnect reasons exposed by the Homie fork
+    are published as diagnostic sensors, while since-boot MQTT drop counters are published as
+    total-increasing diagnostic sensors.
   </p>
 
   <h3>Outputs</h3>

@@ -39,6 +39,7 @@ type DiscoveryComponent = {
   step?: number;
   unit_of_measurement?: string;
   value_template?: string;
+  json_attributes_topic?: string;
 };
 
 type DiscoveryPayload = {
@@ -251,6 +252,44 @@ describe("HomieDiscoveryManager", () => {
         platform: "sensor",
         state_topic: "homie/5/device01/$description",
         value_template: "{{ value_json.version }}",
+      }),
+    );
+    expect(deviceMessage.payload.components?.lsh_device01_implementation_config).toEqual(
+      expect.objectContaining({
+        platform: "sensor",
+        state_topic: "homie/5/device01/$implementation/config",
+        value_template: "{{ 'configured' }}",
+        json_attributes_topic: "homie/5/device01/$implementation/config",
+      }),
+    );
+    expect(deviceMessage.payload.components?.lsh_device01_reset_reason).toEqual(
+      expect.objectContaining({
+        platform: "sensor",
+        name: "DEVICE01 Reset Reason",
+        unique_id: "lsh_device01_reset_reason",
+        default_entity_id: "sensor.lsh_device01_reset_reason",
+        state_topic: "homie/5/device01/$implementation/reset/reason",
+        entity_category: "diagnostic",
+      }),
+    );
+    expect(deviceMessage.payload.components?.lsh_device01_wifi_last_disconnect_reason).toEqual(
+      expect.objectContaining({
+        platform: "sensor",
+        name: "DEVICE01 WiFi Last Disconnect Reason",
+        unique_id: "lsh_device01_wifi_last_disconnect_reason",
+        default_entity_id: "sensor.lsh_device01_wifi_last_disconnect_reason",
+        state_topic: "homie/5/device01/$implementation/wifi/last_disconnect_reason",
+        entity_category: "diagnostic",
+      }),
+    );
+    expect(deviceMessage.payload.components?.lsh_device01_mqtt_last_disconnect_reason).toEqual(
+      expect.objectContaining({
+        platform: "sensor",
+        name: "DEVICE01 MQTT Last Disconnect Reason",
+        unique_id: "lsh_device01_mqtt_last_disconnect_reason",
+        default_entity_id: "sensor.lsh_device01_mqtt_last_disconnect_reason",
+        state_topic: "homie/5/device01/$implementation/mqtt/last_disconnect_reason",
+        entity_category: "diagnostic",
       }),
     );
     expect(deviceMessage.payload.components?.lsh_device01_mqtt_inbound_dropped).toEqual(

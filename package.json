@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "A single, powerful node for advanced automation logic on devices implementing the public LSH MQTT/protocol contract.",
   "main": "dist/lsh-logic.js",
   "scripts": {
@@ -29,6 +29,7 @@
     "README.md",
     "examples/",
     "vendor/lsh-protocol/README.md",
+    "vendor/lsh-protocol/docs/profiles-and-roles.md",
     "vendor/lsh-protocol/shared/lsh_protocol.md"
   ],
   "keywords": [

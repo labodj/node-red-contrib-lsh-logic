@@ -1,8 +1,11 @@
 # Node-RED Contrib LSH Logic
 
-[![NPM version](https://badge.fury.io/js/node-red-contrib-lsh-logic.svg)](https://badge.fury.io/js/node-red-contrib-lsh-logic)
-[![Build Status](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml/badge.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/node-red-contrib-lsh-logic.svg)](https://www.npmjs.com/package/node-red-contrib-lsh-logic)
+[![Node-RED Library](https://img.shields.io/badge/Node--RED-Library-8f0000.svg)](https://flows.nodered.org/node/node-red-contrib-lsh-logic)
+[![npm downloads](https://img.shields.io/npm/dm/node-red-contrib-lsh-logic.svg)](https://www.npmjs.com/package/node-red-contrib-lsh-logic)
+[![CI](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Flabodj%2Fnode-red-contrib-lsh-logic%2Factions%2Fworkflows%2Fci.yaml%2Fruns%3Fper_page%3D1&query=%24.workflow_runs%5B0%5D.conclusion&label=CI)](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml)
+[![Latest Release](https://img.shields.io/github/release/labodj/node-red-contrib-lsh-logic.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/releases/latest)
+[![License](https://img.shields.io/github/license/labodj/node-red-contrib-lsh-logic.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LICENSE)
 
 A powerful, high-performance Node-RED node designed to manage advanced automation logic for smart home devices that speak the public LSH MQTT / protocol contract. Built with TypeScript for maximum reliability and type safety.
 
@@ -15,7 +18,7 @@ If you are new to the public LSH stack, read the landing reference page first:
 - [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
 - [LSH glossary](https://github.com/labodj/labo-smart-home/blob/main/GLOSSARY.md)
 
-![Node Appearance](images/node-appearance.png)
+![Node Appearance](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/node-appearance.png)
 
 ---
 
@@ -27,18 +30,18 @@ Use this README according to what you need:
 - If you want the shortest answers to adoption questions, skim the landing [`FAQ.md`](https://github.com/labodj/labo-smart-home/blob/main/FAQ.md).
 - If you want the shortest end-to-end bring-up path, read the landing [`GETTING_STARTED.md`](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md).
 - If startup or click behavior looks inconsistent, use the landing [`TROUBLESHOOTING.md`](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md).
-- If you want the shortest path to a working setup, read [Installation](#installation), then [Configuration](#configuration), then the example configs under [`examples/`](./examples).
+- If you want the shortest path to a working setup, read [Installation](#installation), then [Configuration](#configuration), then the example configs under [`examples/`](https://github.com/labodj/node-red-contrib-lsh-logic/tree/main/examples).
 - If you want the runtime model, startup behavior and watchdog semantics, read [How It Works](#how-it-works).
-- If you want the precise lifecycle invariants and recovery policy, read [LIFECYCLE.md](./LIFECYCLE.md).
+- If you want the precise lifecycle invariants and recovery policy, read [LIFECYCLE.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LIFECYCLE.md).
 - If you want to integrate MsgPack, jump to [Advanced: MsgPack Support](#advanced-msgpack-support).
 
 ## Bundled Examples
 
 The fastest assets to open in this repository are:
 
-- [examples/lsh-logic-example.json](./examples/lsh-logic-example.json): example flow with dynamic MQTT subscription management
-- [examples/system-config.minimal.json](./examples/system-config.minimal.json): smallest useful `system-config.json`
-- [examples/system-config.multi-device.json](./examples/system-config.multi-device.json): richer multi-device topology example
+- [examples/lsh-logic-example.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/lsh-logic-example.json): example flow with dynamic MQTT subscription management
+- [examples/system-config.minimal.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/system-config.minimal.json): smallest useful `system-config.json`
+- [examples/system-config.multi-device.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/system-config.multi-device.json): richer multi-device topology example
 
 ## Key Features
 
@@ -75,11 +78,11 @@ In practice that means:
 
 This node acts as the central orchestrator for your protocol-compatible smart home devices. It subscribes to MQTT topics, processes incoming telemetry and events, updates its internal state registry, and dispatches commands.
 
-The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
+The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
 
 At startup the node uses retained LSH snapshots when available, but it does not trust retained Homie `$state` alone as proof of current reachability: that must come from a live Homie transition or live controller-backed LSH traffic. After a short subscription-settle window, the node checks whether every configured device already has an authoritative `conf + state` snapshot. If yes, it skips the startup `BOOT` entirely. If not, it requests a single bridge-local `BOOT` replay, waits for the replay window, and then runs an active verification pass. During that verification, reachable devices receive only the missing snapshot requests, while still-unreachable devices are pinged directly. A later live `ready`, `conf`, `state`, `events`, or device-level `PING` response automatically recovers devices that were offline during startup. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
 
-The detailed lifecycle contract now lives in [LIFECYCLE.md](./LIFECYCLE.md). Read that file if you need the exact semantics of:
+The detailed lifecycle contract now lives in [LIFECYCLE.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LIFECYCLE.md). Read that file if you need the exact semantics of:
 
 - bridge-up / controller-down handling
 - retained vs live reachability proofs
@@ -87,7 +90,7 @@ The detailed lifecycle contract now lives in [LIFECYCLE.md](./LIFECYCLE.md). Rea
 - watchdog bridge probes vs controller pings
 - snapshot repair cooldowns and output ordering guarantees
 
-The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
+The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
 
 Operational simplifications:
 
@@ -157,7 +160,7 @@ The node has five distinct outputs for clear and organized flows:
 - **`otherActorsContext`**: Which context store (`flow` or `global`) is used to read non-LSH actor state.
 - **`otherDevicesPrefix`**: Prefix used when looking up external actor state in the selected context store.
 
-The editor help in [`src/lsh-logic.html`](src/lsh-logic.html) documents the same
+The editor help in [`src/lsh-logic.html`](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/src/lsh-logic.html) documents the same
 fields from the Node-RED UI perspective.
 
 ### `system-config.json`
@@ -166,9 +169,9 @@ This file defines the topology of your smart home. It should be placed in your N
 
 Ready-to-copy examples are available in:
 
-- [examples/system-config.minimal.json](examples/system-config.minimal.json)
-- [examples/system-config.discovery-overrides.json](examples/system-config.discovery-overrides.json)
-- [examples/system-config.multi-device.json](examples/system-config.multi-device.json)
+- [examples/system-config.minimal.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/system-config.minimal.json)
+- [examples/system-config.discovery-overrides.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/system-config.discovery-overrides.json)
+- [examples/system-config.multi-device.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/system-config.multi-device.json)
 
 ```json
 {
@@ -228,6 +231,8 @@ Home Assistant discovery no longer assumes every Homie node is a writable actuat
 - settable string `state` properties become MQTT text entities
 - read-only integer/float `state` properties become measurement sensors and carry Homie `unit` metadata into Home Assistant when present
 - non-retained read-only sensors set `force_update=true` so repeated event-like payloads are not coalesced
+- fork `$implementation/config` is exposed as a diagnostic sensor with a short `configured` state and the full JSON payload stored in attributes, avoiding Home Assistant's 255-character entity-state limit
+- fork `$implementation/reset/reason`, `$implementation/wifi/last_disconnect_reason` and `$implementation/mqtt/last_disconnect_reason` become diagnostic sensors, so reset and last WiFi/MQTT disconnect causes are visible per bridge
 - fork `$stats/mqttinbounddropped` and `$stats/mqttackdropped` since-boot counters become diagnostic sensors with `state_class=total_increasing`, so Home Assistant treats a reboot reset to `0` as a new counter cycle
 
 The generated Home Assistant device availability uses a template over Homie
@@ -243,7 +248,7 @@ The most powerful way to use this node is to let it manage your MQTT subscriptio
 
 **Connect the 4th output ("Configuration") directly to an `mqtt-in` node.**
 
-![Dynamic MQTT Flow](images/dynamic_mqtt_listener.png)
+![Dynamic MQTT Flow](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/dynamic_mqtt_listener.png)
 
 When you deploy or when the effective MQTT topic set changes, the `lsh-logic` node will:
 
@@ -303,4 +308,4 @@ Contributions are welcome!
 
 ## License
 
-Apache 2.0 - See [LICENSE](./LICENSE) for details.
+Apache 2.0 - See [LICENSE](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LICENSE) for details.
