@@ -11,8 +11,12 @@ and how startup, reload, watchdog, and live traffic interact.
 - Retained `events` and `bridge` payloads are ignored for current reachability.
 - Live controller-backed LSH traffic, live Homie lifecycle transitions, and live bridge service replies are the only runtime reachability proofs.
 - Live Homie `init` and `sleeping` are diagnostic-only runtime hints: they refresh diagnostics but never flip bridge/controller reachability.
+- Live Homie `disconnected` and `lost` are offline lifecycle states. `disconnected` is a clean broker disconnect, while `lost` is the LWT/bad-disconnect path.
+- An empty Homie `$state` payload is the v5 device-removal signal; the runtime removes local device state and emits retained Home Assistant discovery cleanup messages when discovery had been published.
 - The lifecycle always prefers the lightest repair that can close the gap.
-- Home Assistant discovery classifies Homie nodes from retained metadata: writable boolean `state` nodes become toggle entities, read-only booleans become binary sensors, and other nodes become sensors.
+- Home Assistant discovery classifies Homie nodes from retained metadata: writable boolean `state` nodes become toggle entities, settable enum/integer/float/string nodes become select/number/text entities, read-only booleans become binary sensors, and other nodes become sensors.
+- Discovery updates are briefly debounced during retained Homie metadata replay, so `$description`, `$mac`, `$fw/version` and `$implementation/config` normally produce one complete retained Home Assistant update instead of several incremental rewrites.
+- Fork MQTT drop counters (`$stats/mqttinbounddropped` and `$stats/mqttackdropped`) are since-boot counters exposed as total-increasing Home Assistant diagnostic sensors. A bridge reboot resets them to `0`, which Home Assistant treats as a new counter cycle.
 
 ## Recovery Paths
 

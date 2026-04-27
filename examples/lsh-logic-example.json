@@ -21,7 +21,7 @@
     "type": "lsh-logic",
     "z": "1e10f095090cde75",
     "name": "",
-    "homieBasePath": "homie/",
+    "homieBasePath": "homie/5/",
     "lshBasePath": "LSH/",
     "serviceTopic": "LSH/Node-RED/SRV",
     "protocol": "json",

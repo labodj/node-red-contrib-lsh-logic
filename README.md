@@ -46,7 +46,7 @@ The fastest assets to open in this repository are:
 - **Robust Health Monitoring**: Features a multi-stage intelligent Watchdog that detects stale or offline devices without generating false positives during startup or temporary network glitches.
 - **Robust Cold Recovery**: If Node-RED restarts, the node first reuses retained `conf`/`state` snapshots when they are already complete. Only when at least one configured device is missing an authoritative snapshot does it request a single bridge-local `BOOT` replay, then repairs missing snapshots and pings any device that is still unreachable.
 - **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when target devices are reachable and currently healthy. Pending clicks expire on a hard timeout; a late confirmation is rejected even if a later cleanup sweep has not run yet.
-- **Homie & HA Discovery**: Fully compliant with the [Homie Convention](https://homieiot.github.io/) for state tracking and automatically generates Home Assistant Auto-Discovery payloads for seamless integration.
+- **Homie v5 & HA Discovery**: Tracks devices under the Homie v5 base path and generates Home Assistant Auto-Discovery payloads from the retained `$description` document, with a short debounce so retained metadata bursts publish one complete config per device.
 - **Config-Driven HA Entity Mapping**: Optionally remap Homie actuator nodes to Home Assistant `light`, `switch`, or `fan` entities and assign friendly names directly from `system-config.json`.
 - **High Performance**: Optimized message routing using direct string parsing and efficient internal state management.
 - **Declarative Configuration**: Define your entire system in a single `system-config.json` file. The node automatically hot-reloads configuration changes.
@@ -119,8 +119,9 @@ The node accepts messages from an `mqtt-in` node. It processes:
     - `<lshBase>/<device>/events`: Controller-backed runtime events like Clicks and device-level `PING` replies.
     - `<lshBase>/<device>/bridge`: Bridge-local runtime events like service-level `PING` replies and diagnostics.
 2.  **Homie Topics**:
-    - `<homieBase>/<device>/$state`: Connectivity status (`ready`, `lost`).
-    - Homie attributes (`$mac`, `$fw/version`, etc.) for HA Discovery.
+    - `<homieBase>/<device>/$state`: Homie v5 lifecycle (`init`, `ready`, `disconnected`, `lost`, `sleeping`); an empty payload removes retained runtime/discovery state for the device.
+    - `<homieBase>/<device>/$description`: Homie v5 discovery model used for HA Discovery.
+    - Optional fork metadata (`$mac`, `$fw/version`, `$implementation/config`, etc.) to enrich HA Discovery and verify the effective Homie root when available. Discovery publication is briefly debounced so a retained replay of these topics collapses into one complete Home Assistant config update.
 
 ### Outputs
 
@@ -137,7 +138,7 @@ The node has five distinct outputs for clear and organized flows:
 ### Node Settings
 
 - **`name`**: Optional label shown in the Node-RED editor.
-- **`homieBasePath`**: Base topic for Homie traffic, for example `homie/`. Must end with `/`, contain no MQTT wildcards, and contain only non-empty path segments.
+- **`homieBasePath`**: Base topic for Homie v5 traffic, for example `homie/5/`. Must end with `/`, contain no MQTT wildcards, and contain only non-empty path segments.
 - **`lshBasePath`**: Base topic for LSH traffic, for example `LSH/`. Must end with `/`, contain no MQTT wildcards, and contain only non-empty path segments.
 - **`serviceTopic`**: Bridge-scoped service topic used for hop-local `PING` and startup `BOOT` replay requests. The default public profile uses `LSH/Node-RED/SRV`. It must be a concrete publish topic, so wildcards are rejected.
 - **`protocol`**: Payload format for LSH commands and LSH runtime topics. Supported values are `JSON` and `MsgPack`.
@@ -211,19 +212,28 @@ Ready-to-copy examples are available in:
 - **`haDiscovery`**: Optional Home Assistant discovery overrides for this device.
 - **`haDiscovery.deviceName`**: Optional Home Assistant device name override.
 - **`haDiscovery.defaultPlatform`**: Optional default Home Assistant entity platform for writable boolean Homie nodes of the device (`light`, `switch`, or `fan`).
-- **`haDiscovery.nodes`**: Optional per-node overrides keyed by the Homie node ID as published under `$nodes`.
-- **`haDiscovery.nodes` keys must be valid Homie node IDs**: use only letters, digits, `_` or `-`.
-- **`haDiscovery.nodes` keys are case-insensitive**: do not define both `Relay` and `relay`; the config validator rejects overrides that collide after lowercase normalization.
+- **`haDiscovery.nodes`**: Optional per-node overrides keyed by the Homie v5 node ID published in `$description.nodes`.
+- **`haDiscovery.nodes` keys must be valid Homie v5 node IDs**: use only lower-case letters, digits, or `-`.
 - **`haDiscovery.nodes.<id>.platform`**: Optional per-node Home Assistant entity platform override for writable boolean Homie nodes.
 - **`haDiscovery.nodes.<id>.name`**: Optional friendly entity name override shown in Home Assistant.
 - **`haDiscovery.nodes.<id>.defaultEntityId`**: Optional Home Assistant `default_entity_id` override for first discovery.
 - **`haDiscovery.nodes.<id>.icon`**: Optional Home Assistant icon override.
 
-Home Assistant discovery no longer assumes every Homie node is a writable actuator. Nodes are classified from retained Homie metadata:
+Home Assistant discovery no longer assumes every Homie node is a writable actuator. Nodes are classified from retained Homie v5 `$description` metadata:
 
-- boolean `state` nodes with `state/$settable=true` become writable toggle entities
-- boolean `state` nodes without `settable=true` become binary sensors
-- all other `state` nodes fall back to sensors
+- boolean `state` properties with `settable=true` become writable toggle entities
+- boolean `state` properties without `settable=true` become binary sensors
+- settable enum `state` properties with a Homie `format` become MQTT select entities
+- settable integer/float `state` properties become MQTT number entities and use Homie min/max/step format hints when present
+- settable string `state` properties become MQTT text entities
+- read-only integer/float `state` properties become measurement sensors and carry Homie `unit` metadata into Home Assistant when present
+- non-retained read-only sensors set `force_update=true` so repeated event-like payloads are not coalesced
+- fork `$stats/mqttinbounddropped` and `$stats/mqttackdropped` since-boot counters become diagnostic sensors with `state_class=total_increasing`, so Home Assistant treats a reboot reset to `0` as a new counter cycle
+
+The generated Home Assistant device availability uses a template over Homie
+`$state`: only `ready` is online; `init`, `disconnected`, `lost`, `sleeping` and
+any other payload are treated as unavailable. The retained Homie state is also
+published as a separate diagnostic sensor so lifecycle transitions remain visible.
 
 ## Best Practices
 
