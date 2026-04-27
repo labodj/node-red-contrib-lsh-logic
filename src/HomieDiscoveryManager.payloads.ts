@@ -10,17 +10,19 @@ import {
 import { PACKAGE_VERSION } from "./version";
 
 type DiscoveryCategory = "diagnostic";
-type AvailabilityPayload = "ready" | "lost";
+type AvailabilityPayload = "online" | "offline";
 type BooleanLiteral = "true" | "false";
 
 interface DeviceDiscoveryDefinition {
+  id?: string;
   name: string;
   topic: string;
   icon: string;
   cat: DiscoveryCategory;
   class?: string;
   unit?: string;
-  state_class?: "measurement";
+  state_class?: "measurement" | "total_increasing";
+  value_template?: string;
 }
 
 interface HomeAssistantOrigin {
@@ -34,8 +36,9 @@ interface HomeAssistantDevice {
   manufacturer: string;
   identifiers: [string];
   model: string;
-  connections: [["mac", string]];
-  sw_version: string;
+  connections?: [["mac", string]];
+  sw_version?: string;
+  via_device?: string;
 }
 
 interface DiscoveryContext {
@@ -54,7 +57,9 @@ interface DiscoveryComponentBase {
   entity_category?: DiscoveryCategory;
   device_class?: string;
   unit_of_measurement?: string;
-  state_class?: "measurement";
+  state_class?: "measurement" | "total_increasing";
+  force_update?: boolean;
+  value_template?: string;
 }
 
 interface ToggleDiscoveryComponent extends DiscoveryComponentBase {
@@ -74,6 +79,27 @@ interface BinarySensorDiscoveryComponent extends DiscoveryComponentBase {
   payload_off: BooleanLiteral;
 }
 
+interface NumberDiscoveryComponent extends DiscoveryComponentBase {
+  platform: "number";
+  command_topic: string;
+  mode: "box";
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+interface SelectDiscoveryComponent extends DiscoveryComponentBase {
+  platform: "select";
+  command_topic: string;
+  options: string[];
+}
+
+interface TextDiscoveryComponent extends DiscoveryComponentBase {
+  platform: "text";
+  command_topic: string;
+  mode: "text";
+}
+
 interface RemovedDiscoveryComponent {
   platform: DiscoveryPlatform;
 }
@@ -81,7 +107,10 @@ interface RemovedDiscoveryComponent {
 type DiscoveryComponent =
   | ToggleDiscoveryComponent
   | SensorDiscoveryComponent
-  | BinarySensorDiscoveryComponent;
+  | BinarySensorDiscoveryComponent
+  | NumberDiscoveryComponent
+  | SelectDiscoveryComponent
+  | TextDiscoveryComponent;
 
 type DiscoveryComponentUpdate = DiscoveryComponent | RemovedDiscoveryComponent;
 
@@ -89,6 +118,7 @@ interface DeviceDiscoveryPayload {
   device: HomeAssistantDevice;
   origin: HomeAssistantOrigin;
   availability_topic: string;
+  availability_template: string;
   payload_available: AvailabilityPayload;
   payload_not_available: AvailabilityPayload;
   qos: 2;
@@ -127,8 +157,12 @@ export interface DiscoveryBuildArgs {
   runtimeDeviceId: string;
   homieBasePath: string;
   discoveryPrefix: string;
-  mac: string;
-  fwVersion: string;
+  mac?: string;
+  fwVersion?: string;
+  deviceName?: string;
+  deviceType?: string;
+  homieParent?: string;
+  homieRoot?: string;
   nodes: string[];
   nodeMetadata: Record<string, DiscoveryNodeRuntimeMetadata>;
   lastComponentPlatforms?: Record<string, DiscoveryPlatform>;
@@ -151,6 +185,20 @@ const SENSORS_DEF: readonly DeviceDiscoveryDefinition[] = [
     topic: "$fw/checksum",
     icon: "mdi:shield-check-outline",
     cat: "diagnostic",
+  },
+  {
+    name: "Homie Description Version",
+    topic: "$description",
+    icon: "mdi:file-document-refresh-outline",
+    cat: "diagnostic",
+    value_template: "{{ value_json.version }}",
+  },
+  {
+    name: "Homie Extensions",
+    topic: "$description",
+    icon: "mdi:extension",
+    cat: "diagnostic",
+    value_template: "{{ value_json.extensions | default([]) | join(',') }}",
   },
   {
     name: "Uptime",
@@ -202,7 +250,22 @@ const SENSORS_DEF: readonly DeviceDiscoveryDefinition[] = [
     icon: "mdi:timer-sync-outline",
     unit: "s",
     cat: "diagnostic",
-    state_class: "measurement",
+  },
+  {
+    id: "mqtt_inbound_dropped",
+    name: "MQTT Inbound Dropped Since Boot",
+    topic: "$stats/mqttinbounddropped",
+    icon: "mdi:message-alert-outline",
+    cat: "diagnostic",
+    state_class: "total_increasing",
+  },
+  {
+    id: "mqtt_ack_dropped",
+    name: "MQTT Ack Dropped Since Boot",
+    topic: "$stats/mqttackdropped",
+    icon: "mdi:publish-off",
+    cat: "diagnostic",
+    state_class: "total_increasing",
   },
   {
     name: "Implementation",
@@ -269,7 +332,7 @@ const buildPayload = (
   definition: DeviceDiscoveryDefinition,
   extras: Partial<Pick<BinarySensorDiscoveryComponent, "payload_on" | "payload_off">> = {},
 ): DiscoveryComponentEntry => {
-  const nameLc = definition.name.toLowerCase().replace(/ /g, "_");
+  const nameLc = definition.id ?? definition.name.toLowerCase().replace(/ /g, "_");
   const componentId = `lsh_${deviceId.toLowerCase()}_${nameLc}`;
 
   const config: DiscoveryComponent =
@@ -298,12 +361,79 @@ const buildPayload = (
   if (definition.class) config.device_class = definition.class;
   if (definition.unit) config.unit_of_measurement = definition.unit;
   if (definition.state_class) config.state_class = definition.state_class;
+  if (definition.value_template) config.value_template = definition.value_template;
 
   return {
     id: componentId,
     platform: type,
     config,
   };
+};
+
+const parseEnumOptions = (format: string | undefined): string[] => {
+  if (!format) {
+    return [];
+  }
+
+  return format.split(",").filter((option) => option.length > 0);
+};
+
+const parseFiniteNumber = (value: string): number | undefined => {
+  if (value === "") {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const parseNumberFormat = (
+  format: string | undefined,
+): Pick<NumberDiscoveryComponent, "min" | "max" | "step"> => {
+  if (!format) {
+    return {};
+  }
+
+  const [rawMin = "", rawMax = "", rawStep = ""] = format.split(":");
+  const min = parseFiniteNumber(rawMin);
+  const max = parseFiniteNumber(rawMax);
+  const step = parseFiniteNumber(rawStep);
+
+  return {
+    ...(min !== undefined ? { min } : {}),
+    ...(max !== undefined ? { max } : {}),
+    ...(step !== undefined && step > 0 ? { step } : {}),
+  };
+};
+
+const applyStateMetadata = (
+  config: DiscoveryComponent,
+  metadata: DiscoveryNodeRuntimeMetadata | undefined,
+): void => {
+  if (!metadata) {
+    return;
+  }
+
+  if (metadata.stateUnit && (config.platform === "sensor" || config.platform === "number")) {
+    config.unit_of_measurement = metadata.stateUnit;
+  }
+
+  if (config.platform === "sensor") {
+    if (metadata.stateDatatype === "integer" || metadata.stateDatatype === "float") {
+      config.state_class = "measurement";
+    } else if (metadata.stateDatatype === "datetime") {
+      config.device_class = "timestamp";
+    }
+  }
+
+  if (
+    metadata.stateRetained === false &&
+    (config.platform === "sensor" || config.platform === "binary_sensor")
+  ) {
+    // Homie non-retained properties model momentary values. Home Assistant
+    // should process repeated equal payloads instead of coalescing them away.
+    config.force_update = true;
+  }
 };
 
 const generateSensors = ({ deviceId, baseTopic }: DiscoveryContext): DiscoveryComponentEntry[] => {
@@ -333,56 +463,84 @@ const generateNodeEntities = (
       return entries;
     }
 
+    const metadata = nodeMetadata[node.toLowerCase()];
     const { platform, commandable, nodeConfig } = resolveNodeDiscoveryShape(
       node,
-      nodeMetadata[node.toLowerCase()],
+      metadata,
       discoveryConfig,
     );
     const componentId = `lsh_${deviceId.toLowerCase()}_${node.toLowerCase()}`;
+    const fallbackName = `${deviceId.toUpperCase()} ${metadata?.displayName ?? node.toUpperCase()}`;
+    const baseComponent = {
+      name: nodeConfig?.name ?? fallbackName,
+      unique_id: componentId,
+      default_entity_id: nodeConfig?.defaultEntityId ?? `${platform}.${componentId}`,
+      state_topic: `${baseTopic}/${node}/state`,
+      icon: nodeConfig?.icon,
+    };
 
-    if (commandable) {
-      entries.push({
-        id: componentId,
+    if (commandable && (platform === "light" || platform === "switch" || platform === "fan")) {
+      const config: ToggleDiscoveryComponent = {
+        ...baseComponent,
         platform,
-        config: {
-          platform,
-          name: nodeConfig?.name ?? `${deviceId.toUpperCase()} ${node.toUpperCase()}`,
-          unique_id: componentId,
-          default_entity_id: nodeConfig?.defaultEntityId ?? `${platform}.${componentId}`,
-          state_topic: `${baseTopic}/${node}/state`,
-          command_topic: `${baseTopic}/${node}/state/set`,
-          icon: nodeConfig?.icon,
-          payload_on: "true",
-          payload_off: "false",
-        },
-      });
+        command_topic: `${baseTopic}/${node}/state/set`,
+        payload_on: "true",
+        payload_off: "false",
+      };
+      entries.push({ id: componentId, platform, config });
       return entries;
     }
 
-    entries.push({
-      id: componentId,
-      platform,
-      config:
-        platform === "binary_sensor"
-          ? {
-              platform: "binary_sensor",
-              name: nodeConfig?.name ?? `${deviceId.toUpperCase()} ${node.toUpperCase()}`,
-              unique_id: componentId,
-              default_entity_id: nodeConfig?.defaultEntityId ?? `${platform}.${componentId}`,
-              state_topic: `${baseTopic}/${node}/state`,
-              icon: nodeConfig?.icon,
-              payload_on: "true",
-              payload_off: "false",
-            }
-          : {
-              platform: "sensor",
-              name: nodeConfig?.name ?? `${deviceId.toUpperCase()} ${node.toUpperCase()}`,
-              unique_id: componentId,
-              default_entity_id: nodeConfig?.defaultEntityId ?? `${platform}.${componentId}`,
-              state_topic: `${baseTopic}/${node}/state`,
-              icon: nodeConfig?.icon,
-            },
-    });
+    if (commandable && platform === "select") {
+      const options = parseEnumOptions(metadata?.stateFormat);
+      const config: SelectDiscoveryComponent = {
+        ...baseComponent,
+        platform: "select",
+        command_topic: `${baseTopic}/${node}/state/set`,
+        options,
+      };
+      entries.push({ id: componentId, platform, config });
+      return entries;
+    }
+
+    if (commandable && platform === "number") {
+      const config: NumberDiscoveryComponent = {
+        ...baseComponent,
+        platform: "number",
+        command_topic: `${baseTopic}/${node}/state/set`,
+        mode: "box",
+        ...parseNumberFormat(metadata?.stateFormat),
+      };
+      applyStateMetadata(config, metadata);
+      entries.push({ id: componentId, platform, config });
+      return entries;
+    }
+
+    if (commandable && platform === "text") {
+      const config: TextDiscoveryComponent = {
+        ...baseComponent,
+        platform: "text",
+        command_topic: `${baseTopic}/${node}/state/set`,
+        mode: "text",
+      };
+      entries.push({ id: componentId, platform, config });
+      return entries;
+    }
+
+    const config: DiscoveryComponent =
+      platform === "binary_sensor"
+        ? {
+            ...baseComponent,
+            platform: "binary_sensor",
+            payload_on: "true",
+            payload_off: "false",
+          }
+        : {
+            ...baseComponent,
+            platform: "sensor",
+          };
+    applyStateMetadata(config, metadata);
+    entries.push({ id: componentId, platform, config });
 
     return entries;
   }, []);
@@ -433,8 +591,9 @@ const buildDeviceDiscoveryMessage = (
     device: baseDevice,
     origin: getOrigin(),
     availability_topic: `${baseTopic}/$state`,
-    payload_available: "ready",
-    payload_not_available: "lost",
+    availability_template: "{{ 'online' if value == 'ready' else 'offline' }}",
+    payload_available: "online",
+    payload_not_available: "offline",
     qos: 2,
     components: Object.fromEntries(entries.map((entry) => [entry.id, entry.config])),
   };
@@ -486,6 +645,10 @@ export const buildDiscoveryPayloads = ({
   discoveryPrefix,
   mac,
   fwVersion,
+  deviceName,
+  deviceType,
+  homieParent,
+  homieRoot,
   nodes,
   nodeMetadata,
   lastComponentPlatforms,
@@ -496,13 +659,20 @@ export const buildDiscoveryPayloads = ({
   signature: string;
 } => {
   const baseDevice: HomeAssistantDevice = {
-    name: discoveryConfig?.deviceName ?? `LSH ${runtimeDeviceId.toUpperCase()}`,
+    name: discoveryConfig?.deviceName ?? deviceName ?? `LSH ${runtimeDeviceId.toUpperCase()}`,
     manufacturer: "Jacopo Labardi",
     identifiers: [`LSH_${canonicalDeviceId}`],
-    model: "Labo Smart Home",
-    connections: [["mac", mac]],
-    sw_version: fwVersion,
+    model: deviceType ?? "Labo Smart Home",
   };
+  if (mac) {
+    baseDevice.connections = [["mac", mac]];
+  }
+  if (fwVersion) {
+    baseDevice.sw_version = fwVersion;
+  }
+  if (homieParent || homieRoot) {
+    baseDevice.via_device = `LSH_${homieParent ?? homieRoot}`;
+  }
 
   const discoveryContext: DiscoveryContext = {
     deviceId: runtimeDeviceId,

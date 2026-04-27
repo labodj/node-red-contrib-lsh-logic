@@ -26,7 +26,7 @@ export {
  * node's configuration panel.
  */
 export interface LshLogicNodeDef extends NodeDef {
-  /** Base path for Homie device state topics (e.g., 'homie/'). */
+  /** Base path for Homie v5 device topics (e.g., 'homie/5/'). */
   homieBasePath: string;
   /** Base path for LSH device command and state topics (e.g., 'LSH/'). */
   lshBasePath: string;
@@ -142,7 +142,7 @@ export interface ProcessMessageOptions {
   retained?: boolean;
 }
 
-export type HomieLifecycleState = "init" | "ready" | "lost" | "sleeping";
+export type HomieLifecycleState = "init" | "ready" | "disconnected" | "lost" | "sleeping";
 
 // --------------------------------------------------------------------------
 // LSH Protocol and Payloads

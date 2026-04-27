@@ -274,7 +274,7 @@ export class DeviceRegistryManager {
 
     // Homie `init` and `sleeping` are diagnostic-only runtime hints. They must
     // never mutate the bridge/controller reachability booleans.
-    if (homieState !== "ready" && homieState !== "lost") {
+    if (homieState !== "ready" && homieState !== "lost" && homieState !== "disconnected") {
       return { stateChanged: false, wasConnected, isConnected: wasConnected };
     }
 

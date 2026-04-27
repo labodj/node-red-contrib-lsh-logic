@@ -24,7 +24,7 @@ export const defaultNodeConfig: LshLogicNodeDef = {
   type: "lsh-logic",
   name: "Test LSH Logic",
   z: "flow-id",
-  homieBasePath: "homie/",
+  homieBasePath: "homie/5/",
   lshBasePath: "LSH/",
   serviceTopic: "LSH/Node-RED/SRV",
   otherDevicesPrefix: "other_devices",

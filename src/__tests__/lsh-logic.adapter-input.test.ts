@@ -242,14 +242,14 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
 
     const done = jest.fn();
     const message = {
-      topic: "homie/device-1/$state",
+      topic: "homie/5/device-1/$state",
       payload: Buffer.from("ready"),
     };
 
     getInputHandler(mockNodeInstance)(message, jest.fn(), done);
     await flushMicrotasks();
 
-    expect(processMessageSpy).toHaveBeenCalledWith("homie/device-1/$state", "ready", {
+    expect(processMessageSpy).toHaveBeenCalledWith("homie/5/device-1/$state", "ready", {
       retained: false,
     });
     expect(mockNodeInstance.send).toHaveBeenLastCalledWith([null, null, null, null, message]);
@@ -428,7 +428,7 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
     const done = jest.fn();
     getInputHandler(mockNodeInstance)(
       {
-        topic: "homie/test-device/$state",
+        topic: "homie/5/test-device/$state",
         payload: "ready",
         retain: true,
       },
@@ -479,21 +479,19 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
           "LSH/test-device/events",
           "LSH/test-device/bridge",
         ],
-        homie: ["homie/test-device/$state"],
+        homie: ["homie/5/test-device/$state"],
         discovery: [
-          "homie/+/$nodes",
-          "homie/+/$mac",
-          "homie/+/$fw/version",
-          "homie/+/+/state/$datatype",
-          "homie/+/+/state/$settable",
+          "homie/5/+/$description",
+          "homie/5/+/$mac",
+          "homie/5/+/$fw/version",
+          "homie/5/+/$implementation/config",
         ],
         all: expect.arrayContaining([
-          "homie/test-device/$state",
-          "homie/+/$nodes",
-          "homie/+/$mac",
-          "homie/+/$fw/version",
-          "homie/+/+/state/$datatype",
-          "homie/+/+/state/$settable",
+          "homie/5/test-device/$state",
+          "homie/5/+/$description",
+          "homie/5/+/$mac",
+          "homie/5/+/$fw/version",
+          "homie/5/+/$implementation/config",
           "LSH/test-device/conf",
           "LSH/test-device/state",
           "LSH/test-device/events",

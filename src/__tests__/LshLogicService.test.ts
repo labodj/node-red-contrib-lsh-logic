@@ -7,6 +7,7 @@ import {
   createLoadedServiceHarness,
   createServiceHarness,
   createSystemConfig,
+  buildHomieV5Description,
   defaultServiceConfig,
   defaultSystemConfig,
   getOutputMessages,
@@ -64,9 +65,9 @@ describe("LshLogicService - Core & Config", () => {
 
       const cases = [
         { topic: "unhandled/topic/1", payload: {} },
-        { topic: "homie/device-only", payload: "ready" },
+        { topic: "homie/5/device-only", payload: "ready" },
         { topic: "LSH/device-only", payload: {} },
-        { topic: "homie//$state", payload: "ready" },
+        { topic: "homie/5//$state", payload: "ready" },
         {
           topic: "LSH//state",
           payload: {
@@ -74,7 +75,7 @@ describe("LshLogicService - Core & Config", () => {
             s: [0],
           },
         },
-        { topic: "homie/device-1/$localip", payload: "192.168.1.5" },
+        { topic: "homie/5/device-1/$localip", payload: "192.168.1.5" },
         { topic: "LSH/device-1/telemetry", payload: {} },
       ];
 
@@ -198,11 +199,12 @@ describe("LshLogicService - Core & Config", () => {
         devices: [{ name: "c1" }],
       });
 
-      service.processMessage("homie/c1/$mac", "AA:BB:CC:DD:EE:FF");
-      service.processMessage("homie/c1/$fw/version", "1.0.0");
-      service.processMessage("homie/c1/1/state/$datatype", "boolean");
-      service.processMessage("homie/c1/1/state/$settable", "true");
-      service.processMessage("homie/c1/$nodes", "1");
+      service.processMessage("homie/5/c1/$mac", "AA:BB:CC:DD:EE:FF");
+      service.processMessage("homie/5/c1/$fw/version", "1.0.0");
+      service.processMessage(
+        "homie/5/c1/$description",
+        buildHomieV5Description({ "1": { settable: true } }),
+      );
       service.syncDiscoveryConfig();
 
       service.updateSystemConfig({
@@ -249,11 +251,12 @@ describe("LshLogicService - Core & Config", () => {
         devices: [{ name: "c1" }],
       });
 
-      service.processMessage("homie/c1/$mac", "AA:BB:CC:DD:EE:FF");
-      service.processMessage("homie/c1/$fw/version", "1.0.0");
-      service.processMessage("homie/c1/1/state/$datatype", "boolean");
-      service.processMessage("homie/c1/1/state/$settable", "true");
-      service.processMessage("homie/c1/$nodes", "1");
+      service.processMessage("homie/5/c1/$mac", "AA:BB:CC:DD:EE:FF");
+      service.processMessage("homie/5/c1/$fw/version", "1.0.0");
+      service.processMessage(
+        "homie/5/c1/$description",
+        buildHomieV5Description({ "1": { settable: true } }),
+      );
       service.syncDiscoveryConfig();
 
       service.updateSystemConfig({
@@ -312,9 +315,12 @@ describe("LshLogicService - Core & Config", () => {
 
       const watchdogHarness = createServiceHarness();
       watchdogHarness.loadConfig(createSystemConfig());
-      watchdogHarness.service.processMessage("homie/wildcard-device/$mac", "AA:BB:CC:DD:EE:FF");
-      watchdogHarness.service.processMessage("homie/wildcard-device/$fw/version", "1.0.0");
-      watchdogHarness.service.processMessage("homie/wildcard-device/$nodes", "relay");
+      watchdogHarness.service.processMessage("homie/5/wildcard-device/$mac", "AA:BB:CC:DD:EE:FF");
+      watchdogHarness.service.processMessage("homie/5/wildcard-device/$fw/version", "1.0.0");
+      watchdogHarness.service.processMessage(
+        "homie/5/wildcard-device/$description",
+        buildHomieV5Description({ relay: { settable: true } }),
+      );
 
       nowSpy.mockReturnValue(24 * 60 * 60 * 1000 + 1);
       const pruneResult = watchdogHarness.service.runWatchdogCheck();
@@ -341,9 +347,12 @@ describe("LshLogicService - Core & Config", () => {
 
     it("should publish retained cleanup messages when a discovered device is removed from config", () => {
       loadConfig(createSystemConfig("device-to-remove"));
-      service.processMessage("homie/device-to-remove/$mac", "AA:BB:CC:DD:EE:FF");
-      service.processMessage("homie/device-to-remove/$fw/version", "1.0.0");
-      service.processMessage("homie/device-to-remove/$nodes", "relay");
+      service.processMessage("homie/5/device-to-remove/$mac", "AA:BB:CC:DD:EE:FF");
+      service.processMessage("homie/5/device-to-remove/$fw/version", "1.0.0");
+      service.processMessage(
+        "homie/5/device-to-remove/$description",
+        buildHomieV5Description({ relay: { settable: true } }),
+      );
 
       service.updateSystemConfig(createSystemConfig());
       const syncResult = service.syncDiscoveryConfig();
@@ -364,23 +373,48 @@ describe("LshLogicService - Core & Config", () => {
       ]);
     });
 
-    it("should sanitize malformed Homie $nodes payloads before generating discovery", () => {
+    it("should reject malformed Homie v5 description nodes before generating discovery", () => {
       loadConfig(createSystemConfig("device-nodes"));
-      service.processMessage("homie/device-nodes/$mac", "AA:BB:CC:DD:EE:FF");
-      service.processMessage("homie/device-nodes/$fw/version", "1.0.0");
-      service.processMessage("homie/device-nodes/relay/state/$datatype", "boolean");
-      service.processMessage("homie/device-nodes/relay/state/$settable", "true");
-      service.processMessage("homie/device-nodes/KitchenLight/state/$datatype", "boolean");
-      service.processMessage("homie/device-nodes/KitchenLight/state/$settable", "true");
-      service.processMessage("homie/device-nodes/valid_2/state/$datatype", "boolean");
-      service.processMessage("homie/device-nodes/valid_2/state/$settable", "true");
+      service.processMessage("homie/5/device-nodes/$mac", "AA:BB:CC:DD:EE:FF");
+      service.processMessage("homie/5/device-nodes/$fw/version", "1.0.0");
 
       const result = service.processMessage(
-        "homie/device-nodes/$nodes",
-        " relay ,bad node,@oops,KitchenLight,valid_2,topic/evil ",
+        "homie/5/device-nodes/$description",
+        JSON.stringify({
+          homie: "5.0",
+          version: 5,
+          name: "Device Nodes",
+          nodes: {
+            relay: {
+              properties: {
+                state: {
+                  datatype: "boolean",
+                  settable: true,
+                },
+              },
+            },
+            bad_node: {
+              properties: {
+                state: {
+                  datatype: "boolean",
+                  settable: true,
+                },
+              },
+            },
+            "bad node": {
+              properties: {
+                state: {
+                  datatype: "boolean",
+                  settable: true,
+                },
+              },
+            },
+          },
+        }),
       );
 
-      const messages = getOutputMessages(result, Output.Lsh);
+      const flushed = service.flushPendingDiscovery();
+      const messages = getOutputMessages(flushed, Output.Lsh);
       const deviceMessage = messages.find(
         (message) => message.topic === "homeassistant/device/lsh_device-nodes/config",
       ) as
@@ -397,20 +431,67 @@ describe("LshLogicService - Core & Config", () => {
           }
         | undefined;
 
-      expect(result.warnings).toContain(
-        "Ignored invalid Homie node id(s) for 'device-nodes': bad node, @oops, topic/evil.",
-      );
+      expect(result.warnings).toEqual([
+        "Ignored Homie v5 node 'device-nodes/bad_node' because the node id is not lower-case Homie v5 syntax.",
+        "Ignored Homie v5 node 'device-nodes/bad node' because the node id is not lower-case Homie v5 syntax.",
+      ]);
       expect(deviceMessage).toBeDefined();
       expect(deviceMessage!.payload.components).toHaveProperty("lsh_device-nodes_relay");
-      expect(deviceMessage!.payload.components).toHaveProperty("lsh_device-nodes_kitchenlight");
-      expect(deviceMessage!.payload.components).toHaveProperty("lsh_device-nodes_valid_2");
       expect(deviceMessage!.payload.components).not.toHaveProperty("lsh_device-nodes_bad node");
-      expect(deviceMessage!.payload.components).not.toHaveProperty("lsh_device-nodes_topic/evil");
+      expect(deviceMessage!.payload.components).not.toHaveProperty("lsh_device-nodes_bad_node");
       expect(deviceMessage!.payload.components["lsh_device-nodes_relay"]).toEqual(
         expect.objectContaining({
-          state_topic: "homie/device-nodes/relay/state",
-          command_topic: "homie/device-nodes/relay/state/set",
+          state_topic: "homie/5/device-nodes/relay/state",
+          command_topic: "homie/5/device-nodes/relay/state/set",
         }),
+      );
+    });
+
+    it("should accept Homie discovery payloads already parsed by Node-RED MQTT input", () => {
+      loadConfig(createSystemConfig("j2"));
+
+      const description = {
+        homie: "5.0",
+        version: 5,
+        name: "LSH j2",
+        nodes: {
+          "1": {
+            name: "1",
+            type: "switch",
+            properties: {
+              state: {
+                name: "1",
+                datatype: "boolean",
+                settable: true,
+                retained: true,
+              },
+            },
+          },
+        },
+      };
+      const implementationConfig = {
+        mqtt: {
+          base_topic: "homie/",
+          effective_base_topic: "homie/5/",
+        },
+      };
+
+      const descriptionResult = service.processMessage("homie/5/j2/$description", description);
+      const configResult = service.processMessage(
+        "homie/5/j2/$implementation/config",
+        implementationConfig,
+      );
+      const flushed = service.flushPendingDiscovery();
+      const messages = getOutputMessages(flushed, Output.Lsh);
+
+      expect(descriptionResult.warnings).toEqual([]);
+      expect(configResult.warnings).toEqual([]);
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            topic: "homeassistant/device/lsh_j2/config",
+          }),
+        ]),
       );
     });
   });
@@ -436,7 +517,7 @@ describe("LshLogicService - Core & Config", () => {
 
     it("should request only the missing snapshot data for a reachable but incomplete device", () => {
       loadConfig(createSystemConfig("dev1"));
-      service.processMessage("homie/dev1/$state", "ready");
+      service.processMessage("homie/5/dev1/$state", "ready");
 
       const result = service.verifyInitialDeviceStates();
 
@@ -451,7 +532,7 @@ describe("LshLogicService - Core & Config", () => {
 
     it("should combine snapshot repair and direct pings when only a subset of devices is offline", () => {
       loadConfig(createSystemConfig("dev1", "dev2"));
-      service.processMessage("homie/dev1/$state", "ready");
+      service.processMessage("homie/5/dev1/$state", "ready");
 
       const result = service.verifyInitialDeviceStates();
 
@@ -515,7 +596,7 @@ describe("LshLogicService - Core & Config", () => {
 
     it("should not send direct controller recovery commands when the bridge says controller_connected=false", () => {
       loadConfig(createSystemConfig("dev1"));
-      service.processMessage("homie/dev1/$state", "ready");
+      service.processMessage("homie/5/dev1/$state", "ready");
       service.processMessage("LSH/dev1/bridge", {
         event: "service_ping_reply",
         controller_connected: false,
@@ -693,7 +774,7 @@ describe("LshLogicService - Core & Config", () => {
         },
         {
           setup: () => {
-            service.processMessage("homie/actor1/$state", "ready");
+            service.processMessage("homie/5/actor1/$state", "ready");
           },
           topic: "LSH/actor1/state",
           expectedWarning:
@@ -798,7 +879,7 @@ describe("LshLogicService - Core & Config", () => {
         service.clearSystemConfig();
         loadConfig();
         setDeviceOnline("actor1");
-        service.processMessage("homie/actor1/$state", "lost");
+        service.processMessage("homie/5/actor1/$state", "lost");
 
         const result = service.processMessage(topic, payload, { retained: true });
 
@@ -838,7 +919,7 @@ describe("LshLogicService - Core & Config", () => {
       for (const setup of setups) {
         setup();
 
-        const result = service.processMessage("homie/actor1/$state", "ready", { retained: true });
+        const result = service.processMessage("homie/5/actor1/$state", "ready", { retained: true });
         const device = service.getDeviceRegistry().actor1;
 
         expect(result.stateChanged).toBe(false);
@@ -854,7 +935,7 @@ describe("LshLogicService - Core & Config", () => {
     });
 
     it("should still ignore retained Homie ready for devices outside the loaded system config", () => {
-      const result = service.processMessage("homie/unknown-device/$state", "ready", {
+      const result = service.processMessage("homie/5/unknown-device/$state", "ready", {
         retained: true,
       });
 
@@ -863,7 +944,7 @@ describe("LshLogicService - Core & Config", () => {
       expect(service.getDeviceRegistry()["unknown-device"]).toBeUndefined();
     });
 
-    it("should treat non-ready Homie lifecycle states as diagnostics and ignore repeats", () => {
+    it("should treat Homie init and sleeping as diagnostics and ignore repeats", () => {
       const cases = [
         {
           state: "init",
@@ -897,7 +978,7 @@ describe("LshLogicService - Core & Config", () => {
         loadConfig();
         setup();
 
-        const result = service.processMessage("homie/actor1/$state", state);
+        const result = service.processMessage("homie/5/actor1/$state", state);
 
         expect(result.stateChanged).toBe(true);
         expect(result.messages).toEqual({});
@@ -907,12 +988,70 @@ describe("LshLogicService - Core & Config", () => {
         assertDevice();
 
         if (verifyRepeatNoop) {
-          const repeated = service.processMessage("homie/actor1/$state", state);
+          const repeated = service.processMessage("homie/5/actor1/$state", state);
           expect(repeated.stateChanged).toBe(false);
           expect(repeated.logs).toEqual([]);
           expect(repeated.messages).toEqual({});
         }
       }
+    });
+
+    it("should treat Homie disconnected as an offline lifecycle state", () => {
+      setDeviceOnline("actor1");
+
+      const result = service.processMessage("homie/5/actor1/$state", "disconnected");
+      const device = service.getDeviceRegistry().actor1;
+
+      expect(result.stateChanged).toBe(true);
+      expect(getAlertPayload(result).event_type).toBe("device_lifecycle_offline");
+      expect(getAlertPayload(result).event_source).toBe("homie_lifecycle");
+      expect(device.bridgeConnected).toBe(false);
+      expect(device.connected).toBe(false);
+      expect(device.lastHomieState).toBe("disconnected");
+    });
+
+    it("should ignore invalid Homie lifecycle states", () => {
+      const result = service.processMessage("homie/5/actor1/$state", "bogus");
+
+      expect(result.messages).toEqual({});
+      expect(result.stateChanged).toBe(false);
+      expect(result.warnings).toContain(
+        "Ignored Homie $state for 'actor1' because 'bogus' is not a valid Homie v5 lifecycle state.",
+      );
+      expect(service.getDeviceRegistry().actor1).toBeUndefined();
+    });
+
+    it("should remove runtime and HA discovery state on empty Homie state payload", () => {
+      setDeviceOnline("actor1");
+      service.processMessage(
+        "homie/5/actor1/$description",
+        buildHomieV5Description({ relay: { settable: true } }),
+      );
+      service.flushPendingDiscovery();
+
+      const result = service.processMessage("homie/5/actor1/$state", "");
+      const messages = getOutputMessages(result, Output.Lsh);
+
+      expect(service.getDeviceRegistry().actor1).toBeUndefined();
+      expect(result.stateChanged).toBe(true);
+      expect(result.registryChanged).toBe(true);
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            topic: "homeassistant/device/lsh_actor1/config",
+            payload: "",
+            retain: true,
+          }),
+          expect.objectContaining({
+            topic: "homeassistant/sensor/lsh_actor1_homie_state/config",
+            payload: "",
+            retain: true,
+          }),
+        ]),
+      );
+      expect(result.logs).toContain(
+        "Device 'actor1' published an empty Homie $state payload. Removed retained discovery/runtime state for the device.",
+      );
     });
 
     it("should emit retained Homie transition alerts without changing live reachability", () => {
@@ -925,9 +1064,16 @@ describe("LshLogicService - Core & Config", () => {
           expectedHomieState: "lost",
         },
         {
+          setup: () => setDeviceOnline("actor1"),
+          nextState: "disconnected",
+          expectedLog:
+            "Device 'actor1' reported retained Homie runtime transition 'ready -> disconnected'. Emitting an offline alert without changing reachability state.",
+          expectedHomieState: "disconnected",
+        },
+        {
           setup: () => {
             setDeviceOnline("actor1");
-            service.processMessage("homie/actor1/$state", "lost", { retained: true });
+            service.processMessage("homie/5/actor1/$state", "lost", { retained: true });
           },
           nextState: "ready",
           expectedLog:
@@ -941,7 +1087,7 @@ describe("LshLogicService - Core & Config", () => {
         loadConfig();
         setup();
 
-        const result = service.processMessage("homie/actor1/$state", nextState, {
+        const result = service.processMessage("homie/5/actor1/$state", nextState, {
           retained: true,
         });
         const device = service.getDeviceRegistry().actor1;
@@ -986,7 +1132,7 @@ describe("LshLogicService - Core & Config", () => {
 
       for (const { setup, trigger, expectedMessage } of cases) {
         setup();
-        service.processMessage("homie/actor1/$state", "lost");
+        service.processMessage("homie/5/actor1/$state", "lost");
 
         const result = trigger();
 
@@ -1002,7 +1148,7 @@ describe("LshLogicService - Core & Config", () => {
     it("should return a no-op when receiving the same Homie ready state twice", () => {
       setDeviceOnline("actor1");
 
-      const result = service.processMessage("homie/actor1/$state", "ready");
+      const result = service.processMessage("homie/5/actor1/$state", "ready");
 
       expect(result.stateChanged).toBe(false);
       expect(result.logs).toEqual([]);
@@ -1135,13 +1281,15 @@ describe("LshLogicService - Core & Config", () => {
     it("should process Homie discovery attributes when enabled", () => {
       const deviceId = "new-homie-device";
 
-      service.processMessage(`homie/${deviceId}/$mac`, "AA:BB:CC");
-      service.processMessage(`homie/${deviceId}/$fw/version`, "1.0.0");
-      service.processMessage(`homie/${deviceId}/lamp/state/$datatype`, "boolean");
-      service.processMessage(`homie/${deviceId}/lamp/state/$settable`, "true");
-      const result = service.processMessage(`homie/${deviceId}/$nodes`, "lamp");
+      service.processMessage(`homie/5/${deviceId}/$mac`, "AA:BB:CC");
+      service.processMessage(`homie/5/${deviceId}/$fw/version`, "1.0.0");
+      service.processMessage(
+        `homie/5/${deviceId}/$description`,
+        buildHomieV5Description({ lamp: { settable: true } }),
+      );
 
-      const messages = getOutputMessages(result, Output.Lsh);
+      const flushed = service.flushPendingDiscovery();
+      const messages = getOutputMessages(flushed, Output.Lsh);
       const deviceMessage = messages.find(
         (message) => message.topic === "homeassistant/device/lsh_new-homie-device/config",
       );
@@ -1155,7 +1303,7 @@ describe("LshLogicService - Core & Config", () => {
       expect(homieStateMessage).toBeDefined();
       expect(deviceMessage!.payload).not.toHaveProperty("~");
       expect((deviceMessage!.payload as { availability_topic: string }).availability_topic).toBe(
-        "homie/new-homie-device/$state",
+        "homie/5/new-homie-device/$state",
       );
       expect(
         (
@@ -1175,8 +1323,8 @@ describe("LshLogicService - Core & Config", () => {
         expect.objectContaining({
           platform: "light",
           unique_id: "lsh_new-homie-device_lamp",
-          state_topic: "homie/new-homie-device/lamp/state",
-          command_topic: "homie/new-homie-device/lamp/state/set",
+          state_topic: "homie/5/new-homie-device/lamp/state",
+          command_topic: "homie/5/new-homie-device/lamp/state/set",
         }),
       );
       expect(
@@ -1189,7 +1337,7 @@ describe("LshLogicService - Core & Config", () => {
         expect.objectContaining({
           unique_id: "lsh_new-homie-device_homie_state",
           default_entity_id: "sensor.lsh_new-homie-device_homie_state",
-          state_topic: "homie/new-homie-device/$state",
+          state_topic: "homie/5/new-homie-device/$state",
         }),
       );
       expect(homieStateMessage!.payload).not.toHaveProperty("availability_topic");
@@ -1198,16 +1346,23 @@ describe("LshLogicService - Core & Config", () => {
     it("should emit a removal update before the final device discovery payload when a Homie node disappears", () => {
       const deviceId = "new-homie-device";
 
-      service.processMessage(`homie/${deviceId}/$mac`, "AA:BB:CC");
-      service.processMessage(`homie/${deviceId}/$fw/version`, "1.0.0");
-      service.processMessage(`homie/${deviceId}/lamp/state/$datatype`, "boolean");
-      service.processMessage(`homie/${deviceId}/lamp/state/$settable`, "true");
-      service.processMessage(`homie/${deviceId}/relay/state/$datatype`, "boolean");
-      service.processMessage(`homie/${deviceId}/relay/state/$settable`, "true");
-      service.processMessage(`homie/${deviceId}/$nodes`, "lamp,relay");
+      service.processMessage(`homie/5/${deviceId}/$mac`, "AA:BB:CC");
+      service.processMessage(`homie/5/${deviceId}/$fw/version`, "1.0.0");
+      service.processMessage(
+        `homie/5/${deviceId}/$description`,
+        buildHomieV5Description({
+          lamp: { settable: true },
+          relay: { settable: true },
+        }),
+      );
+      service.flushPendingDiscovery();
 
-      const result = service.processMessage(`homie/${deviceId}/$nodes`, "lamp");
-      const messages = getOutputMessages(result, Output.Lsh);
+      service.processMessage(
+        `homie/5/${deviceId}/$description`,
+        buildHomieV5Description({ lamp: { settable: true } }),
+      );
+      const flushed = service.flushPendingDiscovery();
+      const messages = getOutputMessages(flushed, Output.Lsh);
       const deviceMessages = messages.filter(
         (message) => message.topic === "homeassistant/device/lsh_new-homie-device/config",
       );
@@ -1240,7 +1395,10 @@ describe("LshLogicService - Core & Config", () => {
         config: { haDiscovery: false },
       });
 
-      const result = disabledHarness.service.processMessage("homie/dev1/$nodes", "foo");
+      const result = disabledHarness.service.processMessage(
+        "homie/5/dev1/$description",
+        buildHomieV5Description({ relay: { settable: true } }),
+      );
 
       expect(result.messages[Output.Lsh]).toBeUndefined();
     });

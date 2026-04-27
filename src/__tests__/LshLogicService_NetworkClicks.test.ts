@@ -632,7 +632,7 @@ describe("LshLogicService - Network Click Logic", () => {
     setDeviceOnline("device-sender");
     setDeviceOnline("actor1");
 
-    service.processMessage("homie/actor1/$state", "lost", { retained: true });
+    service.processMessage("homie/5/actor1/$state", "lost", { retained: true });
 
     const result = startClick(sendEvents, "device-sender");
 

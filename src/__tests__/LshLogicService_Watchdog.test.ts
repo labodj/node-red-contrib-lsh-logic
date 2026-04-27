@@ -1,6 +1,7 @@
 import { LshProtocol, Output } from "../types";
 import {
   createAjvError,
+  buildHomieV5Description,
   createLoadedServiceHarness,
   createSystemConfig,
   getAlertPayload,
@@ -40,7 +41,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     const { service, config } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
-    service.processMessage("homie/dev1/$state", "ready", { retained: true });
+    service.processMessage("homie/5/dev1/$state", "ready", { retained: true });
 
     nowSpy.mockReturnValue(START_TIME + 1);
     const result = service.runWatchdogCheck();
@@ -93,7 +94,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     const { service } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
-    service.processMessage("homie/dev1/$state", "ready", { retained: true });
+    service.processMessage("homie/5/dev1/$state", "ready", { retained: true });
 
     nowSpy.mockReturnValue(START_TIME + 1);
     const firstResult = service.runWatchdogCheck();
@@ -114,7 +115,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     const { service } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
-    service.processMessage("homie/dev1/$state", "ready", { retained: true });
+    service.processMessage("homie/5/dev1/$state", "ready", { retained: true });
 
     nowSpy.mockReturnValue(START_TIME + 1);
     const firstResult = service.runWatchdogCheck();
@@ -131,7 +132,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     const { service, sendBridge } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
-    service.processMessage("homie/dev1/$state", "ready", { retained: true });
+    service.processMessage("homie/5/dev1/$state", "ready", { retained: true });
 
     const result = sendBridge("dev1", {
       event: "service_ping_reply",
@@ -159,7 +160,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     const { service, sendBridge } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
-    service.processMessage("homie/dev1/$state", "ready", { retained: true });
+    service.processMessage("homie/5/dev1/$state", "ready", { retained: true });
 
     nowSpy.mockReturnValue(START_TIME + 1);
     const firstResult = sendBridge("dev1", {
@@ -187,7 +188,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     const { service, sendBridge } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
-    service.processMessage("homie/dev1/$state", "ready", { retained: true });
+    service.processMessage("homie/5/dev1/$state", "ready", { retained: true });
 
     const firstResult = sendBridge("dev1", {
       event: "service_ping_reply",
@@ -221,7 +222,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     const { service, sendBridge } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
-    service.processMessage("homie/dev1/$state", "ready", { retained: true });
+    service.processMessage("homie/5/dev1/$state", "ready", { retained: true });
 
     const firstResult = sendBridge("dev1", {
       event: "service_ping_reply",
@@ -257,7 +258,7 @@ describe("LshLogicService - Watchdog & Health", () => {
     const { service, sendBridge } = createLoadedServiceHarness({
       systemConfig: createSystemConfig("dev1"),
     });
-    service.processMessage("homie/dev1/$state", "ready", { retained: true });
+    service.processMessage("homie/5/dev1/$state", "ready", { retained: true });
 
     nowSpy.mockReturnValue(START_TIME + 1);
     service.runWatchdogCheck();
@@ -521,7 +522,11 @@ describe("LshLogicService - Watchdog & Health", () => {
   it("should not treat non-liveness traffic as live watchdog activity", () => {
     const cases = [
       ({ service }: ReturnType<typeof createLoadedServiceHarness>) => {
-        service.processMessage("homie/dev1/$nodes", "relay", { retained: true });
+        service.processMessage(
+          "homie/5/dev1/$description",
+          buildHomieV5Description({ relay: { settable: true } }),
+          { retained: true },
+        );
       },
       ({ sendBridge }: ReturnType<typeof createLoadedServiceHarness>) => {
         sendBridge("dev1", {

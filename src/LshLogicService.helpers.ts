@@ -67,6 +67,42 @@ export function buildClickCorrelationKey(
 }
 
 /**
+ * Returns true when an MQTT payload is one of the Homie v5 lifecycle states.
+ * Invalid values are ignored before they can mutate reachability state.
+ */
+export function isHomieLifecycleState(value: string): value is HomieLifecycleState {
+  return (
+    value === "init" ||
+    value === "ready" ||
+    value === "disconnected" ||
+    value === "lost" ||
+    value === "sleeping"
+  );
+}
+
+/**
+ * Converts Homie discovery payloads to the JSON string expected by the discovery
+ * parser. Node-RED's MQTT node can be configured to parse JSON before this node
+ * sees the message, so `$description` and `$implementation/config` may arrive
+ * either as raw strings/Buffers or as already-decoded objects.
+ */
+export function normalizeHomieDiscoveryPayload(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+
+  if (Buffer.isBuffer(payload)) {
+    return payload.toString("utf8");
+  }
+
+  if (typeof payload === "object" && payload !== null) {
+    return JSON.stringify(payload);
+  }
+
+  return String(payload);
+}
+
+/**
  * Returns true for Homie lifecycle states that are informative only and should
  * not be treated as online or offline transitions.
  */

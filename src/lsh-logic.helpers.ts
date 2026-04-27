@@ -33,15 +33,17 @@ export function buildTopicSetSignature(topics: string[]): string {
 
 /**
  * Returns the Homie metadata subscriptions required by Home Assistant
- * auto-discovery. The retained metadata lets the discovery manager distinguish
- * writable toggle nodes from read-only or sensor-like nodes.
+ * auto-discovery. Homie v5 carries the complete retained model in
+ * `$description`; `$mac` and `$fw/version` are retained fork extensions used
+ * to enrich the Home Assistant device card when present. `$implementation/config`
+ * is read for the fork's read-only effective_base_topic diagnostic, which lets
+ * the node warn when the configured Homie root does not match the device runtime.
  */
 export function getHomieDiscoveryTopics(homieBasePath: string): string[] {
   return [
-    `${homieBasePath}+/$nodes`,
+    `${homieBasePath}+/$description`,
     `${homieBasePath}+/$mac`,
     `${homieBasePath}+/$fw/version`,
-    `${homieBasePath}+/+/state/$datatype`,
-    `${homieBasePath}+/+/state/$settable`,
+    `${homieBasePath}+/$implementation/config`,
   ];
 }

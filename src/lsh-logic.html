@@ -65,7 +65,7 @@
     defaults: {
       name: { value: "" },
       // MQTT Path Settings
-      homieBasePath: { value: "homie/", required: true, validate: validateTopicBase },
+      homieBasePath: { value: "homie/5/", required: true, validate: validateTopicBase },
       lshBasePath: { value: "LSH/", required: true, validate: validateTopicBase },
       serviceTopic: {
         value: "LSH/Node-RED/SRV",
@@ -252,10 +252,10 @@
     </div>
     <div class="form-row">
       <label for="node-input-homieBasePath">Homie Base Path</label>
-      <input type="text" id="node-input-homieBasePath" placeholder="e.g., homie/" />
+      <input type="text" id="node-input-homieBasePath" placeholder="e.g., homie/5/" />
       <span class="lsh-form-tip"
-        >Base path for Homie topics. Must end with a '/' and must not contain MQTT wildcards or
-        empty segments.</span
+        >Base path for Homie v5 topics, including the convention version segment. Must end with a
+        '/' and must not contain MQTT wildcards or empty segments.</span
       >
     </div>
     <div class="form-row">
@@ -392,7 +392,7 @@
         style="display: inline-block; width: auto; vertical-align: top;"
       />
       <div class="lsh-form-tip" style="margin-top: 5px;">
-        Generate Home Assistant discovery config for Homie devices under the configured base path.
+        Generate Home Assistant discovery config from retained Homie v5 $description documents.
       </div>
     </div>
     <div class="form-row" id="node-row-haDiscoveryPrefix">
@@ -542,9 +542,12 @@
     them as click traffic or as proof that the controller is currently reachable.
   </p>
   <p>
-    Home Assistant discovery also listens to retained Homie node metadata. Writable boolean
-    <code>state</code> nodes become toggle entities, read-only booleans become binary sensors, and
-    all other nodes fall back to plain sensors.
+    Home Assistant discovery listens to retained Homie v5 <code>$description</code> documents and
+    fork runtime diagnostics. Writable boolean <code>state</code> properties become toggle entities,
+    settable enum/number/string properties become select/number/text entities, read-only booleans
+    become binary sensors, and read-only numeric properties become measurement sensors when Homie
+    metadata provides units. Since-boot MQTT drop counters exposed by the Homie fork are published
+    as total-increasing diagnostic sensors.
   </p>
 
   <h3>Outputs</h3>
@@ -584,7 +587,7 @@
     <dt>MQTT Path Settings</dt>
     <dd>
       Defines the base MQTT paths for all topics the node interacts with. These must match your
-      system's topic structure (e.g., <code>homie/</code>, <code>LSH/</code>). Base paths must end
+      system's topic structure (e.g., <code>homie/5/</code>, <code>LSH/</code>). Base paths must end
       with <code>/</code>, use only non-empty literal topic segments, and must not contain MQTT
       wildcards. The service topic must also be a concrete publish topic without wildcards.
     </dd>

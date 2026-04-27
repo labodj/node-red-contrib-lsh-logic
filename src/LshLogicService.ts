@@ -9,7 +9,6 @@
 import { DeviceRegistryManager } from "./DeviceRegistryManager";
 import { ClickTransactionManager } from "./ClickTransactionManager";
 import { HomieDiscoveryManager } from "./HomieDiscoveryManager";
-import { parseDiscoveryStateMetadataTopic } from "./HomieDiscoveryManager.helpers";
 import {
   classifyDeviceRecoveryPath,
   findUnknownActorReference,
@@ -26,6 +25,8 @@ import {
   isValidMqttTopicSegment,
   isBridgeDiagnosticPayload,
   isDiagnosticOnlyHomieState,
+  isHomieLifecycleState,
+  normalizeHomieDiscoveryPayload,
   mergeServiceResults,
   parseDeviceScopedTopic,
   prependLshMessages,
@@ -773,13 +774,13 @@ export class LshLogicService {
       this.haDiscovery &&
       (parsedTopic.suffix === "/$mac" ||
         parsedTopic.suffix === "/$fw/version" ||
-        parsedTopic.suffix === "/$nodes" ||
-        parseDiscoveryStateMetadataTopic(parsedTopic.suffix) !== null)
+        parsedTopic.suffix === "/$implementation/config" ||
+        parsedTopic.suffix === "/$description")
     ) {
       return this.discoveryManager.processDiscoveryMessage(
         parsedTopic.deviceName,
         parsedTopic.suffix,
-        String(payload),
+        normalizeHomieDiscoveryPayload(payload),
       );
     }
 
@@ -1031,23 +1032,26 @@ export class LshLogicService {
       return result;
     }
 
-    const retainedWentOffline = previousLifecycleState === "ready" && homieState === "lost";
+    const retainedWentOffline =
+      previousLifecycleState === "ready" &&
+      (homieState === "lost" || homieState === "disconnected");
     const retainedCameOnline =
       homieState === "ready" &&
       (previousLifecycleState === "lost" ||
+        previousLifecycleState === "disconnected" ||
         previousLifecycleState === "init" ||
         previousLifecycleState === "sleeping");
 
     if (retainedWentOffline) {
       result.logs.push(
-        `Device '${deviceName}' reported retained Homie runtime transition 'ready -> lost'. Emitting an offline alert without changing reachability state.`,
+        `Device '${deviceName}' reported retained Homie runtime transition 'ready -> ${homieState}'. Emitting an offline alert without changing reachability state.`,
       );
       this._emitHomieLifecycleAlert(
         result,
         deviceName,
         "unhealthy",
         "device_lifecycle_offline",
-        "Device reported as 'lost' by Homie.",
+        `Device reported as '${homieState}' by Homie.`,
       );
       return result;
     }
@@ -1104,7 +1108,7 @@ export class LshLogicService {
     // a live `ready` edge and the boolean `connected` flag therefore remained false.
     const wentOfflineFromLifecycleBaseline =
       !bridgeConnectionResult.stateChanged &&
-      homieState === "lost" &&
+      (homieState === "lost" || homieState === "disconnected") &&
       previousLifecycleState === "ready";
 
     if (!bridgeConnectionResult.stateChanged && !wentOfflineFromLifecycleBaseline) {
@@ -1169,7 +1173,34 @@ export class LshLogicService {
     const existingDevice = this.deviceManager.getDevice(deviceName);
     const isConfiguredDevice = this.deviceConfigMap.has(deviceName);
     const previousLifecycleState = existingDevice?.lastHomieState ?? null;
-    const homieState = String(payload) as HomieLifecycleState;
+    const homieStatePayload = String(payload);
+
+    if (homieStatePayload.length === 0) {
+      const result = createEmptyServiceResult();
+      if (this.haDiscovery) {
+        mergeServiceResults(result, this.discoveryManager.removeDevice(deviceName));
+      }
+      if (existingDevice) {
+        this.deviceManager.pruneDevice(deviceName);
+        this._clearSnapshotRecoveryTracking(deviceName);
+        result.stateChanged = true;
+        result.registryChanged = true;
+      }
+      result.logs.push(
+        `Device '${deviceName}' published an empty Homie $state payload. Removed retained discovery/runtime state for the device.`,
+      );
+      return result;
+    }
+
+    if (!isHomieLifecycleState(homieStatePayload)) {
+      const result = createEmptyServiceResult();
+      result.warnings.push(
+        `Ignored Homie $state for '${deviceName}' because '${homieStatePayload}' is not a valid Homie v5 lifecycle state.`,
+      );
+      return result;
+    }
+
+    const homieState = homieStatePayload;
 
     if (isRetained) {
       return this._handleRetainedHomieState(

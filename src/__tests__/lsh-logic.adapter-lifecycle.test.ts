@@ -15,7 +15,7 @@ import {
   getCloseHandler,
   warmupNodeConfig,
 } from "./helpers/lshLogicAdapterTestUtils";
-import { createAjvError } from "./helpers/serviceTestUtils";
+import { buildHomieV5Description, createAjvError } from "./helpers/serviceTestUtils";
 
 jest.mock("fs/promises");
 jest.mock("chokidar", () => ({
@@ -598,7 +598,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     await initializeNode();
 
     const service = (nodeInstance as unknown as { service: LshLogicService }).service;
-    service.processMessage("homie/test-device/$state", "ready", { retained: true });
+    service.processMessage("homie/5/test-device/$state", "ready", { retained: true });
 
     const watchdogResult = service.runWatchdogCheck();
     const probeMessage = watchdogResult.messages[Output.Lsh] as NodeMessage | undefined;
@@ -643,7 +643,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     await initializeNode();
 
     const service = (nodeInstance as unknown as { service: LshLogicService }).service;
-    service.processMessage("homie/test-device/$state", "ready", { retained: true });
+    service.processMessage("homie/5/test-device/$state", "ready", { retained: true });
 
     const recoveryResult = service.processMessage("LSH/test-device/bridge", {
       event: "service_ping_reply",
@@ -698,7 +698,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     await initializeNode();
 
     const service = (nodeInstance as unknown as { service: LshLogicService }).service;
-    service.processMessage("homie/test-device/$state", "ready", { retained: true });
+    service.processMessage("homie/5/test-device/$state", "ready", { retained: true });
 
     const requestDetails: NodeMessage = {
       topic: "LSH/test-device/IN",
@@ -792,13 +792,16 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
 
     const service = (nodeInstance as unknown as { service: LshLogicService }).service;
     await nodeInstance.processServiceResult(
-      service.processMessage("homie/test-device/$mac", "AA:BB:CC:DD:EE:FF"),
+      service.processMessage("homie/5/test-device/$mac", "AA:BB:CC:DD:EE:FF"),
     );
     await nodeInstance.processServiceResult(
-      service.processMessage("homie/test-device/$fw/version", "1.0.0"),
+      service.processMessage("homie/5/test-device/$fw/version", "1.0.0"),
     );
     await nodeInstance.processServiceResult(
-      service.processMessage("homie/test-device/$nodes", "relay"),
+      service.processMessage(
+        "homie/5/test-device/$description",
+        buildHomieV5Description({ relay: { settable: true } }),
+      ),
     );
 
     mockNodeInstance.send.mockClear();
@@ -842,7 +845,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
       }),
     );
     await nodeInstance.processServiceResult(
-      service.processMessage("homie/test-device/$state", "ready"),
+      service.processMessage("homie/5/test-device/$state", "ready"),
     );
 
     const lastPublishedState = mockNodeInstance.__context.flow.set.mock.calls
@@ -1007,7 +1010,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     await expect(
       initializeNode({
         ...defaultNodeConfig,
-        homieBasePath: "homie/#/",
+        homieBasePath: "homie/5/#/",
       }),
     ).rejects.toThrow("Homie Base Path must not contain MQTT wildcards");
 

@@ -45,7 +45,7 @@ type ServiceConfig = {
 
 export const defaultServiceConfig: ServiceConfig = {
   lshBasePath: "LSH/",
-  homieBasePath: "homie/",
+  homieBasePath: "homie/5/",
   serviceTopic: "LSH/Node-RED/SRV",
   protocol: "json",
   otherDevicesPrefix: "other_devices",
@@ -68,6 +68,37 @@ export type ServiceHarnessOptions = {
 type MessageOptions = {
   retained?: boolean;
 };
+
+export type HomieDescriptionNodeSpec = {
+  datatype?: string;
+  settable?: boolean;
+  nodeName?: string;
+};
+
+export const buildHomieV5Description = (
+  nodes: Record<string, HomieDescriptionNodeSpec>,
+  deviceName = "Test Homie Device",
+): string =>
+  JSON.stringify({
+    homie: "5.0",
+    version: 5,
+    name: deviceName,
+    nodes: Object.fromEntries(
+      Object.entries(nodes).map(([nodeId, spec]) => [
+        nodeId,
+        {
+          name: spec.nodeName,
+          type: "actuator",
+          properties: {
+            state: {
+              datatype: spec.datatype ?? "boolean",
+              ...(spec.settable !== undefined ? { settable: spec.settable } : {}),
+            },
+          },
+        },
+      ]),
+    ),
+  });
 
 export const createSystemConfig = (...deviceNames: string[]): SystemConfig => ({
   devices: deviceNames.map((name) => ({ name })),
@@ -118,6 +149,17 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
   ): ServiceResult =>
     service.processMessage(`${config.homieBasePath}${deviceName}/$state`, state, options);
 
+  const sendHomieDescription = (
+    deviceName: string,
+    nodes: Record<string, HomieDescriptionNodeSpec>,
+    options: MessageOptions = {},
+  ): ServiceResult =>
+    service.processMessage(
+      `${config.homieBasePath}${deviceName}/$description`,
+      buildHomieV5Description(nodes),
+      options,
+    );
+
   const setDeviceOnline = (
     deviceName: string,
     details: Partial<Omit<DeviceDetailsPayload, "p" | "n">> = {},
@@ -164,6 +206,7 @@ export function createServiceHarness(options: ServiceHarnessOptions = {}) {
     loadConfig,
     sendDeviceDetails,
     sendHomieState,
+    sendHomieDescription,
     setDeviceOnline,
     sendLshState,
     sendEvents,
