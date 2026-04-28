@@ -270,6 +270,22 @@ const SENSORS_DEF: readonly DeviceDiscoveryDefinition[] = [
     state_class: "total_increasing",
   },
   {
+    id: "mqtt_inbound_max_depth",
+    name: "MQTT Inbound Max Queue Depth",
+    topic: "$stats/mqttinboundmaxdepth",
+    icon: "mdi:counter",
+    cat: "diagnostic",
+    state_class: "measurement",
+  },
+  {
+    id: "mqtt_ack_max_depth",
+    name: "MQTT Ack Max Queue Depth",
+    topic: "$stats/mqttackmaxdepth",
+    icon: "mdi:counter",
+    cat: "diagnostic",
+    state_class: "measurement",
+  },
+  {
     name: "Implementation",
     topic: "$implementation",
     icon: "mdi:code-braces",

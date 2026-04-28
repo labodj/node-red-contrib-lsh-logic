@@ -314,6 +314,28 @@ describe("HomieDiscoveryManager", () => {
         state_class: "total_increasing",
       }),
     );
+    expect(deviceMessage.payload.components?.lsh_device01_mqtt_inbound_max_depth).toEqual(
+      expect.objectContaining({
+        platform: "sensor",
+        name: "DEVICE01 MQTT Inbound Max Queue Depth",
+        unique_id: "lsh_device01_mqtt_inbound_max_depth",
+        default_entity_id: "sensor.lsh_device01_mqtt_inbound_max_depth",
+        state_topic: "homie/5/device01/$stats/mqttinboundmaxdepth",
+        entity_category: "diagnostic",
+        state_class: "measurement",
+      }),
+    );
+    expect(deviceMessage.payload.components?.lsh_device01_mqtt_ack_max_depth).toEqual(
+      expect.objectContaining({
+        platform: "sensor",
+        name: "DEVICE01 MQTT Ack Max Queue Depth",
+        unique_id: "lsh_device01_mqtt_ack_max_depth",
+        default_entity_id: "sensor.lsh_device01_mqtt_ack_max_depth",
+        state_topic: "homie/5/device01/$stats/mqttackmaxdepth",
+        entity_category: "diagnostic",
+        state_class: "measurement",
+      }),
+    );
 
     expect(homieStateMessage.payload).toEqual(
       expect.objectContaining({

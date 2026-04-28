@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "A single, powerful node for advanced automation logic on devices implementing the public LSH MQTT/protocol contract.",
   "main": "dist/lsh-logic.js",
   "scripts": {
@@ -10,13 +10,14 @@
     "copy-assets": "copyfiles -u 1 src/**/*.html dist/",
     "dev:build": "npm run sync:version:check && npm run clean && tsc && npm run copy-assets",
     "build": "npm run sync:version:check && npm run clean && tsc -p tsconfig.prod.json && npm run copy-assets",
+    "validate:package-doc-links": "node scripts/validate-package-doc-links.mjs",
     "typecheck": "npm run sync:version:check && tsc -p tsconfig.typecheck.json",
     "lint": "npm run sync:version:check && eslint src --max-warnings=0 --cache --cache-location ./.cache/eslint",
     "format": "prettier --write \"src/**/*.{ts,html,json}\" \"scripts/**/*.mjs\" \"examples/**/*.json\" README.md LIFECYCLE.md CITATION.cff package.json jest.config.js eslint.config.mjs knip.json tsconfig*.json .prettierrc.json \".github/**/*.{yml,yaml}\"",
     "format:check": "prettier --check \"src/**/*.{ts,html,json}\" \"scripts/**/*.mjs\" \"examples/**/*.json\" README.md LIFECYCLE.md CITATION.cff package.json jest.config.js eslint.config.mjs knip.json tsconfig*.json .prettierrc.json \".github/**/*.{yml,yaml}\"",
     "knip": "knip --production --strict",
     "watch": "tsc -w",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run build && npm run validate:package-doc-links",
     "test": "npm run sync:version:check && jest --no-cache --detectOpenHandles",
     "test:cov": "npm run sync:version:check && jest --coverage --no-cache --detectOpenHandles",
     "test:watch": "jest --watch"
@@ -83,6 +84,6 @@
     "prettier": "^3.8.3",
     "ts-jest": "^29.4.9",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.0"
+    "typescript-eslint": "^8.59.1"
   }
 }

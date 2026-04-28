@@ -49,6 +49,9 @@ jobs:
       - name: Build project
         run: npm run build
 
+      - name: Validate package documentation links
+        run: npm run validate:package-doc-links
+
       - name: Run tests
         run: npm test
 
