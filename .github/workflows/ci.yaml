@@ -132,7 +132,7 @@ jobs:
         run: npm pack
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: node-red-contrib-lsh-logic ${{ github.ref_name }}
           generate_release_notes: true
