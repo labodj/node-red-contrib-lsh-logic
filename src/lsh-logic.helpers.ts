@@ -30,20 +30,3 @@ export function normalizeInboundTopic(
 export function buildTopicSetSignature(topics: string[]): string {
   return JSON.stringify([...topics].sort((left, right) => left.localeCompare(right)));
 }
-
-/**
- * Returns the Homie metadata subscriptions required by Home Assistant
- * auto-discovery. Homie v5 carries the complete retained model in
- * `$description`; `$mac` and `$fw/version` are retained fork extensions used
- * to enrich the Home Assistant device card when present. `$implementation/config`
- * is read for the fork's read-only effective_base_topic diagnostic, which lets
- * the node warn when the configured Homie root does not match the device runtime.
- */
-export function getHomieDiscoveryTopics(homieBasePath: string): string[] {
-  return [
-    `${homieBasePath}+/$description`,
-    `${homieBasePath}+/$mac`,
-    `${homieBasePath}+/$fw/version`,
-    `${homieBasePath}+/$implementation/config`,
-  ];
-}

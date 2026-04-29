@@ -1,13 +1,7 @@
-Labo Smart Home Attribution Notice
+node-red-contrib-lsh-logic
+Copyright 2026 Jacopo Labardi
 
-This repository is an original component of the Labo Smart Home (LSH) project,
-created and maintained by Jacopo Labardi.
+This product includes software developed by Jacopo Labardi and contributors.
 
-Canonical upstream repository:
-https://github.com/labodj/node-red-contrib-lsh-logic
-
-Project entry point:
-https://github.com/labodj/labo-smart-home
-
-This NOTICE file is provided for attribution purposes only and does not modify
-the terms of the Apache License, Version 2.0.
+The package vendors the public LSH protocol documentation from the
+labodj/lsh-protocol project.

@@ -81,28 +81,6 @@ export function isHomieLifecycleState(value: string): value is HomieLifecycleSta
 }
 
 /**
- * Converts Homie discovery payloads to the JSON string expected by the discovery
- * parser. Node-RED's MQTT node can be configured to parse JSON before this node
- * sees the message, so `$description` and `$implementation/config` may arrive
- * either as raw strings/Buffers or as already-decoded objects.
- */
-export function normalizeHomieDiscoveryPayload(payload: unknown): string {
-  if (typeof payload === "string") {
-    return payload;
-  }
-
-  if (Buffer.isBuffer(payload)) {
-    return payload.toString("utf8");
-  }
-
-  if (typeof payload === "object" && payload !== null) {
-    return JSON.stringify(payload);
-  }
-
-  return String(payload);
-}
-
-/**
  * Returns true for Homie lifecycle states that are informative only and should
  * not be treated as online or offline transitions.
  */
@@ -200,12 +178,6 @@ export function mergeServiceResults(target: ServiceResult, source: ServiceResult
   target.registryChanged = Boolean(target.registryChanged || source.registryChanged);
   if (source.staggerLshMessages) {
     target.staggerLshMessages = true;
-  }
-  if (source.discoveryFlushDelayMs !== undefined) {
-    target.discoveryFlushDelayMs =
-      target.discoveryFlushDelayMs === undefined
-        ? source.discoveryFlushDelayMs
-        : Math.min(target.discoveryFlushDelayMs, source.discoveryFlushDelayMs);
   }
 }
 

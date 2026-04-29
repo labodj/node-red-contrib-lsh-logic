@@ -2,22 +2,6 @@
   "devices": [
     {
       "name": "c1",
-      "haDiscovery": {
-        "deviceName": "Kitchen Board",
-        "defaultPlatform": "switch",
-        "nodes": {
-          "1": {
-            "platform": "light",
-            "name": "Kitchen Ceiling",
-            "defaultEntityId": "light.kitchen_ceiling"
-          },
-          "2": {
-            "platform": "fan",
-            "name": "Kitchen Extractor",
-            "defaultEntityId": "fan.kitchen_extractor"
-          }
-        }
-      },
       "longClickButtons": [
         {
           "id": 1,
@@ -33,21 +17,7 @@
       ]
     },
     {
-      "name": "j1",
-      "haDiscovery": {
-        "deviceName": "Living Room Lights",
-        "nodes": {
-          "1": {
-            "name": "Sofa Lamp",
-            "defaultEntityId": "light.sofa_lamp"
-          },
-          "2": {
-            "platform": "switch",
-            "name": "Display Cabinet",
-            "defaultEntityId": "switch.display_cabinet"
-          }
-        }
-      }
+      "name": "j1"
     },
     {
       "name": "j2"

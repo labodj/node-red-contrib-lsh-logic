@@ -8,7 +8,7 @@ authors:
 repository-code: "https://github.com/labodj/node-red-contrib-lsh-logic"
 url: "https://github.com/labodj/node-red-contrib-lsh-logic"
 license: "Apache-2.0"
-abstract: "Node-RED orchestration node for the LSH ecosystem, with MQTT logic, Homie support and Home Assistant discovery."
+abstract: "Node-RED orchestration node for the LSH ecosystem, with MQTT logic, Homie lifecycle support and robust device recovery."
 keywords:
   - node-red
   - mqtt

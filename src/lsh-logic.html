@@ -50,15 +50,6 @@
     return validateContextBackedKey.call(this, value, "exposeConfigContext");
   }
 
-  function validateDiscoveryPrefix(value) {
-    const isEnabled = this.haDiscovery === true || this.haDiscovery === "true";
-    if (!isEnabled) {
-      return true;
-    }
-
-    return validateConcreteTopic(value);
-  }
-
   RED.nodes.registerType("lsh-logic", {
     category: "function",
     color: "#4a90e2",
@@ -125,8 +116,6 @@
         required: true,
         validate: validatePositiveNumber,
       },
-      haDiscovery: { value: false },
-      haDiscoveryPrefix: { value: "homeassistant", validate: validateDiscoveryPrefix },
     },
     inputs: 1,
     outputs: 5,
@@ -143,11 +132,6 @@
       };
 
       const refreshConditionalFields = () => {
-        const haEnabled =
-          $("#node-input-haDiscovery").prop("checked") === true ||
-          $("#node-input-haDiscovery").val() === "true";
-        toggleRow("#node-input-haDiscoveryPrefix", "#node-row-haDiscoveryPrefix", haEnabled);
-
         const exposeStateEnabled = $("#node-input-exposeStateContext").val() !== "none";
         toggleRow("#node-input-exposeStateKey", "#node-row-exposeStateKey", exposeStateEnabled);
 
@@ -160,11 +144,6 @@
         const msgpackEnabled = $("#node-input-protocol").val() === "msgpack";
         $("#node-row-protocol-msgpack-tip").toggle(msgpackEnabled);
       };
-
-      $("#node-input-haDiscovery").on("change", () => {
-        refreshConditionalFields();
-        $("#node-input-haDiscoveryPrefix").trigger("change");
-      });
 
       $("#node-input-exposeStateContext").on("change", () => {
         refreshConditionalFields();
@@ -381,28 +360,6 @@
   </div>
 
   <div class="lsh-config-section">
-    <div class="lsh-config-section-title">
-      <i class="fa fa-home"></i> Home Assistant Integration
-    </div>
-    <div class="form-row">
-      <label for="node-input-haDiscovery" style="width: 70%;">Enable Auto-Discovery</label>
-      <input
-        type="checkbox"
-        id="node-input-haDiscovery"
-        style="display: inline-block; width: auto; vertical-align: top;"
-      />
-      <div class="lsh-form-tip" style="margin-top: 5px;">
-        Generate Home Assistant discovery config from retained Homie v5 $description documents.
-      </div>
-    </div>
-    <div class="form-row" id="node-row-haDiscoveryPrefix">
-      <label for="node-input-haDiscoveryPrefix">Discovery Prefix</label>
-      <input type="text" id="node-input-haDiscoveryPrefix" placeholder="homeassistant" />
-      <span class="lsh-form-tip">Required only when auto-discovery is enabled.</span>
-    </div>
-  </div>
-
-  <div class="lsh-config-section">
     <div class="lsh-config-section-title"><i class="fa fa-exchange"></i> Context Interaction</div>
     <div style="padding-left: 10px;">
       <h4>Export Internal State</h4>
@@ -541,14 +498,30 @@
     The node accepts bridge-local payloads as informational runtime events, but it does not treat
     them as click traffic or as proof that the controller is currently reachable.
   </p>
+
+  <h3>Home Assistant Discovery</h3>
   <p>
-    Home Assistant discovery listens to retained Homie v5 <code>$description</code> documents and
-    fork runtime diagnostics. Writable boolean <code>state</code> properties become toggle entities,
-    settable enum/number/string properties become select/number/text entities, read-only booleans
-    become binary sensors, and read-only numeric properties become measurement sensors when Homie
-    metadata provides units. Reset and last WiFi/MQTT disconnect reasons exposed by the Homie fork
-    are published as diagnostic sensors, while since-boot MQTT drop counters are published as
-    total-increasing diagnostic sensors.
+    This node keeps Home Assistant discovery out of the LSH runtime path. Use
+    <code>node-red-contrib-homie-home-assistant-discovery</code> beside it when you want Homie
+    devices exposed to Home Assistant.
+  </p>
+  <p>
+    Recommended wiring: keep this node on its own dynamically-managed MQTT input, then add a second
+    MQTT input for Homie discovery metadata. Wire that second MQTT input to
+    <code>homie-ha-discovery</code>, wire discovery output 1 to MQTT output, and wire discovery
+    output 4 back to the same second MQTT input if you want automatic Homie subscriptions.
+  </p>
+  <p>
+    Do not feed both nodes' subscription outputs into the same MQTT input. Both nodes can emit an
+    unsubscribe-all control message before subscribing to their own topic set.
+  </p>
+  <p>
+    For LSH Homie v5 devices, a typical discovery-node setup is: Home Assistant prefix
+    <code>homeassistant</code>, ID prefix <code>lsh</code>, Homie v5 domain <code>homie</code>, only
+    v5 enabled, state sensor enabled, and attribute diagnostics enabled when you want Homie
+    <code>$...</code> attributes exposed as diagnostics. Use the discovery node's
+    <code>namedNodeState</code> override to map numeric LSH actuator nodes to friendly light, fan or
+    switch names without putting Home Assistant mapping back into <code>system-config.json</code>.
   </p>
 
   <h3>Outputs</h3>

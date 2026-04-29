@@ -43,8 +43,6 @@ export const defaultNodeConfig: LshLogicNodeDef = {
   exposeConfigContext: "none",
   exposeConfigKey: "lsh_config",
   protocol: "json",
-  haDiscovery: false,
-  haDiscoveryPrefix: "homeassistant",
 };
 
 export function createMockNode(): MockNodeInstance {

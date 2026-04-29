@@ -38,8 +38,6 @@ const mqttTopicSegmentSchema = {
   pattern: "^[A-Za-z0-9_-]+$",
 } as const;
 
-const homieNodeIdSchema = mqttTopicSegmentSchema;
-
 const clickTypeEnum = Object.values(ClickType).filter(
   (value): value is number => typeof value === "number",
 );
@@ -86,23 +84,6 @@ function hasCaseInsensitiveUniqueItemProperty(propertyName: string, data: unknow
       return false;
     }
     seen.add(normalizedValue);
-  }
-
-  return true;
-}
-
-function hasCaseInsensitiveUniquePropertyNames(data: unknown): boolean {
-  if (data === null || typeof data !== "object" || Array.isArray(data)) {
-    return true;
-  }
-
-  const seen = new Set<string>();
-  for (const propertyName of Object.keys(data)) {
-    const normalizedPropertyName = propertyName.toLowerCase();
-    if (seen.has(normalizedPropertyName)) {
-      return false;
-    }
-    seen.add(normalizedPropertyName);
   }
 
   return true;
@@ -266,53 +247,6 @@ const buttonActionSchema = {
   ],
 } as const;
 
-const homeAssistantNodeDiscoveryConfigSchema = {
-  type: "object",
-  properties: {
-    platform: {
-      type: "string",
-      enum: ["light", "switch", "fan"],
-      description: "Optional Home Assistant entity platform override for this node.",
-    },
-    name: {
-      ...nonEmptyStringSchema,
-      description: "Optional Home Assistant friendly entity name override.",
-    },
-    defaultEntityId: {
-      ...nonEmptyStringSchema,
-      description: "Optional Home Assistant default entity ID override.",
-    },
-    icon: {
-      ...nonEmptyStringSchema,
-      description: "Optional Home Assistant icon override.",
-    },
-  },
-  additionalProperties: false,
-} as const;
-
-const deviceHomeAssistantDiscoveryConfigSchema = {
-  type: "object",
-  properties: {
-    deviceName: {
-      ...nonEmptyStringSchema,
-      description: "Optional Home Assistant device name override.",
-    },
-    defaultPlatform: {
-      type: "string",
-      enum: ["light", "switch", "fan"],
-      description: "Optional default Home Assistant platform for all nodes of the device.",
-    },
-    nodes: {
-      type: "object",
-      description: "Optional per-node Home Assistant discovery overrides keyed by Homie node ID.",
-      propertyNames: homieNodeIdSchema,
-      caseInsensitiveUniquePropertyNames: true,
-      additionalProperties: homeAssistantNodeDiscoveryConfigSchema,
-    },
-  },
-  additionalProperties: false,
-} as const;
-
 /**
  * Schema for the main `system-config.json` file.
  * It defines the overall structure, containing a list of all devices
@@ -347,7 +281,6 @@ export const systemConfigSchema = {
             items: buttonActionSchema,
             uniqueItemProperty: "id",
           },
-          haDiscovery: deviceHomeAssistantDiscoveryConfigSchema,
         },
         required: ["name"],
         additionalProperties: false,
@@ -572,13 +505,6 @@ export function createAppValidators(): AppValidators {
     type: "array",
     schemaType: "string",
     validate: hasCaseInsensitiveUniqueItemProperty,
-    errors: false,
-  });
-  ajv.addKeyword({
-    keyword: "caseInsensitiveUniquePropertyNames",
-    type: "object",
-    schemaType: "boolean",
-    validate: (_schema: boolean, data: unknown) => hasCaseInsensitiveUniquePropertyNames(data),
     errors: false,
   });
   ajv.addKeyword({

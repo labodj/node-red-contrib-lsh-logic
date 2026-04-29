@@ -79,11 +79,6 @@ export const normalizeNodeConfig = (config: LshLogicNodeDef): LshLogicNodeDef =>
     exposeStateKey: config.exposeStateKey.trim(),
     exportTopicsKey: config.exportTopicsKey.trim(),
     exposeConfigKey: config.exposeConfigKey.trim(),
-    haDiscoveryPrefix: config.haDiscovery
-      ? validateConcreteTopic(config.haDiscoveryPrefix, "Discovery Prefix", {
-          requireTrailingSlash: false,
-        })
-      : config.haDiscoveryPrefix.trim(),
   };
 
   const numericFields: Record<NumericConfigKey, string> = {

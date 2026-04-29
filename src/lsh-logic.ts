@@ -13,11 +13,7 @@ import type { Node, NodeAPI, NodeMessage } from "node-red";
 import { LshLogicService } from "./LshLogicService";
 import { LshCodec } from "./LshCodec";
 import { normalizeNodeConfig } from "./lsh-logic.config";
-import {
-  buildTopicSetSignature,
-  getHomieDiscoveryTopics,
-  normalizeInboundTopic,
-} from "./lsh-logic.helpers";
+import { buildTopicSetSignature, normalizeInboundTopic } from "./lsh-logic.helpers";
 import { createAppValidators } from "./schemas";
 import { LshProtocol, Output } from "./types";
 import type {
@@ -57,7 +53,6 @@ export class LshLogicNode {
   private initialVerificationTimer: NodeJS.Timeout | null = null;
   private runtimeRecoveryTimer: NodeJS.Timeout | null = null;
   private configReloadTimer: NodeJS.Timeout | null = null;
-  private discoveryFlushTimer: NodeJS.Timeout | null = null;
   private configLoadQueue: Promise<void> = Promise.resolve();
   private sendQueue: Promise<void> = Promise.resolve();
   private lowPriorityLshDrainPromise: Promise<void> | null = null;
@@ -106,9 +101,6 @@ export class LshLogicNode {
         clickTimeout: this.config.clickTimeout,
         interrogateThreshold: this.config.interrogateThreshold,
         pingTimeout: this.config.pingTimeout,
-
-        haDiscovery: this.config.haDiscovery,
-        haDiscoveryPrefix: this.config.haDiscoveryPrefix,
       },
       this.getContext(this.config.otherActorsContext),
       validators,
@@ -432,10 +424,6 @@ export class LshLogicNode {
       this.updateExposedState();
     }
 
-    if (result.discoveryFlushDelayMs !== undefined) {
-      this.scheduleDiscoveryFlush(result.discoveryFlushDelayMs);
-    }
-
     if (this.isWarmingUp && result.messages[Output.Alerts]) {
       const alertMessages = Array.isArray(result.messages[Output.Alerts])
         ? result.messages[Output.Alerts]
@@ -481,39 +469,6 @@ export class LshLogicNode {
         this.markImmediateLshDispatches(result.messages[Output.Lsh]);
         this.send(result.messages);
       });
-    }
-  }
-
-  private scheduleDiscoveryFlush(delayMs: number): void {
-    if (this.isClosing) {
-      return;
-    }
-
-    this.clearDiscoveryFlushTimer();
-    this.discoveryFlushTimer = setTimeout(() => {
-      void (async () => {
-        this.discoveryFlushTimer = null;
-        if (this.isClosing) {
-          return;
-        }
-
-        try {
-          const result = this.service.flushPendingDiscovery();
-          await this.processServiceResult(result);
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          this.node.error(
-            `Error while flushing deferred Home Assistant discovery: ${errorMessage}`,
-          );
-        }
-      })();
-    }, delayMs);
-  }
-
-  private clearDiscoveryFlushTimer(): void {
-    if (this.discoveryFlushTimer) {
-      clearTimeout(this.discoveryFlushTimer);
-      this.discoveryFlushTimer = null;
     }
   }
 
@@ -568,11 +523,9 @@ export class LshLogicNode {
       if (scheduleStartupVerification) {
         this.clearStartupTimers();
       }
-      this.clearDiscoveryFlushTimer();
       this.invalidateLowPriorityLshDrain();
       const logMessage = this.service.updateSystemConfig(parsedConfig as SystemConfig);
       this.node.log(logMessage);
-      await this.processServiceResult(this.service.syncDiscoveryConfig());
       shouldRefreshAdapterState = true;
 
       if (scheduleStartupVerification) {
@@ -1074,7 +1027,6 @@ export class LshLogicNode {
     if (this.watchdogInterval) clearInterval(this.watchdogInterval);
     this.timersStarted = false;
     this.watchdogCycleQueued = false;
-    this.clearDiscoveryFlushTimer();
     this.clearStartupTimers();
     this.clearRuntimeRecoveryTimer();
     this.invalidateLowPriorityLshDrain();
@@ -1153,7 +1105,6 @@ export class LshLogicNode {
     ); // These require QoS 2.
 
     const homieTopics = deviceNames.map((name) => `${homieBasePath}${name}/$state`); // These require QoS 1
-    const discoveryTopics = this.config.haDiscovery ? getHomieDiscoveryTopics(homieBasePath) : [];
 
     const outputMessages: Array<MqttSubscribeMsg | MqttUnsubscribeMsg> = [
       {
@@ -1187,15 +1138,6 @@ export class LshLogicNode {
       outputMessages.push(subscribeQos2Message);
     }
 
-    if (discoveryTopics.length > 0) {
-      const subscribeDiscoveryMessage: MqttSubscribeMsg = {
-        action: "subscribe",
-        topic: discoveryTopics,
-        qos: 1,
-      };
-      outputMessages.push(subscribeDiscoveryMessage);
-    }
-
     const nextConfigurationOutputSignature = buildTopicSetSignature(
       outputMessages.map((message) => JSON.stringify(message)),
     );
@@ -1220,11 +1162,10 @@ export class LshLogicNode {
 
     // Update the context variable for passive inspection.
     if (exportTopics !== "none" && exportTopicsKey) {
-      const allTopics = [...homieTopics, ...discoveryTopics, ...lshTopics];
+      const allTopics = [...homieTopics, ...lshTopics];
       const topicsToExport = {
         lsh: lshTopics,
         homie: homieTopics,
-        discovery: discoveryTopics,
         all: allTopics,
         lastUpdated: Date.now(),
       };

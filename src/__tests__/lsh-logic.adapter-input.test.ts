@@ -458,13 +458,12 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
       exportTopicsKey: "lsh_topics",
       exposeConfigContext: "global",
       exposeConfigKey: "lsh_config",
-      haDiscovery: true,
     });
 
     expect(mockNodeInstance.__context.global.set).toHaveBeenCalledWith(
       "lsh_config",
       expect.objectContaining({
-        nodeConfig: expect.objectContaining({ haDiscovery: true }),
+        nodeConfig: expect.objectContaining({ type: "lsh-logic" }),
         systemConfig: expect.objectContaining({
           devices: [{ name: "test-device" }],
         }),
@@ -480,18 +479,8 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
           "LSH/test-device/bridge",
         ],
         homie: ["homie/5/test-device/$state"],
-        discovery: [
-          "homie/5/+/$description",
-          "homie/5/+/$mac",
-          "homie/5/+/$fw/version",
-          "homie/5/+/$implementation/config",
-        ],
         all: expect.arrayContaining([
           "homie/5/test-device/$state",
-          "homie/5/+/$description",
-          "homie/5/+/$mac",
-          "homie/5/+/$fw/version",
-          "homie/5/+/$implementation/config",
           "LSH/test-device/conf",
           "LSH/test-device/state",
           "LSH/test-device/events",
@@ -537,7 +526,6 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
       ...defaultNodeConfig,
       exportTopics: "flow",
       exportTopicsKey: "empty_topics",
-      haDiscovery: false,
     });
 
     expect(mockNodeInstance.send).toHaveBeenCalledWith([
@@ -552,7 +540,6 @@ describe("LshLogicNode Adapter - Initialization & Input", () => {
       expect.objectContaining({
         lsh: [],
         homie: [],
-        discovery: [],
         all: [],
       }),
     );

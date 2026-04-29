@@ -190,29 +190,6 @@ describe("schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts optional Home Assistant discovery overrides in system config", () => {
-    const isValid = validators.validateSystemConfig({
-      devices: [
-        {
-          name: "c1",
-          haDiscovery: {
-            deviceName: "Kitchen Board",
-            defaultPlatform: "switch",
-            nodes: {
-              "1": {
-                platform: "fan",
-                name: "Kitchen Extractor",
-                defaultEntityId: "fan.kitchen_extractor",
-              },
-            },
-          },
-        },
-      ],
-    });
-
-    expect(isValid).toBe(true);
-  });
-
   it("rejects device names that are not valid MQTT topic segments", () => {
     const invalidNames = ["bad/name", "bad+name", "bad#name", "bad name"];
 
@@ -291,63 +268,18 @@ describe("schemas", () => {
     expect(wrongCaseActorValid).toBe(false);
   });
 
-  it("rejects unsupported Home Assistant platform overrides in system config", () => {
+  it("rejects obsolete Home Assistant discovery overrides in system config", () => {
     const isValid = validators.validateSystemConfig({
       devices: [
         {
           name: "c1",
           haDiscovery: {
-            defaultPlatform: "cover",
+            deviceName: "Kitchen Board",
           },
         },
       ],
     });
 
     expect(isValid).toBe(false);
-  });
-
-  it("rejects Home Assistant discovery node overrides that collide case-insensitively", () => {
-    const isValid = validators.validateSystemConfig({
-      devices: [
-        {
-          name: "c1",
-          haDiscovery: {
-            nodes: {
-              Relay: {
-                platform: "switch",
-              },
-              relay: {
-                platform: "fan",
-              },
-            },
-          },
-        },
-      ],
-    });
-
-    expect(isValid).toBe(false);
-  });
-
-  it("rejects Home Assistant discovery node overrides that are not valid Homie node ids", () => {
-    const invalidNodeIds = ["bad node", "topic/evil"];
-
-    for (const nodeId of invalidNodeIds) {
-      const isValid = validators.validateSystemConfig({
-        devices: [
-          {
-            name: "c1",
-            haDiscovery: {
-              nodes: {
-                [nodeId]: {
-                  platform: "switch",
-                },
-              },
-            },
-          },
-        ],
-      });
-
-      expect(isValid).toBe(false);
-    }
   });
 });

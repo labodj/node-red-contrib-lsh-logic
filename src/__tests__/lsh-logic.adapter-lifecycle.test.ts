@@ -15,7 +15,7 @@ import {
   getCloseHandler,
   warmupNodeConfig,
 } from "./helpers/lshLogicAdapterTestUtils";
-import { buildHomieV5Description, createAjvError } from "./helpers/serviceTestUtils";
+import { createAjvError } from "./helpers/serviceTestUtils";
 
 jest.mock("fs/promises");
 jest.mock("chokidar", () => ({
@@ -261,27 +261,6 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     await flushMicrotasks();
 
     expect(mockNodeInstance.log).toHaveBeenCalledWith("Cleaned up 2 clicks.");
-  });
-
-  it("should process discovery sync messages after loading system config", async () => {
-    const discoveryMessage = {
-      topic: "homeassistant/device/lsh_test/config",
-      payload: { components: {} },
-      qos: 1,
-      retain: true,
-    };
-
-    jest.spyOn(LshLogicService.prototype, "syncDiscoveryConfig").mockReturnValue(
-      createServiceResult({
-        messages: {
-          [Output.Lsh]: discoveryMessage,
-        },
-      }),
-    );
-
-    await initializeNode();
-
-    expect(mockNodeInstance.send).toHaveBeenCalledWith([discoveryMessage, null, null, null, null]);
   });
 
   it("should run the watchdog check periodically", async () => {
@@ -784,43 +763,6 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     expect(service.getConfiguredDeviceNames()).toEqual(["test-device"]);
   });
 
-  it("should keep published HA discovery state intact when a config reload fails", async () => {
-    await initializeNode({
-      ...defaultNodeConfig,
-      haDiscovery: true,
-    });
-
-    const service = (nodeInstance as unknown as { service: LshLogicService }).service;
-    await nodeInstance.processServiceResult(
-      service.processMessage("homie/5/test-device/$mac", "AA:BB:CC:DD:EE:FF"),
-    );
-    await nodeInstance.processServiceResult(
-      service.processMessage("homie/5/test-device/$fw/version", "1.0.0"),
-    );
-    await nodeInstance.processServiceResult(
-      service.processMessage(
-        "homie/5/test-device/$description",
-        buildHomieV5Description({ relay: { settable: true } }),
-      ),
-    );
-
-    mockNodeInstance.send.mockClear();
-
-    const validateFn = createValidator(false);
-    validateFn.errors = [createAjvError("invalid config")];
-
-    await nodeInstance.handleConfigFileChange("/tmp/bad-config.json", validateFn);
-
-    const cleanupOutputs = mockNodeInstance.send.mock.calls
-      .map((call) => call[0])
-      .find(
-        (outputs): outputs is Array<NodeMessage | NodeMessage[] | null> =>
-          Array.isArray(outputs) && Array.isArray(outputs[Output.Lsh]),
-      );
-
-    expect(cleanupOutputs).toBeUndefined();
-  });
-
   it("should preserve exposed registry state when a config reload fails", async () => {
     await initializeNode({
       ...defaultNodeConfig,
@@ -979,27 +921,7 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
     }
   });
 
-  it("should validate discovery and topic path settings at initialization", async () => {
-    await initializeNode({
-      ...defaultNodeConfig,
-      haDiscovery: false,
-      haDiscoveryPrefix: "   ",
-    });
-
-    expect(mockNodeInstance.status).toHaveBeenCalledWith({
-      fill: "green",
-      shape: "dot",
-      text: "Ready",
-    });
-
-    await expect(
-      initializeNode({
-        ...defaultNodeConfig,
-        haDiscovery: true,
-        haDiscoveryPrefix: "   ",
-      }),
-    ).rejects.toThrow("Discovery Prefix cannot be empty.");
-
+  it("should validate topic path settings at initialization", async () => {
     await expect(
       initializeNode({
         ...defaultNodeConfig,
@@ -1027,14 +949,6 @@ describe("LshLogicNode Adapter - Runtime & Lifecycle", () => {
         serviceTopic: "LSH/Node-RED/#",
       }),
     ).rejects.toThrow("Service Topic must not contain MQTT wildcards");
-
-    await expect(
-      initializeNode({
-        ...defaultNodeConfig,
-        haDiscovery: true,
-        haDiscoveryPrefix: "homeassistant/#",
-      }),
-    ).rejects.toThrow("Discovery Prefix must not contain MQTT wildcards");
   });
 
   it("should run the initial verification timer using the configured LSH base path", async () => {

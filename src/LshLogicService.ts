@@ -8,7 +8,6 @@
 
 import { DeviceRegistryManager } from "./DeviceRegistryManager";
 import { ClickTransactionManager } from "./ClickTransactionManager";
-import { HomieDiscoveryManager } from "./HomieDiscoveryManager";
 import {
   classifyDeviceRecoveryPath,
   findUnknownActorReference,
@@ -26,7 +25,6 @@ import {
   isBridgeDiagnosticPayload,
   isDiagnosticOnlyHomieState,
   isHomieLifecycleState,
-  normalizeHomieDiscoveryPayload,
   mergeServiceResults,
   parseDeviceScopedTopic,
   prependLshMessages,
@@ -94,12 +92,10 @@ export class ClickValidationError extends Error {
 export class LshLogicService {
   private readonly deviceManager: DeviceRegistryManager;
   private readonly clickManager: ClickTransactionManager;
-  private readonly discoveryManager: HomieDiscoveryManager;
   private readonly watchdog: Watchdog;
 
   private readonly lshBasePath: string;
   private readonly homieBasePath: string;
-  private readonly haDiscovery: boolean;
 
   private readonly protocol: "json" | "msgpack";
   private readonly serviceTopic: string;
@@ -134,8 +130,6 @@ export class LshLogicService {
       clickTimeout: number;
       interrogateThreshold: number;
       pingTimeout: number;
-      haDiscovery: boolean;
-      haDiscoveryPrefix: string;
     },
     otherActorsContext: { get(key: string): unknown },
     validators: {
@@ -149,16 +143,11 @@ export class LshLogicService {
     this.homieBasePath = config.homieBasePath;
     this.serviceTopic = config.serviceTopic;
     this.protocol = config.protocol;
-    this.haDiscovery = config.haDiscovery;
     this.snapshotRecoveryRetryMs = Math.max(config.pingTimeout * 1000, 1000);
 
     this.validators = validators;
 
     this.deviceManager = new DeviceRegistryManager(config.otherDevicesPrefix, otherActorsContext);
-    this.discoveryManager = new HomieDiscoveryManager(
-      config.homieBasePath,
-      config.haDiscoveryPrefix,
-    );
     this.clickManager = new ClickTransactionManager(config.clickTimeout);
     this.watchdog = new Watchdog(config.interrogateThreshold, config.pingTimeout);
     this.codec = new LshCodec();
@@ -396,7 +385,6 @@ export class LshLogicService {
     for (const device of this.systemConfig.devices) {
       this.deviceConfigMap.set(device.name, device);
     }
-    this.discoveryManager.setDiscoveryConfig(this.deviceConfigMap);
     const clearedWatchdogDevices = this.watchdog.pruneDevices(newDeviceNames);
     for (const deviceName of Array.from(this.snapshotRecoveryTimestamps.keys())) {
       if (!newDeviceNames.has(deviceName)) {
@@ -429,22 +417,6 @@ export class LshLogicService {
     return logMessage;
   }
 
-  public syncDiscoveryConfig(): ServiceResult {
-    if (!this.haDiscovery) {
-      return createEmptyServiceResult();
-    }
-
-    return this.discoveryManager.syncConfigIfNeeded();
-  }
-
-  public flushPendingDiscovery(): ServiceResult {
-    if (!this.haDiscovery) {
-      return createEmptyServiceResult();
-    }
-
-    return this.discoveryManager.flushPendingDiscovery();
-  }
-
   /**
    * Resets the configuration to null, typically on a file loading or validation error.
    */
@@ -453,7 +425,7 @@ export class LshLogicService {
       this.systemConfig !== null || this.deviceManager.getRegisteredDeviceNames().length > 0;
     this.systemConfig = null;
     this.deviceConfigMap.clear();
-    const result = this.discoveryManager.reset();
+    const result = createEmptyServiceResult();
     this.clickManager.clearAll();
     this.watchdog.reset();
     this.snapshotRecoveryTimestamps.clear();
@@ -770,20 +742,6 @@ export class LshLogicService {
       return this._handleHomieState(parsedTopic.deviceName, payload, isRetained);
     }
 
-    if (
-      this.haDiscovery &&
-      (parsedTopic.suffix === "/$mac" ||
-        parsedTopic.suffix === "/$fw/version" ||
-        parsedTopic.suffix === "/$implementation/config" ||
-        parsedTopic.suffix === "/$description")
-    ) {
-      return this.discoveryManager.processDiscoveryMessage(
-        parsedTopic.deviceName,
-        parsedTopic.suffix,
-        normalizeHomieDiscoveryPayload(payload),
-      );
-    }
-
     return this._handleUnhandledTopic(topic);
   }
 
@@ -852,9 +810,6 @@ export class LshLogicService {
   public runWatchdogCheck(): ServiceResult {
     const result = createEmptyServiceResult();
     const now = Date.now();
-    if (this.haDiscovery) {
-      mergeServiceResults(result, this.discoveryManager.pruneExpiredDiscoveryState(now));
-    }
     if (!this.systemConfig || this.systemConfig.devices.length === 0) {
       return result;
     }
@@ -1177,9 +1132,6 @@ export class LshLogicService {
 
     if (homieStatePayload.length === 0) {
       const result = createEmptyServiceResult();
-      if (this.haDiscovery) {
-        mergeServiceResults(result, this.discoveryManager.removeDevice(deviceName));
-      }
       if (existingDevice) {
         this.deviceManager.pruneDevice(deviceName);
         this._clearSnapshotRecoveryTracking(deviceName);
@@ -1187,7 +1139,7 @@ export class LshLogicService {
         result.registryChanged = true;
       }
       result.logs.push(
-        `Device '${deviceName}' published an empty Homie $state payload. Removed retained discovery/runtime state for the device.`,
+        `Device '${deviceName}' published an empty Homie $state payload. Removed runtime state for the device.`,
       );
       return result;
     }

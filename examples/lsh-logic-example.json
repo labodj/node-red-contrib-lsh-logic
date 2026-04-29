@@ -1,5 +1,13 @@
 [
   {
+    "id": "1e10f095090cde75",
+    "type": "tab",
+    "label": "LSH Logic example",
+    "disabled": false,
+    "info": "",
+    "env": []
+  },
+  {
     "id": "2ce9b8ad2d0afdeb",
     "type": "mqtt in",
     "z": "1e10f095090cde75",
@@ -7,7 +15,7 @@
     "topic": "",
     "qos": "2",
     "datatype": "auto-detect",
-    "broker": "82ad18b3.0b1ee8",
+    "broker": "82ad18b30b1ee8",
     "nl": false,
     "rap": true,
     "rh": 0,
@@ -21,12 +29,12 @@
     "type": "lsh-logic",
     "z": "1e10f095090cde75",
     "name": "",
-    "homieBasePath": "homie/5/",
+    "homieBasePath": "homie/",
     "lshBasePath": "LSH/",
     "serviceTopic": "LSH/Node-RED/SRV",
     "protocol": "json",
     "otherDevicesPrefix": "other_devices",
-    "systemConfigPath": "configs/system-config.json",
+    "systemConfigPath": "../configs/system-config.json",
     "exposeStateContext": "global",
     "exposeStateKey": "lsh_state",
     "exportTopics": "flow",
@@ -40,8 +48,6 @@
     "interrogateThreshold": 180,
     "initialStateTimeout": "5",
     "pingTimeout": "5",
-    "haDiscovery": true,
-    "haDiscoveryPrefix": "homeassistant",
     "x": 870,
     "y": 380,
     "wires": [
@@ -51,6 +57,24 @@
       ["baab86d684aba545", "2ce9b8ad2d0afdeb"],
       ["2c15477cb520c121"]
     ]
+  },
+  {
+    "id": "ab525ecad109fe40",
+    "type": "mqtt out",
+    "z": "1e10f095090cde75",
+    "name": "MQTT Out",
+    "topic": "",
+    "qos": "",
+    "retain": "",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "82ad18b30b1ee8",
+    "x": 1090,
+    "y": 240,
+    "wires": []
   },
   {
     "id": "98265ffd08f02caa",
@@ -138,28 +162,10 @@
     "wires": []
   },
   {
-    "id": "ab525ecad109fe40",
-    "type": "mqtt out",
-    "z": "1e10f095090cde75",
-    "name": "MQTT Out",
-    "topic": "",
-    "qos": "",
-    "retain": "",
-    "respTopic": "",
-    "contentType": "",
-    "userProps": "",
-    "correl": "",
-    "expiry": "",
-    "broker": "82ad18b3.0b1ee8",
-    "x": 1090,
-    "y": 260,
-    "wires": []
-  },
-  {
-    "id": "82ad18b3.0b1ee8",
+    "id": "82ad18b30b1ee8",
     "type": "mqtt-broker",
-    "name": "",
-    "broker": "mosquitto",
+    "name": "Example MQTT Broker",
+    "broker": "localhost",
     "port": "1883",
     "clientid": "Node-RED",
     "autoConnect": true,
@@ -188,9 +194,9 @@
     "sessionExpiry": ""
   },
   {
-    "id": "1b907f17b2870d5c",
+    "id": "e89feca50e782192",
     "type": "global-config",
     "env": [],
-    "modules": { "node-red-contrib-lsh-logic": "1.2.8" }
+    "modules": { "node-red-contrib-lsh-logic": "2.0.0" }
   }
 ]

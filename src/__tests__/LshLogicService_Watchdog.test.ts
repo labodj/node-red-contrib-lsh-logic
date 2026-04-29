@@ -1,7 +1,6 @@
 import { LshProtocol, Output } from "../types";
 import {
   createAjvError,
-  buildHomieV5Description,
   createLoadedServiceHarness,
   createSystemConfig,
   getAlertPayload,
@@ -524,7 +523,12 @@ describe("LshLogicService - Watchdog & Health", () => {
       ({ service }: ReturnType<typeof createLoadedServiceHarness>) => {
         service.processMessage(
           "homie/5/dev1/$description",
-          buildHomieV5Description({ relay: { settable: true } }),
+          JSON.stringify({
+            homie: "5.0",
+            version: 5,
+            name: "dev1",
+            nodes: {},
+          }),
           { retained: true },
         );
       },

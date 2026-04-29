@@ -12,12 +12,8 @@ and how startup, reload, watchdog, and live traffic interact.
 - Live controller-backed LSH traffic, live Homie lifecycle transitions, and live bridge service replies are the only runtime reachability proofs.
 - Live Homie `init` and `sleeping` are diagnostic-only runtime hints: they refresh diagnostics but never flip bridge/controller reachability.
 - Live Homie `disconnected` and `lost` are offline lifecycle states. `disconnected` is a clean broker disconnect, while `lost` is the LWT/bad-disconnect path.
-- An empty Homie `$state` payload is the v5 device-removal signal; the runtime removes local device state and emits retained Home Assistant discovery cleanup messages when discovery had been published.
+- An empty Homie `$state` payload is the v5 device-removal signal; the runtime removes local device state.
 - The lifecycle always prefers the lightest repair that can close the gap.
-- Home Assistant discovery classifies Homie nodes from retained metadata: writable boolean `state` nodes become toggle entities, settable enum/integer/float/string nodes become select/number/text entities, read-only booleans become binary sensors, and other nodes become sensors.
-- Discovery updates are briefly debounced during retained Homie metadata replay, so `$description`, `$mac`, `$fw/version` and `$implementation/config` normally produce one complete retained Home Assistant update instead of several incremental rewrites.
-- Fork reset and last-disconnect diagnostics (`$implementation/reset/reason`, `$implementation/wifi/last_disconnect_reason` and `$implementation/mqtt/last_disconnect_reason`) are exposed as Home Assistant diagnostic sensors without participating in runtime reachability decisions.
-- Fork MQTT drop counters (`$stats/mqttinbounddropped` and `$stats/mqttackdropped`) are since-boot counters exposed as total-increasing Home Assistant diagnostic sensors. A bridge reboot resets them to `0`, which Home Assistant treats as a new counter cycle.
 
 ## Recovery Paths
 
@@ -61,7 +57,6 @@ Instead:
 If a hot reload fails but a valid config was already active, the runtime keeps the last valid config and reports the reload failure as a degraded warning instead of a hard-stop fault.
 In that case it also keeps the previous MQTT subscription/export state intact instead of emitting a redundant unsubscribe/resubscribe churn.
 A successful reload reconfigures MQTT subscriptions only when the effective topic set actually changes.
-A successful reload regenerates Home Assistant discovery only when the effective discovery model changes.
 
 ## Watchdog
 

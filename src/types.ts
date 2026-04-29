@@ -64,10 +64,6 @@ export interface LshLogicNodeDef extends NodeDef {
   pingTimeout: number;
   /** Seconds to wait for the startup BOOT replay before running active verification. */
   initialStateTimeout: number;
-  /** Enable Home Assistant Auto-Discovery for Homie devices. */
-  haDiscovery: boolean;
-  /** Prefix for Home Assistant discovery topics (default: 'homeassistant'). */
-  haDiscoveryPrefix: string;
 }
 
 /**
@@ -124,12 +120,6 @@ export interface ServiceResult {
   registryChanged?: boolean;
   /** If true, indicates that an array of LSH messages should be sent with a delay between them. */
   staggerLshMessages?: boolean;
-  /**
-   * Optional debounce request for deferred Home Assistant discovery publication.
-   * The adapter uses the latest requested delay to schedule a follow-up flush
-   * without performing overlapping `send()` calls.
-   */
-  discoveryFlushDelayMs?: number;
 }
 
 /**
@@ -359,34 +349,11 @@ export interface ButtonAction {
   otherActors?: string[];
 }
 
-export type HomeAssistantActuatorPlatform = "light" | "switch" | "fan";
-
-export interface HomeAssistantNodeDiscoveryConfig {
-  /** Optional Home Assistant entity platform override for writable boolean Homie nodes. */
-  platform?: HomeAssistantActuatorPlatform;
-  /** Optional friendly entity name override shown in Home Assistant. */
-  name?: string;
-  /** Optional Home Assistant default entity ID override. */
-  defaultEntityId?: string;
-  /** Optional Home Assistant icon override. */
-  icon?: string;
-}
-
-export interface DeviceHomeAssistantDiscoveryConfig {
-  /** Optional Home Assistant device name override. */
-  deviceName?: string;
-  /** Optional default platform for all actuator nodes of the device. */
-  defaultPlatform?: HomeAssistantActuatorPlatform;
-  /** Optional per-node discovery overrides keyed by the Homie node ID. */
-  nodes?: Record<string, HomeAssistantNodeDiscoveryConfig>;
-}
-
 /** A single device's entry from the system configuration file. */
 export interface DeviceEntry {
   name: string;
   longClickButtons?: ButtonAction[];
   superLongClickButtons?: ButtonAction[];
-  haDiscovery?: DeviceHomeAssistantDiscoveryConfig;
 }
 
 /** The root structure of the `system-config.json` file. */
