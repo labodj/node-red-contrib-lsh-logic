@@ -29,7 +29,21 @@ export const defaultNodeConfig: LshLogicNodeDef = {
   serviceTopic: "LSH/Node-RED/SRV",
   otherDevicesPrefix: "other_devices",
   otherActorsContext: "global",
-  systemConfigPath: "configs/fake.json",
+  systemConfigJson: JSON.stringify({
+    devices: [
+      {
+        name: "source",
+        longClickButtons: [
+          {
+            id: 1,
+            actors: [{ name: "target", allActuators: true, actuators: [] }],
+            otherActors: ["zigbee_table_lamp"],
+          },
+        ],
+      },
+      { name: "target" },
+    ],
+  }),
   clickTimeout: 2,
   clickCleanupInterval: 30,
   watchdogInterval: 60,

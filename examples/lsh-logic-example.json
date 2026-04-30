@@ -29,12 +29,12 @@
     "type": "lsh-logic",
     "z": "1e10f095090cde75",
     "name": "",
-    "homieBasePath": "homie/",
+    "homieBasePath": "homie/5/",
     "lshBasePath": "LSH/",
     "serviceTopic": "LSH/Node-RED/SRV",
     "protocol": "json",
     "otherDevicesPrefix": "other_devices",
-    "systemConfigPath": "../configs/system-config.json",
+    "systemConfigJson": "{\n  \"devices\": [\n    {\n      \"name\": \"c1\",\n      \"longClickButtons\": [\n        {\n          \"id\": 1,\n          \"actors\": [\n            {\n              \"name\": \"j1\",\n              \"allActuators\": true,\n              \"actuators\": []\n            }\n          ],\n          \"otherActors\": [\"zigbee_table_lamp\"]\n        }\n      ]\n    },\n    {\n      \"name\": \"j1\"\n    }\n  ]\n}",
     "exposeStateContext": "global",
     "exposeStateKey": "lsh_state",
     "exportTopics": "flow",
@@ -197,6 +197,6 @@
     "id": "e89feca50e782192",
     "type": "global-config",
     "env": [],
-    "modules": { "node-red-contrib-lsh-logic": "2.0.0" }
+    "modules": { "node-red-contrib-lsh-logic": "3.0.0" }
   }
 ]

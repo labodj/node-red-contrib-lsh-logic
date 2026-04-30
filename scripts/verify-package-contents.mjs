@@ -37,8 +37,8 @@ const requiredFiles = [
   "dist/lsh-logic.d.ts",
   "dist/lsh-logic.html",
   "examples/lsh-logic-example.json",
-  "examples/system-config.minimal.json",
-  "examples/system-config.multi-device.json",
+  "examples/inline-config.minimal.json",
+  "examples/inline-config.multi-device.json",
 ];
 
 const unexpected = files.filter(

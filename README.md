@@ -7,261 +7,136 @@
 [![Latest Release](https://img.shields.io/github/release/labodj/node-red-contrib-lsh-logic.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/releases/latest)
 [![License](https://img.shields.io/github/license/labodj/node-red-contrib-lsh-logic.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LICENSE)
 
-A powerful, high-performance Node-RED node designed to manage advanced automation logic for smart home devices that speak the public LSH MQTT / protocol contract. Built with TypeScript for maximum reliability and type safety.
+`node-red-contrib-lsh-logic` is the Node-RED runtime brain for an LSH-compatible
+smart home.
 
-This node replaces complex Node-RED flows with a single, robust, and stateful component that manages device state, implements distributed click logic through a request/ACK/confirm handshake, and actively monitors device health.
+It listens to the public LSH MQTT/protocol contract, keeps an authoritative live
+device registry, coordinates distributed long-click actions, emits commands,
+tracks bridge/controller health and raises useful alerts when something goes
+stale or comes back.
 
-The original installation behind it uses Controllino controllers plus ESP32 bridges, but the Node-RED boundary is the **LSH protocol contract**, not the exact hardware. If another controller / bridge stack implements the same public MQTT topics and payload contract, this node is designed to work there too.
-
-If you are new to the public LSH stack, read the landing reference page first:
-
-- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
-- [LSH glossary](https://github.com/labodj/labo-smart-home/blob/main/GLOSSARY.md)
+The original installation uses Controllino controllers and ESP32 bridges, but
+the important boundary is the **LSH protocol contract**, not the exact hardware.
+If another controller/bridge stack speaks the same MQTT topics and payloads,
+this node is designed to run the same orchestration layer.
 
 ![Node Appearance](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/node-appearance.png)
 
----
+## When This Node Is the Right Tool
 
-## Start Here
+Use this node when you have devices that speak the LSH protocol and you want
+Node-RED to own the orchestration layer:
 
-Use this README according to what you need:
+- keep track of configured devices and actuator state;
+- react to button events and long-click actions;
+- send commands to one or more LSH devices;
+- coordinate external actors such as Zigbee, Tasmota or custom flows;
+- monitor device health and emit alert messages;
+- recover cleanly after Node-RED, bridge or controller restarts.
 
-- If you are new to the stack, read the landing reference page and glossary first.
-- If you want the shortest answers to adoption questions, skim the landing [`FAQ.md`](https://github.com/labodj/labo-smart-home/blob/main/FAQ.md).
-- If you want the shortest end-to-end bring-up path, read the landing [`GETTING_STARTED.md`](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md).
-- If startup or click behavior looks inconsistent, use the landing [`TROUBLESHOOTING.md`](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md).
-- If you want the shortest path to a working setup, read [Installation](#installation), then [Configuration](#configuration), then the example configs under [`examples/`](https://github.com/labodj/node-red-contrib-lsh-logic/tree/main/examples).
-- If you want Home Assistant MQTT discovery for your Homie devices, use the companion [`node-red-contrib-homie-home-assistant-discovery`](https://flows.nodered.org/node/node-red-contrib-homie-home-assistant-discovery) node; see [Home Assistant Discovery](#home-assistant-discovery).
-- If you want the runtime model, startup behavior and watchdog semantics, read [How It Works](#how-it-works).
-- If you want the precise lifecycle invariants and recovery policy, read [LIFECYCLE.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LIFECYCLE.md).
-- If you want to integrate MsgPack, jump to [Advanced: MsgPack Support](#advanced-msgpack-support).
+Do not use it as a generic MQTT automation node for unrelated devices. If a
+device does not speak the LSH contract, control it from the **Other Actor
+Commands** output or from a separate Node-RED flow.
 
-## Bundled Examples
+If you are new to the public LSH stack, these landing docs are the best first
+read:
 
-The fastest assets to open in this repository are:
+- [LSH reference stack](https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md)
+- [LSH glossary](https://github.com/labodj/labo-smart-home/blob/main/GLOSSARY.md)
+- [Getting started](https://github.com/labodj/labo-smart-home/blob/main/GETTING_STARTED.md)
+- [Troubleshooting](https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md)
 
-- [examples/lsh-logic-example.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/lsh-logic-example.json): example flow with dynamic MQTT subscription management
-- [examples/system-config.minimal.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/system-config.minimal.json): smallest useful `system-config.json`
-- [examples/system-config.multi-device.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/system-config.multi-device.json): richer multi-device topology example
+## The Flow in One Picture
 
-## Documentation
+The normal flow is intentionally small:
 
-- [Configuration](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/docs/CONFIGURATION.md): Node-RED settings and `system-config.json`
-- [Dynamic subscriptions](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/docs/DYNAMIC_SUBSCRIPTIONS.md): wiring the fourth output back to MQTT input
-- [Companion Home Assistant discovery](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/docs/COMPANION_DISCOVERY.md): using the Homie discovery node beside this runtime node
-- [Lifecycle contract](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LIFECYCLE.md): startup, recovery, watchdog and reload semantics
+1. `mqtt in` feeds LSH and Homie lifecycle messages into `lsh-logic`.
+2. Output 1 goes to `mqtt out` for LSH commands.
+3. Output 2 goes to your external actor flow.
+4. Output 3 goes to notifications or a debug node.
+5. Output 4 loops back to the same `mqtt in` node for dynamic subscriptions.
+6. Output 5 goes to debug while developing.
 
-## Key Features
+![Dynamic MQTT Flow](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/dynamic_mqtt_listener.png)
 
-- **Shared LSH Protocol Support**: Uses the generated contract vendored from `lsh-protocol`, keeping command IDs, compact keys and examples aligned with the firmware repositories.
-- **Robust Health Monitoring**: Features a multi-stage intelligent Watchdog that detects stale or offline devices without generating false positives during startup or temporary network glitches.
-- **Robust Cold Recovery**: If Node-RED restarts, the node first reuses retained `conf`/`state` snapshots when they are already complete. Only when at least one configured device is missing an authoritative snapshot does it request a single bridge-local `BOOT` replay, then repairs missing snapshots and pings any device that is still unreachable.
-- **Distributed Click Logic**: Implements a Two-Phase Commit protocol for critical actions (like "Long Clicks"), ensuring commands are executed only when target devices are reachable and currently healthy. Pending clicks expire on a hard timeout; a late confirmation is rejected even if a later cleanup sweep has not run yet.
-- **Homie v5 Lifecycle Tracking**: Tracks Homie `$state` under the configured base path for bridge lifecycle and recovery decisions, while keeping Home Assistant discovery in a dedicated Homie-to-Home-Assistant package.
-- **High Performance**: Optimized message routing using direct string parsing and efficient internal state management.
-- **Declarative Configuration**: Define your entire system in a single `system-config.json` file. The node automatically hot-reloads configuration changes.
+The fourth output is the trick that keeps the MQTT input maintainable: when you
+deploy an inline config with a different device list, the node recalculates the
+exact topic set and updates the `mqtt in` node automatically.
 
 ## Installation
 
-Install directly from the Node-RED **Palette Manager** or via npm in your user directory (e.g., `~/.node-red`):
+Install from the Node-RED **Palette Manager**, or from your Node-RED user
+directory:
 
 ```bash
 npm install node-red-contrib-lsh-logic
 ```
 
-## Scope And Portability
+Then import the example flow if you want a quick starting point:
 
-This package is intentionally **LSH-oriented**. It is not meant as a completely generic drop-in automation node for arbitrary MQTT devices.
+- [examples/lsh-logic-example.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/lsh-logic-example.json)
 
-The important dependency is the public **LSH protocol + MQTT contract**, not the exact hardware used in the original installation.
+## The Two Things You Usually Touch
 
-In practice that means:
+Most users only edit two things:
 
-- if your devices speak the same LSH topics and payload contract, this node is intended to work with them
-- if your devices use a different protocol model entirely, this package is the wrong abstraction layer
-- the original Controllino + ESP32 combination is the reference implementation, not a hard runtime requirement
+1. the Node-RED node settings;
+2. the inline **System Config** JSON inside the node editor.
 
-## How It Works
+The node settings tell the runtime where MQTT topics live and how aggressive
+timing should be. The inline JSON tells the runtime which devices exist and what
+long-click actions should do. Keeping the config in the node makes exported
+flows self-contained and removes the file-watcher/hot-reload surface that older
+versions had.
 
-This node acts as the central orchestrator for your protocol-compatible smart home devices. It subscribes to MQTT topics, processes incoming telemetry and events, updates its internal state registry, and dispatches commands.
+### Minimal System Config
 
-The canonical command IDs, compact wire keys and golden JSON examples are generated from the shared spec in [vendor/lsh-protocol/shared/lsh_protocol.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/vendor/lsh-protocol/shared/lsh_protocol.md). The LSH payload layer assumes a trusted environment and a cooperative broker.
+This is a small but complete example. The commented version uses `jsonc` only to
+explain the shape; the Node-RED field must contain strict JSON.
 
-At startup the node uses retained LSH snapshots when available, but it does not trust retained Homie `$state` alone as proof of current reachability: that must come from a live Homie transition or live controller-backed LSH traffic. After a short subscription-settle window, the node checks whether every configured device already has an authoritative `conf + state` snapshot. If yes, it skips the startup `BOOT` entirely. If not, it requests a single bridge-local `BOOT` replay, waits for the replay window, and then runs an active verification pass. During that verification, reachable devices receive only the missing snapshot requests, while still-unreachable devices are pinged directly. A later live `ready`, `conf`, `state`, `events`, or device-level `PING` response automatically recovers devices that were offline during startup. During this warm-up window the periodic watchdog is intentionally paused; startup reachability is decided by the dedicated verification cycle, not by watchdog alerts racing the initial sync.
-
-The detailed lifecycle contract now lives in [LIFECYCLE.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LIFECYCLE.md). Read that file if you need the exact semantics of:
-
-- bridge-up / controller-down handling
-- retained vs live reachability proofs
-- startup vs runtime reload recovery
-- watchdog bridge probes vs controller pings
-- snapshot repair cooldowns and output ordering guarantees
-
-The shared maintenance workflow lives in [vendor/lsh-protocol/README.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/vendor/lsh-protocol/README.md). This README intentionally focuses on Node-RED behavior instead of restating protocol ownership rules.
-
-Operational simplifications:
-
-- If a runtime config reload becomes unreadable or invalid while a valid config is already active, the node keeps the last valid runtime configuration and reports the reload failure as a degraded-warning condition instead of tearing the runtime down.
-- Startup config failures do not require a Node-RED restart: the file watcher stays active, and a later valid save re-enters the normal startup bootstrap flow with warm-up and alert suppression.
-- Reloading `system-config.json` always clears pending network click transactions. In-flight distributed clicks are intentionally failed rather than preserved across a config change.
-- Runtime config reloads do not restart warm-up, but a successful reload schedules a strong post-reload recovery pass. If startup recovery is still pending, that post-reload recovery is deferred until startup verification completes.
-- Watchdog controller `PING` timeouts start when the ping is actually emitted by the adapter, not when the watchdog only queued it behind low-priority staggered traffic.
-- Distributed long-click logic requires an authoritative actuator snapshot for every targeted LSH device. If a target is reachable but still missing fresh state, the click fails fast and is retried naturally on the next user action.
-- Retained `conf` and `state` snapshots are treated as the last known authoritative topology/state, not as proof that the device is currently alive. Device health and reachability come only from live Homie transitions, live LSH traffic and watchdog ping responses.
-- Retained `events` and `bridge` payloads are ignored. They are runtime-only signals and never count as current activity, click traffic or bridge health.
-- Bridge-local diagnostics published by `lsh-bridge` on `bridge` are accepted as informational runtime events, but they do not count as controller traffic or proof of current controller reachability.
-- Extremely narrow timing races during startup or config reload are intentionally handled with idempotent recovery rather than with complex cross-restart transaction repair logic.
-
-To verify that the Node-RED generated protocol files match the vendored source of truth:
-
-```bash
-python3 tools/update_lsh_protocol.py --check
-```
-
-### Inputs
-
-The node accepts messages from an `mqtt-in` node. It processes:
-
-1.  **LSH Protocol Topics**:
-    - `<lshBase>/<device>/conf`: Static configuration (actuators `a`, buttons `b`).
-    - `<lshBase>/<device>/state`: Live actuator states (`s`).
-    - `<lshBase>/<device>/events`: Controller-backed runtime events like Clicks and device-level `PING` replies.
-    - `<lshBase>/<device>/bridge`: Bridge-local runtime events like service-level `PING` replies and diagnostics.
-2.  **Homie Topics**:
-    - `<homieBase>/<device>/$state`: Homie v5 lifecycle (`init`, `ready`, `disconnected`, `lost`, `sleeping`); an empty payload removes runtime state for the device.
-
-Home Assistant MQTT discovery is intentionally handled by
-[`node-red-contrib-homie-home-assistant-discovery`](https://flows.nodered.org/node/node-red-contrib-homie-home-assistant-discovery),
-which is generic Homie tooling rather than LSH orchestration logic.
-
-### Outputs
-
-The node has five distinct outputs for clear and organized flows:
-
-1.  **LSH Commands**: Commands targeting your LSH protocol devices (e.g., `SET_STATE`, `PING`, `NETWORK_CLICK_ACK`).
-2.  **Other Actor Commands**: Abstracted commands for controlling 3rd party devices (Tasmota, Zigbee) via other Node-RED flows. The payload contains the listing of target actors and the state to set.
-3.  **Alerts**: Human-readable health alerts (Markdown formatted) suitable for notifications (Telegram/Slack). The payload also includes machine-readable `event_type` and `event_source` fields so flows can distinguish lifecycle/reboot alerts from true watchdog outages without parsing the formatted text.
-4.  **Configuration**: Dynamic control messages for the `mqtt-in` node.
-5.  **Debug**: Passthrough of original messages for debugging.
-
-## Configuration
-
-### Node Settings
-
-- **`name`**: Optional label shown in the Node-RED editor.
-- **`homieBasePath`**: Base topic for Homie lifecycle traffic, for example `homie/` or `homie/5/` depending on your firmware/broker layout. Must end with `/`, contain no MQTT wildcards, and contain only non-empty path segments.
-- **`lshBasePath`**: Base topic for LSH traffic, for example `LSH/`. Must end with `/`, contain no MQTT wildcards, and contain only non-empty path segments.
-- **`serviceTopic`**: Bridge-scoped service topic used for hop-local `PING` and startup `BOOT` replay requests. The default public profile uses `LSH/Node-RED/SRV`. It must be a concrete publish topic, so wildcards are rejected.
-- **`protocol`**: Payload format for LSH commands and LSH runtime topics. Supported values are `JSON` and `MsgPack`.
-- **`systemConfigPath`**: Path to `system-config.json`, absolute or relative to the Node-RED user directory.
-- **`clickTimeout`**: Hard timeout for the request → ACK → confirm click lifecycle.
-- **`clickCleanupInterval`**: Periodic cleanup sweep for stale click transactions.
-- **`initialStateTimeout`**: Startup replay window used only when a bridge-local `BOOT` replay is actually needed.
-- **`watchdogInterval`**: Frequency of periodic device health checks.
-- **`interrogateThreshold`**: Silence threshold before the watchdog sends a ping.
-- **`pingTimeout`**: How long the watchdog waits for a ping response before treating a device as stale.
-- **`exposeStateContext` / `exposeStateKey`**: Optional export of the live internal device registry to flow/global context.
-- **`exportTopics` / `exportTopicsKey`**: Optional export of the generated MQTT topic set to flow/global context.
-- **`exposeConfigContext` / `exposeConfigKey`**: Optional export of the effective loaded runtime config to flow/global context.
-- **`otherActorsContext`**: Which context store (`flow` or `global`) is used to read non-LSH actor state.
-- **`otherDevicesPrefix`**: Prefix used when looking up external actor state in the selected context store.
-
-The editor help in [`src/lsh-logic.html`](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/src/lsh-logic.html) documents the same
-fields from the Node-RED UI perspective.
-
-## Home Assistant Discovery
-
-`node-red-contrib-lsh-logic` intentionally does not generate Home Assistant
-discovery payloads. Keep LSH orchestration and Homie-to-Home-Assistant mapping
-as two separate flows:
-
-- this node owns LSH runtime logic, click orchestration, watchdog and recovery
-- [`node-red-contrib-homie-home-assistant-discovery`](https://flows.nodered.org/node/node-red-contrib-homie-home-assistant-discovery)
-  owns Homie v3/v4/v5 metadata parsing and retained Home Assistant MQTT
-  discovery
-
-This split is cleaner operationally and lets the discovery bridge work for any
-Homie device, not only LSH devices.
-
-Recommended Node-RED wiring:
-
-1. Use the normal `lsh-logic` flow for LSH runtime traffic.
-2. Add a **separate** `mqtt-in` node for Homie discovery metadata.
-3. Wire that `mqtt-in` node to `homie-ha-discovery`.
-4. Wire `homie-ha-discovery` output 1, **Discovery**, to an `mqtt-out` node on
-   the same broker.
-5. Wire `homie-ha-discovery` output 4, **Subscriptions**, back to that same
-   dedicated discovery `mqtt-in` node if you want dynamic subscriptions.
-
-Do not feed both `lsh-logic` and `homie-ha-discovery` subscription outputs into
-the same `mqtt-in` node. Both nodes can legitimately emit an
-`unsubscribe from all topics` control message before subscribing to their own
-topic set, so sharing one dynamically-managed input would make them fight over
-subscriptions.
-
-For a typical LSH Homie v5 deployment:
-
-- `HA prefix`: `homeassistant`
-- `ID prefix`: `lsh` when you want LSH-style Home Assistant IDs
-- `Homie v5`: `homie` for topics shaped like `homie/5/<device>/...`
-- `Homie v3/v4`: `homie`
-- `Versions`: enable only v5 for pure LSH v5 devices; enable v3/v4 only if you
-  also run legacy Homie devices
-- `emit subscriptions`: enabled
-- `state sensor`: enabled
-- `attribute diagnostics`: enabled when you want Homie v5 `$...` attributes
-  exposed as diagnostic entities
-- `Boolean mapping`: `auto` for mixed Homie fleets, or `light` when every
-  configured named node state is a light unless overridden
-
-For LSH-style devices whose Homie nodes are numeric actuator IDs, the companion
-node supports compact overrides. A good starting point is:
-
-```json
+```jsonc
 {
-  "deviceDefaults": {
-    "objectId": "lsh_{deviceId}",
-    "identifiers": ["LSH_{deviceId}"],
-    "manufacturer": "Jacopo Labardi",
-    "model": "Labo Smart Home"
-  },
-  "namedNodeState": {
-    "exclusive": true,
-    "platform": "light",
-    "objectId": "lsh_{deviceId}_{nodeId}",
-    "defaultEntityId": "{platform}.{objectId}"
-  },
-  "devices": {
-    "c1": {
-      "nodeNames": {
-        "1": "Kitchen Ceiling",
-        "2": "Hallway",
-        "3": {
-          "name": "Extractor Fan",
-          "platform": "fan",
-          "icon": "mdi:fan"
-        }
-      }
-    }
-  }
+  // Every LSH device known by the orchestration layer.
+  "devices": [
+    {
+      // Must match the device id used in MQTT topics.
+      "name": "c1",
+
+      // Optional: actions triggered by long-click events from this device.
+      "longClickButtons": [
+        {
+          // Button id reported by the controller.
+          "id": 1,
+
+          // LSH devices affected by this action.
+          "actors": [
+            {
+              // Target another configured LSH device.
+              "name": "j1",
+
+              // true means every actuator on j1 is part of the action.
+              "allActuators": true,
+
+              // Must be empty when allActuators is true.
+              "actuators": [],
+            },
+          ],
+
+          // Non-LSH targets emitted on output 2 for your own flows.
+          "otherActors": ["zigbee_table_lamp"],
+        },
+      ],
+    },
+
+    // Devices can be listed without button actions.
+    {
+      "name": "j1",
+    },
+  ],
 }
 ```
 
-`namedNodeState` keeps the common case short: every listed node's settable
-boolean `state` property becomes a Home Assistant entity. Object entries inside
-`nodeNames` are the escape hatch for per-node exceptions such as fans or
-switches. Exact property overrides and ordered rules remain available for full
-control; the complete schema is documented in
-[`homie-home-assistant-discovery` overrides](https://github.com/labodj/homie-home-assistant-discovery/blob/main/docs/OVERRIDES.md).
-
-### `system-config.json`
-
-This file defines the topology of your smart home. It should be placed in your Node-RED user directory.
-
-Ready-to-copy examples are available in:
-
-- [examples/system-config.minimal.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/system-config.minimal.json)
-- [examples/system-config.multi-device.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/system-config.multi-device.json)
+Copyable strict JSON:
 
 ```json
 {
@@ -271,93 +146,143 @@ Ready-to-copy examples are available in:
       "longClickButtons": [
         {
           "id": 1,
-          "actors": [{ "name": "j1", "allActuators": true }],
-          "otherActors": ["tasmota_shelf_lamp"]
+          "actors": [
+            {
+              "name": "j1",
+              "allActuators": true,
+              "actuators": []
+            }
+          ],
+          "otherActors": ["zigbee_table_lamp"]
         }
       ]
     },
-    { "name": "j1" },
-    { "name": "k1" }
+    {
+      "name": "j1"
+    }
   ]
 }
 ```
 
-- **`name`**: Must match the exact device ID used in MQTT topics. It is validated as a single MQTT topic segment, so use only letters, digits, `_` or `-`. Device names must also be unique case-insensitively to avoid ambiguous runtime lookups. With the current reference bridge defaults this is typically a short ID such as `c1`, `j1`, `k1`; the default bridge build allocates 4 characters unless `CONFIG_MAX_NAME_LENGTH` is raised.
-- **`longClickButtons`**: Optional list of long-click actions handled by the orchestration layer for this device.
-- **`superLongClickButtons`**: Optional list of super-long-click actions handled by the orchestration layer for this device.
-- **`longClickButtons[].id` / `superLongClickButtons[].id`**: Numeric button ID that triggers the distributed action.
-- **`longClickButtons[].actors` / `superLongClickButtons[].actors`**: Target LSH devices affected by the action.
-- **`actors[].name`**: Target LSH device name. It must match one of the configured `devices[].name` entries exactly, including case.
-- **`actors[].allActuators`**: `true` to target all actuators on the device, `false` to target only a specific subset.
-- **`actors[].actuators`**: Required when `allActuators` is `false`; lists the exact actuator IDs to target.
-- **`longClickButtons[].otherActors` / `superLongClickButtons[].otherActors`**: Optional non-LSH actors, identified by name, to be emitted on the "Other Actor Commands" output.
+More examples:
 
-## Best Practices
+- [examples/inline-config.minimal.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/inline-config.minimal.json)
+- [examples/inline-config.multi-device.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/inline-config.multi-device.json)
 
-### Dynamic MQTT Subscriptions
+## What Each Output Means
 
-The most powerful way to use this node is to let it manage your MQTT subscriptions automatically. This creates a "zero-maintenance" flow that adapts to your configuration.
+| Output | Name                 | Use it for                                                   |
+| ------ | -------------------- | ------------------------------------------------------------ |
+| 1      | LSH Commands         | MQTT commands to LSH devices, usually wired to `mqtt out`.   |
+| 2      | Other Actor Commands | Commands for non-LSH actors handled by your own flows.       |
+| 3      | Alerts               | Human-readable health/recovery alerts and structured fields. |
+| 4      | Configuration        | Dynamic subscription-control messages for `mqtt in`.         |
+| 5      | Debug                | Original input passthrough while developing or diagnosing.   |
 
-**Connect the 4th output ("Configuration") directly to an `mqtt-in` node.**
+The **Other Actor Commands** output is deliberately protocol-neutral. If a
+long-click should also switch a Zigbee light, a Tasmota plug or another custom
+device, this node emits the intent and your surrounding Node-RED flow translates
+it to the right protocol.
 
-![Dynamic MQTT Flow](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/dynamic_mqtt_listener.png)
+## Home Assistant Discovery
 
-When you deploy or when the effective MQTT topic set changes, the `lsh-logic` node will:
+This node no longer generates Home Assistant discovery payloads. That job belongs
+to the companion generic Homie bridge:
 
-1. Send a message to the `mqtt-in` node to **unsubscribe from all topics**.
-2. Send a second message to **subscribe to the new, correct list of topics**.
+[`node-red-contrib-homie-home-assistant-discovery`](https://flows.nodered.org/node/node-red-contrib-homie-home-assistant-discovery)
 
-This ensures your `mqtt-in` node is always listening to exactly the right topics without any manual changes. Reloads that only affect internal logic and leave the effective topic set unchanged do not churn MQTT subscriptions.
+Keep the two flows separate:
 
-## Advanced: MsgPack Support
+1. `lsh-logic` owns runtime orchestration, watchdog, click handling and recovery.
+2. `homie-ha-discovery` owns Homie v3/v4/v5 metadata parsing and Home Assistant
+   MQTT discovery.
+
+Do not feed both nodes' dynamic subscription outputs into the same `mqtt in`
+node. They each own a different topic set, so they need separate MQTT inputs
+when both manage subscriptions dynamically.
+
+Read the companion guide:
+[Companion Home Assistant discovery](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/docs/COMPANION_DISCOVERY.md).
+
+## How Startup and Recovery Feel in Practice
+
+On startup the node tries hard to be fast without lying about device health:
+
+- retained `conf` and `state` snapshots are reused as the last known topology and
+  actuator state;
+- retained Homie `$state=ready` is not treated as proof that the device is alive
+  right now;
+- if all snapshots are complete, the startup `BOOT` replay is skipped;
+- if something is missing, the node asks the bridge for a single replay and then
+  repairs only the missing pieces;
+- watchdog alerts stay quiet during warm-up so startup does not spam you;
+- later live traffic automatically recovers devices that were offline during
+  startup.
+
+The full contract is documented in
+[LIFECYCLE.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LIFECYCLE.md).
+
+## Dynamic Subscriptions
+
+Dynamic subscriptions are the recommended setup.
+
+Leave the `mqtt in` topic empty, wire output 4 back into that same `mqtt in`
+node, and let `lsh-logic` publish subscription-control messages. For each
+configured device it subscribes to:
+
+- `<lshBasePath><device>/conf`
+- `<lshBasePath><device>/state`
+- `<lshBasePath><device>/events`
+- `<lshBasePath><device>/bridge`
+- `<homieBasePath><device>/$state`
+
+Read the focused guide:
+[Dynamic subscriptions](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/docs/DYNAMIC_SUBSCRIPTIONS.md).
+
+## MsgPack Support
+
+JSON is the default and easiest payload format. MsgPack is available when your
+firmware supports it and you want smaller wire payloads.
 
 To use MsgPack:
 
-1.  Set **LSH Protocol** to `MsgPack` in the node settings.
-2.  Configure your **Input MQTT Node** to return **"a Buffer"** instead of a parsed string.
-3.  Ensure your ESP firmware supports decoding MsgPack payloads.
+1. Set **LSH Protocol** to `MsgPack` in the node settings.
+2. Configure the upstream `mqtt in` node to output **a Buffer**.
+3. Make sure your LSH firmware decodes MsgPack on its command topic.
 
-The node handles decoding (Input) and encoding (Output) transparently. In MsgPack mode,
-non-Buffer inbound LSH payloads are rejected instead of being silently reinterpreted as
-text or JSON.
+In MsgPack mode, non-Buffer inbound LSH payloads are rejected instead of being
+silently interpreted as text.
+
+## Documentation
+
+- [Configuration](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/docs/CONFIGURATION.md)
+- [Dynamic subscriptions](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/docs/DYNAMIC_SUBSCRIPTIONS.md)
+- [Companion Home Assistant discovery](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/docs/COMPANION_DISCOVERY.md)
+- [Lifecycle contract](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LIFECYCLE.md)
+
+Protocol source of truth:
+
+- [vendored LSH protocol](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/vendor/lsh-protocol/shared/lsh_protocol.md)
+- [vendored protocol maintenance notes](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/vendor/lsh-protocol/README.md)
 
 ## Maintainer Notes
 
-Toolchain:
+Runtime compatibility for the published package is `Node.js >= 18`. Maintainer
+tooling is validated on current Node.js releases and the CI quality gate runs
+formatting, linting, package validation, tests and production dependency audit.
 
-- Runtime compatibility for the published package remains `Node.js >= 18`.
-- Maintainer tooling is validated on modern Node.js and currently expected to run on `Node.js 24` for linting, formatting, testing and packaging.
-- `python3` is only needed for maintainer tasks that run `tools/update_lsh_protocol.py`.
+Local quality gate:
 
-Runtime path rules:
+```bash
+npm ci
+npm run check
+```
 
-- `systemConfigPath` is resolved relative to the Node-RED user directory unless you provide an absolute path.
-- The example flow uses `configs/system-config.json` on purpose; it is a user/runtime path, not a repository-relative maintainer path.
-
-Protocol maintenance rules:
-
-- `tools/update_lsh_protocol.py` uses the vendored subtree in `vendor/lsh-protocol` by default.
-- You can override that source explicitly with `--protocol-root` or `LSH_PROTOCOL_ROOT` when doing manual maintenance work.
-
-Cross-repo contract tests:
-
-- The Jest contract test can validate this package against sibling `lsh-core` and `lsh-bridge` repositories when they are available in the same workspace.
-- If your workspace uses different locations, set `LSH_CORE_ROOT` and `LSH_BRIDGE_ROOT` before running `npm test`.
-- These paths are maintainer-only test inputs; they are not required for normal package runtime.
-
-## Contributing
-
-Contributions are welcome!
-
-### Development Setup
-
-1.  Clone the repo: `git clone https://github.com/labodj/node-red-contrib-lsh-logic.git`
-2.  Install a supported Node.js version (`>= 18`)
-3.  Install dependencies: `npm install`
-4.  Build: `npm run build`
-5.  Test: `npm test`
-6.  Optional maintainer tooling: ensure `python3` is available if you need to run `tools/update_lsh_protocol.py`
+Version 2 stores the LSH system config inline in the Node-RED node. There is no
+`systemConfigPath` and no runtime file watcher anymore; deploy the flow to apply
+config changes.
 
 ## License
 
-Apache 2.0 - See [LICENSE](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LICENSE) for details.
+Apache 2.0. See
+[LICENSE](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LICENSE).

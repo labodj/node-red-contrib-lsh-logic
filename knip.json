@@ -1,7 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["src/lsh-logic.ts", "src/LshCodec.ts", "src/schemas.ts"],
+  "entry": ["src/lsh-logic.ts"],
   "project": ["src/**/*.ts"],
-  "ignoreDependencies": ["@msgpack/msgpack", "ajv"],
-  "ignore": ["dist/**", "src/generated/**"]
+  "ignore": ["dist/**"]
 }

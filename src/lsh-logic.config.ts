@@ -1,98 +1,85 @@
+/**
+ * @file Node-RED editor configuration normalization.
+ *
+ * Static coordinator options are delegated to `labo-smart-home-coordinator` so
+ * the wrapper cannot drift from the standalone CLI/library validation rules.
+ * Node-RED-only fields stay here because they describe context exports and
+ * editor storage rather than LSH runtime behavior.
+ */
+
+import { normalizeCoordinatorOptions } from "labo-smart-home-coordinator";
+import type { SystemConfig } from "labo-smart-home-coordinator";
+
 import type { LshLogicNodeDef } from "./types";
 
-type NumericConfigKey =
-  | "clickTimeout"
-  | "clickCleanupInterval"
-  | "watchdogInterval"
-  | "interrogateThreshold"
-  | "pingTimeout"
-  | "initialStateTimeout";
-
-const MQTT_WILDCARD_PATTERN = /[+#]/;
-
 const normalizeRequiredString = (value: string, fieldName: string): string => {
-  const normalized = value.trim();
+  const normalized = String(value ?? "").trim();
   if (normalized.length === 0) {
     throw new Error(`${fieldName} cannot be empty.`);
   }
   return normalized;
 };
 
-const validateConcreteTopic = (
+const normalizeContextKey = (
   value: string,
   fieldName: string,
-  { requireTrailingSlash }: { requireTrailingSlash: boolean },
+  contextName: "none" | "flow" | "global",
 ): string => {
-  const normalized = normalizeRequiredString(value, fieldName);
-
-  if (MQTT_WILDCARD_PATTERN.test(normalized)) {
-    throw new Error(`${fieldName} must not contain MQTT wildcards ('+' or '#').`);
-  }
-
-  if (requireTrailingSlash && !normalized.endsWith("/")) {
-    throw new Error(`${fieldName} must end with '/'.`);
-  }
-
-  if (!requireTrailingSlash && normalized.endsWith("/")) {
-    throw new Error(`${fieldName} must not end with '/'.`);
-  }
-
-  const topicBody = requireTrailingSlash ? normalized.slice(0, -1) : normalized;
-  if (topicBody.length === 0) {
-    throw new Error(`${fieldName} must contain at least one non-empty topic segment.`);
-  }
-
-  const segments = topicBody.split("/");
-  if (segments.some((segment) => segment.length === 0)) {
-    throw new Error(`${fieldName} must not contain empty MQTT topic segments.`);
-  }
-
-  return normalized;
-};
-
-const validateTopicBase = (value: string, fieldName: string): string => {
-  return validateConcreteTopic(value, fieldName, { requireTrailingSlash: true });
-};
-
-const normalizePositiveNumber = (value: number, fieldName: string): number => {
-  const normalized = Number(value);
-  if (!Number.isFinite(normalized) || normalized <= 0) {
-    throw new Error(`${fieldName} must be a positive number.`);
+  const normalized = String(value ?? "").trim();
+  if (contextName !== "none" && normalized.length === 0) {
+    throw new Error(`${fieldName} cannot be empty when its context export is enabled.`);
   }
   return normalized;
 };
 
 /**
- * Normalizes and validates the static Node-RED editor config for the adapter.
- * This keeps all runtime-only logic out of the boundary validation concerns.
+ * Normalizes the Node-RED configuration object saved by the editor.
  */
 export const normalizeNodeConfig = (config: LshLogicNodeDef): LshLogicNodeDef => {
-  const normalizedConfig = {
+  const coordinatorOptions = normalizeCoordinatorOptions({
+    homieBasePath: config.homieBasePath,
+    lshBasePath: config.lshBasePath,
+    serviceTopic: config.serviceTopic,
+    protocol: config.protocol,
+    otherDevicesPrefix: config.otherDevicesPrefix,
+    clickTimeout: config.clickTimeout,
+    clickCleanupInterval: config.clickCleanupInterval,
+    watchdogInterval: config.watchdogInterval,
+    interrogateThreshold: config.interrogateThreshold,
+    pingTimeout: config.pingTimeout,
+    initialStateTimeout: config.initialStateTimeout,
+  });
+
+  return {
     ...config,
-    homieBasePath: validateTopicBase(config.homieBasePath, "Homie Base Path"),
-    lshBasePath: validateTopicBase(config.lshBasePath, "LSH Base Path"),
-    serviceTopic: validateConcreteTopic(config.serviceTopic, "Service Topic", {
-      requireTrailingSlash: false,
-    }),
-    otherDevicesPrefix: normalizeRequiredString(config.otherDevicesPrefix, "External State Prefix"),
-    systemConfigPath: normalizeRequiredString(config.systemConfigPath, "System Config"),
-    exposeStateKey: config.exposeStateKey.trim(),
-    exportTopicsKey: config.exportTopicsKey.trim(),
-    exposeConfigKey: config.exposeConfigKey.trim(),
+    ...coordinatorOptions,
+    systemConfigJson: normalizeRequiredString(config.systemConfigJson, "System Config JSON"),
+    exposeStateKey: normalizeContextKey(
+      config.exposeStateKey,
+      "State Context Key",
+      config.exposeStateContext,
+    ),
+    exportTopicsKey: normalizeContextKey(
+      config.exportTopicsKey,
+      "Topic Context Key",
+      config.exportTopics,
+    ),
+    exposeConfigKey: normalizeContextKey(
+      config.exposeConfigKey,
+      "Config Context Key",
+      config.exposeConfigContext,
+    ),
   };
+};
 
-  const numericFields: Record<NumericConfigKey, string> = {
-    clickTimeout: "Click Confirm Timeout",
-    clickCleanupInterval: "Click Cleanup",
-    watchdogInterval: "Watchdog Interval",
-    interrogateThreshold: "Ping Threshold",
-    pingTimeout: "Ping Timeout",
-    initialStateTimeout: "Initial Replay Window",
-  };
-
-  for (const [key, label] of Object.entries(numericFields) as Array<[NumericConfigKey, string]>) {
-    normalizedConfig[key] = normalizePositiveNumber(normalizedConfig[key], label);
+/**
+ * Parses the inline JSON edited in Node-RED.
+ */
+export const parseSystemConfigJson = (jsonText: string): SystemConfig => {
+  try {
+    return JSON.parse(jsonText) as SystemConfig;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`System Config JSON is not valid JSON: ${message}`, { cause: error });
   }
-
-  return normalizedConfig;
 };

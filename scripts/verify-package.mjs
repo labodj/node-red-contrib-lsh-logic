@@ -46,13 +46,18 @@ const main = async () => {
 
     const tarball = await pack(packagesDir);
     await writeFile(join(consumerDir, "package.json"), JSON.stringify({ private: true }, null, 2));
-    await run(npmBin, ["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], {
-      cwd: consumerDir,
-    });
+    await run(
+      npmBin,
+      ["install", "--package-lock=false", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
+      {
+        cwd: consumerDir,
+      },
+    );
 
     await access(
       join(consumerDir, "node_modules", "node-red-contrib-lsh-logic", "dist", "lsh-logic.html"),
     );
+    await access(join(consumerDir, "node_modules", "labo-smart-home-coordinator", "package.json"));
     await run(
       process.execPath,
       [

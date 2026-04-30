@@ -1,23 +1,27 @@
 # Dynamic Subscriptions
 
-`node-red-contrib-lsh-logic` can manage its own MQTT input subscriptions through
-the fourth output, `Configuration`.
+Dynamic subscriptions let `lsh-logic` keep the MQTT input node aligned with
+the inline System Config JSON.
 
-## Recommended Flow
+Instead of manually editing the `mqtt in` topic every time you add or remove a
+device, you leave the MQTT input topic empty and wire output 4, **Configuration**,
+back into that same `mqtt in` node. Node-RED's MQTT input node understands these
+control messages and updates its subscriptions at runtime.
 
-Wire the node like this:
+## Recommended Wiring
 
-1. `mqtt-in` -> `lsh-logic`
-2. `lsh-logic` output 1 -> `mqtt-out`
-3. `lsh-logic` output 4 -> the same `mqtt-in`
+Use one MQTT input dedicated to `lsh-logic`:
 
-The `mqtt-in` node should have an empty topic. After the runtime config is
-loaded, `lsh-logic` emits subscription-control messages that tell it exactly
-which topics to listen to.
+1. `mqtt in` -> `lsh-logic`
+2. `lsh-logic` output 1 -> `mqtt out`
+3. `lsh-logic` output 4 -> the same `mqtt in`
 
-## Generated Topics
+The `mqtt in` node should have an empty topic. The discovery node, if you use it,
+should have its own separate MQTT input.
 
-For every configured device, the node subscribes to:
+## What the Node Subscribes To
+
+For every configured device, `lsh-logic` subscribes to:
 
 - `<lshBasePath><device>/conf`
 - `<lshBasePath><device>/state`
@@ -25,28 +29,74 @@ For every configured device, the node subscribes to:
 - `<lshBasePath><device>/bridge`
 - `<homieBasePath><device>/$state`
 
+Example with:
+
+- `lshBasePath`: `LSH/`
+- `homieBasePath`: `homie/5/`
+- devices: `c1`, `j1`
+
+the generated topic set is:
+
+```text
+LSH/c1/conf
+LSH/c1/state
+LSH/c1/events
+LSH/c1/bridge
+homie/5/c1/$state
+LSH/j1/conf
+LSH/j1/state
+LSH/j1/events
+LSH/j1/bridge
+homie/5/j1/$state
+```
+
 LSH runtime topics are subscribed with QoS 2. Homie lifecycle topics are
 subscribed with QoS 1.
 
-## Reconfiguration
+## What Output 4 Emits
 
-Every effective topic-set change emits:
+When the effective topic set changes, the node sends one subscribe control
+message per QoS level:
 
 ```json
-{ "action": "unsubscribe", "topic": true }
+{
+  "action": "subscribe",
+  "qos": 2,
+  "topic": ["LSH/c1/conf", "LSH/c1/state", "LSH/c1/events", "LSH/c1/bridge"]
+}
 ```
 
-followed by one or more `subscribe` messages. Node-RED's built-in MQTT input
-node understands this control format.
+Homie lifecycle topics are sent in a separate QoS 1 message. The example shows
+the shape only; a real message contains every generated topic for every
+configured device.
 
-Reloads that keep the same effective topic set do not churn MQTT
-subscriptions. This keeps config-only changes cheap and avoids unnecessary
-broker traffic.
+Deploys that keep the same effective topic set do not emit new subscribe
+messages. Changing only click rules or actor lists is therefore cheap and does
+not churn broker subscriptions.
 
-## Companion Discovery Node
+## Why Not Use One MQTT Input for Everything?
 
-Use a separate `mqtt-in` node for
-`node-red-contrib-homie-home-assistant-discovery` when it also manages dynamic
-subscriptions. Do not feed both subscription outputs into the same `mqtt-in`
-node: both nodes can intentionally unsubscribe from all current topics before
-subscribing to their own topic set.
+Dynamic subscription outputs are intentionally owned by one upstream MQTT input.
+Because of that, do not feed both `lsh-logic` and
+`node-red-contrib-homie-home-assistant-discovery` subscription outputs into the
+same `mqtt in` node. They would compete over what that input should listen to.
+
+Use two MQTT inputs:
+
+- one for `lsh-logic` runtime traffic;
+- one for `homie-ha-discovery` metadata discovery traffic.
+
+## Manual Alternative
+
+Manual subscriptions are still valid. Disable topic export/subscription feedback
+and configure the MQTT input yourself.
+
+For small systems, broad filters are easy:
+
+```text
+LSH/#
+homie/5/+/$state
+```
+
+Dynamic subscriptions are safer for long-running installations because the topic
+set follows the inline device list exactly and avoids forgotten stale topics.

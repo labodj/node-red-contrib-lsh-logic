@@ -50,6 +50,15 @@
     return validateContextBackedKey.call(this, value, "exposeConfigContext");
   }
 
+  const validateSystemConfigJson = (value) => {
+    try {
+      const parsed = JSON.parse(String(value || ""));
+      return parsed && typeof parsed === "object" && Array.isArray(parsed.devices);
+    } catch (_error) {
+      return false;
+    }
+  };
+
   RED.nodes.registerType("lsh-logic", {
     category: "function",
     color: "#4a90e2",
@@ -70,11 +79,11 @@
         required: true,
         validate: validateRequiredTrimmed,
       },
-      // File Config
-      systemConfigPath: {
-        value: "configs/system-config.json",
+      // Inline Config
+      systemConfigJson: {
+        value: '{\n  "devices": []\n}',
         required: true,
-        validate: validateRequiredTrimmed,
+        validate: validateSystemConfigJson,
       },
       // Context Export
       exposeStateContext: { value: "none", required: true },
@@ -271,16 +280,17 @@
   </div>
 
   <div class="lsh-config-section">
-    <div class="lsh-config-section-title"><i class="fa fa-file-text-o"></i> Configuration File</div>
+    <div class="lsh-config-section-title"><i class="fa fa-code"></i> System Configuration</div>
     <div class="form-row">
-      <label for="node-input-systemConfigPath">System Config</label>
-      <input
-        type="text"
-        id="node-input-systemConfigPath"
-        placeholder="configs/system-config.json"
-      />
+      <label for="node-input-systemConfigJson">System Config</label>
+      <textarea
+        id="node-input-systemConfigJson"
+        rows="12"
+        style="width: calc(100% - 110px); font-family: var(--red-ui-monospace-font, monospace);"
+      ></textarea>
       <span class="lsh-form-tip"
-        >Path to <code>system-config.json</code>, relative to the Node-RED user directory.</span
+        >Inline JSON listing your LSH devices and optional long-click / super-long-click actions.
+        Keeping it in the node makes exports self-contained and avoids file watcher surprises.</span
       >
     </div>
   </div>
@@ -426,280 +436,155 @@
 <!-- The Help tab documentation for the node -->
 <script type="text/html" data-help-name="lsh-logic">
   <p>
-    A powerful, all-in-one node that encapsulates the entire automation logic for an LSH (Labo Smart
-    Home) style system. It replaces a complex flow of function nodes with a single, robust, and
-    maintainable component built with TypeScript.
+    Runtime orchestrator for an LSH-compatible smart home. It listens to the public LSH MQTT
+    contract, keeps the live device registry, coordinates distributed click actions, emits commands,
+    watches device health and reports alerts.
   </p>
   <p>
-    If you are new to the public LSH stack, read the
-    <a href="https://github.com/labodj/labo-smart-home/blob/main/REFERENCE_STACK.md"
-      >reference stack</a
-    >
-    first. Keep the
-    <a href="https://github.com/labodj/labo-smart-home/blob/main/GLOSSARY.md">glossary</a>
-    nearby if the terminology is unfamiliar. For adoption questions, skim the
-    <a href="https://github.com/labodj/labo-smart-home/blob/main/FAQ.md">FAQ</a>. If startup or
-    click behavior looks wrong during bring-up, use the
-    <a href="https://github.com/labodj/labo-smart-home/blob/main/TROUBLESHOOTING.md"
-      >troubleshooting guide</a
-    >. This help page focuses on the Node-RED layer.
+    The node is LSH-oriented, not a generic MQTT automation block. Devices must speak the LSH
+    protocol. Non-LSH devices can still be controlled through output 2, where your surrounding
+    Node-RED flow translates abstract actor commands to Zigbee, Tasmota, Home Assistant or any other
+    integration.
   </p>
 
-  <h3>Core Features</h3>
-  <ul>
-    <li>
-      <strong>Declarative System Configuration:</strong> Define all your system's devices in a
-      single, clear <code>system-config.json</code> file. The node automatically hot-reloads the
-      configuration when the file is modified, and startup can recover automatically if the config
-      file is temporarily invalid and then fixed.
-    </li>
-    <li>
-      <strong>Centralized State Management:</strong> Maintains an in-memory registry of all device
-      states, health status (connected, healthy, stale), and configurations. This state can be
-      exposed to the context for easy debugging and dashboarding.
-    </li>
-    <li>
-      <strong>Advanced Click Logic:</strong> Implements "long-click" (smart toggle) and
-      "super-long-click" (turn all off) actions for devices that have buttons configured.
-    </li>
-    <li>
-      <strong>Reliable Network Protocol:</strong> Uses a two-phase commit protocol for network-based
-      button clicks using a request/ACK/confirm handshake. Targets are revalidated at confirm time,
-      so execution follows the best current live topology instead of claiming hard distributed
-      atomicity.
-    </li>
-    <li>
-      <strong>Intelligent Watchdog:</strong> Actively monitors device health using a combination of
-      passive (Homie <code>$state</code>) and active (LSH ping) checks. It uses a smart initial
-      verification process to quickly and accurately detect offline devices at startup. Retained
-      snapshots accelerate recovery, but live reachability still comes only from fresh Homie or LSH
-      traffic, preventing false alarms and alert spam.
-    </li>
-    <li>
-      <strong>Dynamic Topic Management:</strong> Emits messages on a dedicated output to dynamically
-      configure an <code>mqtt-in</code> node, automatically managing topic subscriptions and
-      unsubscriptions as your system configuration changes. Reconfiguration is skipped completely
-      when a successful reload leaves the effective topic set unchanged.
-    </li>
-  </ul>
+  <h3>Recommended Wiring</h3>
+  <ol>
+    <li>Wire a dedicated <code>mqtt in</code> node to this node.</li>
+    <li>Wire output 1, <b>LSH Commands</b>, to <code>mqtt out</code>.</li>
+    <li>Wire output 4, <b>Configuration</b>, back to the same <code>mqtt in</code> node.</li>
+    <li>Leave that <code>mqtt in</code> topic empty when using dynamic subscriptions.</li>
+  </ol>
+  <p>
+    The fourth output sends Node-RED MQTT subscription-control messages. When the inline config is
+    deployed, the node updates the MQTT input with the exact topic set needed by the configured
+    devices.
+  </p>
 
   <h3>Inputs</h3>
-  <dl class="message-properties">
-    <dt>MQTT Messages</dt>
-    <dd>
-      The node determines which topics to listen to based on your configuration. You do not need to
-      manually subscribe. Instead, connect the node's
-      <strong>Configuration</strong> output to an <code>mqtt-in</code> node to complete the setup.
-    </dd>
-  </dl>
+  <p>The input accepts MQTT messages for configured LSH devices:</p>
+  <ul>
+    <li><code>&lt;lshBasePath&gt;&lt;device&gt;/conf</code>: retained topology snapshot.</li>
+    <li><code>&lt;lshBasePath&gt;&lt;device&gt;/state</code>: retained actuator state snapshot.</li>
+    <li>
+      <code>&lt;lshBasePath&gt;&lt;device&gt;/events</code>: controller-backed runtime events.
+    </li>
+    <li><code>&lt;lshBasePath&gt;&lt;device&gt;/bridge</code>: bridge-local runtime events.</li>
+    <li><code>&lt;homieBasePath&gt;&lt;device&gt;/$state</code>: Homie lifecycle.</li>
+  </ul>
   <p>
-    Device <code>events</code> topics carry controller-backed runtime traffic, while device
-    <code>bridge</code> topics carry bridge-local runtime events emitted by <code>lsh-bridge</code>.
-    The node accepts bridge-local payloads as informational runtime events, but it does not treat
-    them as click traffic or as proof that the controller is currently reachable.
-  </p>
-
-  <h3>Home Assistant Discovery</h3>
-  <p>
-    This node keeps Home Assistant discovery out of the LSH runtime path. Use
-    <code>node-red-contrib-homie-home-assistant-discovery</code> beside it when you want Homie
-    devices exposed to Home Assistant.
-  </p>
-  <p>
-    Recommended wiring: keep this node on its own dynamically-managed MQTT input, then add a second
-    MQTT input for Homie discovery metadata. Wire that second MQTT input to
-    <code>homie-ha-discovery</code>, wire discovery output 1 to MQTT output, and wire discovery
-    output 4 back to the same second MQTT input if you want automatic Homie subscriptions.
-  </p>
-  <p>
-    Do not feed both nodes' subscription outputs into the same MQTT input. Both nodes can emit an
-    unsubscribe-all control message before subscribing to their own topic set.
-  </p>
-  <p>
-    For LSH Homie v5 devices, a typical discovery-node setup is: Home Assistant prefix
-    <code>homeassistant</code>, ID prefix <code>lsh</code>, Homie v5 domain <code>homie</code>, only
-    v5 enabled, state sensor enabled, and attribute diagnostics enabled when you want Homie
-    <code>$...</code> attributes exposed as diagnostics. Use the discovery node's
-    <code>namedNodeState</code> override to map numeric LSH actuator nodes to friendly light, fan or
-    switch names without putting Home Assistant mapping back into <code>system-config.json</code>.
+    Retained <code>conf</code> and <code>state</code> are reused as authoritative snapshots.
+    Retained <code>events</code> and <code>bridge</code> are ignored because they are runtime-only
+    signals.
   </p>
 
   <h3>Outputs</h3>
-  <ol style="margin-bottom: 20px;">
+  <ol>
     <li>
-      <b>LSH Commands:</b> Outputs MQTT messages for devices using the LSH protocol. This includes
-      actuator state commands (<code>SET_STATE</code>, <code>SET_SINGLE_ACTUATOR</code>), network
-      click acknowledgements (<code>NETWORK_CLICK_ACK</code>), failovers (<code>FAILOVER</code>,
-      <code>FAILOVER_CLICK</code>), and watchdog pings (<code>PING</code>).
+      <b>LSH Commands:</b> MQTT messages for LSH devices, including state commands, network-click
+      acknowledgements, failovers and watchdog pings.
     </li>
     <li>
-      <b>Other Actor Commands:</b> Outputs generic commands intended for external, non-LSH devices
-      (e.g., Tasmota, Zigbee2MQTT). The message payload is an object containing the target actor
-      names and the desired boolean state (<code>true</code>/<code>false</code>).
+      <b>Other Actor Commands:</b> generic commands for external targets. The payload carries actor
+      names and desired boolean state; your flow decides how to control those actors.
     </li>
     <li>
-      <b>Alerts:</b> Outputs formatted, human-readable alert messages when a device's health status
-      changes (e.g., goes offline or comes back online). The alert payload also exposes
-      machine-readable <code>event_type</code> and <code>event_source</code> fields so flows can
-      distinguish lifecycle/reboot events from watchdog outages without parsing the message text.
-      Alerts for "back online" are suppressed during the initial startup period to avoid
-      notification noise.
+      <b>Alerts:</b> formatted human-readable alerts plus structured fields such as
+      <code>event_type</code> and <code>event_source</code>.
     </li>
     <li>
-      <b>Configuration:</b> Outputs specially crafted messages to dynamically control the
-      subscriptions of an <code>mqtt-in</code> node. This is the key to a fully automated and
-      self-configuring system.
+      <b>Configuration:</b> MQTT subscription-control messages for the upstream
+      <code>mqtt in</code> node.
     </li>
-    <li>
-      <b>Debug:</b> Forwards the original, unprocessed input message for logging and debugging
-      purposes.
-    </li>
+    <li><b>Debug:</b> original input passthrough.</li>
   </ol>
 
-  <h3>Node Configuration</h3>
+  <h3>System Configuration</h3>
+  <p>
+    The inline JSON configuration is the runtime source of truth. It lists the devices known by the
+    node and optional long-click or super-long-click actions.
+  </p>
+  <pre><code>{
+  "devices": [
+    {
+      "name": "c1",
+      "longClickButtons": [
+        {
+          "id": 1,
+          "actors": [
+            {
+              "name": "j1",
+              "allActuators": true,
+              "actuators": []
+            }
+          ],
+          "otherActors": ["zigbee_table_lamp"]
+        }
+      ]
+    },
+    {
+      "name": "j1"
+    }
+  ]
+}</code></pre>
+  <p>
+    Device names must match MQTT device IDs exactly. Button action targets under
+    <code>actors</code> must reference configured LSH devices. Targets under
+    <code>otherActors</code> are emitted on output 2 for your own flows.
+  </p>
+
+  <h3>Node Settings</h3>
   <dl class="message-properties">
-    <dt>MQTT Path Settings</dt>
+    <dt>MQTT &amp; protocol settings</dt>
     <dd>
-      Defines the base MQTT paths for all topics the node interacts with. These must match your
-      system's topic structure (e.g., <code>homie/5/</code>, <code>LSH/</code>). Base paths must end
-      with <code>/</code>, use only non-empty literal topic segments, and must not contain MQTT
-      wildcards. The service topic must also be a concrete publish topic without wildcards.
+      Set the Homie lifecycle base path, LSH topic base path, bridge service topic and payload
+      format. Base paths must end with <code>/</code> and must not contain MQTT wildcards. The
+      service topic must be a concrete publish topic.
     </dd>
 
     <dt>System Config</dt>
+    <dd>Inline JSON device/action configuration embedded directly in the Node-RED flow.</dd>
+
+    <dt>Timing Settings</dt>
     <dd>
-      Specifies the path to your <code>system-config.json</code> file, relative to your Node-RED
-      user directory (e.g., <code>~/.node-red/configs/</code>). This file is the single source of
-      truth for all devices managed by the node.
+      Tune click timeouts, startup replay window and watchdog probing. Defaults are conservative;
+      change them only when you know your bridge/controller timing.
     </dd>
 
     <dt>Context Interaction</dt>
     <dd>
-      Allows the node to share its internal state (device registry) and configuration with the rest
-      of the flow via flow or global context variables. This is useful for building dashboards or
-      for advanced debugging.
-    </dd>
-
-    <dt>Timing Settings</dt>
-    <dd>
-      Allows you to fine-tune all system timeouts and intervals. The
-      <code>Initial Replay Window</code> is particularly important: it defines how long the node
-      waits only when the startup bridge-local <code>BOOT</code> replay is needed because at least
-      one configured device is still missing an authoritative <code>conf</code> or
-      <code>state</code> snapshot. If snapshots are already complete, the node skips the replay and
-      proceeds directly to targeted recovery requests and pings.
+      Optional exports for the live device registry, generated MQTT topic set and effective runtime
+      config. Useful for dashboards and debugging.
     </dd>
   </dl>
 
-  <h3>Startup Semantics</h3>
+  <h3>Startup and Recovery</h3>
   <p>
-    Startup intentionally separates <strong>snapshot availability</strong> from
-    <strong>device health</strong>.
-  </p>
-  <ul>
-    <li>
-      Retained <code>conf</code> and <code>state</code> are reused as the last known authoritative
-      topology/state snapshots.
-    </li>
-    <li>
-      Retained snapshots do <strong>not</strong> mark a device as connected, healthy, or freshly
-      reachable.
-    </li>
-    <li>
-      Retained <code>events</code> and <code>bridge</code> payloads are ignored completely. They are
-      runtime-only signals and are not replay-safe inputs for reachability, click handling, or
-      bridge health.
-    </li>
-    <li>
-      Current reachability only comes from live Homie <code>$state=ready</code>, live LSH traffic,
-      or a successful watchdog <code>PING</code> response.
-    </li>
-    <li>
-      If startup begins with an invalid or unreadable <code>system-config.json</code>, the node
-      stays in <code>Config Error</code> but keeps the file watcher active. Fixing the file later
-      triggers a normal recovery load without requiring a Node-RED restart.
-    </li>
-    <li>
-      If a device is offline during startup, it is recovered automatically later when it sends live
-      traffic again; the node will request only the missing snapshot pieces at that moment.
-    </li>
-  </ul>
-
-  <h3>Best Practices</h3>
-  <h4>Dynamic MQTT Subscriptions</h4>
-  <p>
-    The most powerful way to use this node is to let it manage your MQTT subscriptions
-    automatically. This creates a "zero-maintenance" flow that adapts as you add or remove devices
-    from your `system-config.json`.
+    Startup separates last known snapshots from current reachability. Retained
+    <code>conf</code> and <code>state</code> accelerate recovery, but a device becomes currently
+    reachable only after live Homie lifecycle traffic, live LSH traffic or a successful watchdog
+    ping response.
   </p>
   <p>
-    <strong
-      >Connect the 4th output ("Configuration") directly to a single
-      <code>mqtt-in</code> node.</strong
-    >
+    If all configured devices already have complete retained snapshots, the startup
+    <code>BOOT</code> replay is skipped. If something is missing, the node requests one bridge-local
+    replay, then asks only for the missing pieces and pings still-unreachable devices. Watchdog
+    recovery alerts are suppressed during warm-up.
   </p>
   <p>
-    When the flow is deployed or when the effective MQTT topic set changes, the `lsh-logic` node
-    will send a sequence of messages to the `mqtt-in` node to first
-    <strong>unsubscribe from all</strong> previous topics and then
-    <strong>subscribe to the new, correct list of topics</strong>. This ensures your system is
-    always listening to exactly the right channels without any manual intervention. Pure logic-only
-    reloads that keep the same effective topic set do not churn subscriptions.
+    If the inline config is invalid, deployment fails fast with a clear node configuration error.
   </p>
 
-  <h4>Configuration File Management</h4>
-  <ul>
-    <li>
-      <strong>User Directory:</strong> It is highly recommended to place your
-      <code>system-config.json</code> file within a sub-directory of your Node-RED user directory
-      (e.g., <code>~/.node-red/configs/</code>). This ensures your configuration is portable and
-      included in standard backups of your Node-RED environment.
-    </li>
-    <li>
-      <strong>Device Definitions:</strong> Every device that the system should be aware of, even if
-      it's just a simple light (an "actor"), must have an entry with its <code>name</code> in the
-      `system-config.json` file. The button-related properties (<code>longClickButtons</code>, etc.)
-      are entirely optional.
-    </li>
-  </ul>
+  <h3>Home Assistant Discovery</h3>
+  <p>
+    This node intentionally does not generate Home Assistant MQTT discovery. Use
+    <code>node-red-contrib-homie-home-assistant-discovery</code> beside it. Keep a separate MQTT
+    input for discovery metadata if that node also manages subscriptions dynamically.
+  </p>
 
-  <h4>Debugging</h4>
-  <ul>
-    <li>
-      Use the "Export Internal State" option to expose the live device registry to a flow or global
-      context variable. You can then connect a
-      <code>inject</code> node to a <code>debug</code> node to inspect the full system state at any
-      time.
-    </li>
-    <li>
-      The "Debug" output of this node will pass through any message it receives, allowing you to see
-      the raw data before it's processed.
-    </li>
-  </ul>
-
-  <h4>Advanced Usage: Using MsgPack</h4>
+  <h3>MsgPack</h3>
   <p>
-    This node supports both JSON (default) and MsgPack for payload encoding and decoding, which can
-    significantly reduce network traffic.
+    JSON is the default. To use MsgPack, set <b>LSH Protocol</b> to <b>MsgPack</b> and configure the
+    upstream <code>mqtt in</code> node to output <b>a Buffer</b>. Non-Buffer inbound LSH payloads
+    are rejected in MsgPack mode.
   </p>
-  <p><b>Sending Commands (Output):</b></p>
-  <p>
-    In the node's configuration panel, you can set the <b>LSH Protocol</b> to "MsgPack". When this
-    is selected, all commands sent from the <b>LSH Commands</b> output will have their payloads
-    automatically encoded as MsgPack. Your LSH devices must be programmed to decode MsgPack payloads
-    on their `.../IN` topic.
-  </p>
-  <p><b>Receiving Messages (Input):</b></p>
-  <p>
-    The node decodes incoming payloads on LSH topics according to the <b>LSH Protocol</b> selected
-    in the node configuration. When you choose "MsgPack", the inbound <code>mqtt-in</code> payloads
-    for LSH topics must arrive as Buffers so they can be decoded as MsgPack. Non-Buffer inputs are
-    rejected in this mode. There is no automatic payload sniffing, so you must configure the
-    <code>mqtt-in</code> node that feeds messages into this node accordingly:
-  </p>
-  <ul>
-    <li>
-      In the <code>mqtt-in</code> node settings, set the "Output" option to <b>"a Buffer"</b>.
-    </li>
-  </ul>
 </script>
