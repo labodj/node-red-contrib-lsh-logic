@@ -7,6 +7,8 @@
 [![Latest Release](https://img.shields.io/github/release/labodj/node-red-contrib-lsh-logic.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/releases/latest)
 [![License](https://img.shields.io/github/license/labodj/node-red-contrib-lsh-logic.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LICENSE)
 
+[![works with MQTT Homie](https://homieiot.github.io/img/works-with-homie.svg "works with MQTT Homie")](https://homieiot.github.io/)
+
 `node-red-contrib-lsh-logic` is the Node-RED runtime brain for an LSH-compatible
 smart home.
 
