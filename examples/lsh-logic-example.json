@@ -197,6 +197,6 @@
     "id": "e89feca50e782192",
     "type": "global-config",
     "env": [],
-    "modules": { "node-red-contrib-lsh-logic": "3.0.0" }
+    "modules": { "node-red-contrib-lsh-logic": "3.0.1" }
   }
 ]
