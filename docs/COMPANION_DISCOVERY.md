@@ -34,18 +34,18 @@ owns a different topic set, and separate MQTT inputs keep that ownership obvious
 
 For LSH devices publishing Homie v5 under `homie/5/<device>/...`:
 
-| Field                 | Suggested value      |
-| --------------------- | -------------------- |
-| HA prefix             | `homeassistant`      |
-| ID prefix             | `lsh`                |
-| Homie v5              | `homie`              |
-| Homie v3/v4           | `homie`              |
-| Versions              | v5 only              |
-| emit subscriptions    | enabled              |
-| state sensor          | enabled              |
-| attribute diagnostics | enabled if desired   |
-| Boolean mapping       | `auto` or `light`    |
-| Manufacturer / Model  | your public branding |
+| Field                  | Suggested value      |
+| ---------------------- | -------------------- |
+| Home Assistant prefix  | `homeassistant`      |
+| ID prefix              | `lsh`                |
+| Homie v5               | `homie`              |
+| Homie v3/v4            | `homie`              |
+| Versions               | v5 only              |
+| Emit subscriptions     | enabled              |
+| State sensor           | enabled              |
+| Attribute diagnostics  | enabled if desired   |
+| Boolean mapping        | `auto` or `light`    |
+| Manufacturer and model | your public branding |
 
 Use the discovery node's override field for Home Assistant names, platforms,
 icons and stable entity IDs. Do not put Home Assistant entity mapping back into

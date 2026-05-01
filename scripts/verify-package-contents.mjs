@@ -9,6 +9,7 @@ const files = pack.files.map((entry) => entry.path).sort();
 
 const allowedFilePatterns = [
   /^README\.md$/,
+  /^DOCS\.md$/,
   /^LIFECYCLE\.md$/,
   /^LICENSE$/,
   /^NOTICE$/,
@@ -28,6 +29,7 @@ const allowedFilePatterns = [
 
 const requiredFiles = [
   "README.md",
+  "DOCS.md",
   "LIFECYCLE.md",
   "LICENSE",
   "NOTICE",

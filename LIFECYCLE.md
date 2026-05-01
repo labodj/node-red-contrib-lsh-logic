@@ -5,7 +5,7 @@ This document is the precise lifecycle contract for
 
 The README explains how to use the node. This file explains how the runtime
 decides what is alive, what can be repaired, when alerts are allowed, and how
-startup, hot reloads, watchdog probes and live traffic interact.
+startup, Node-RED deploys, watchdog probes and live traffic interact.
 
 ## Core Principles
 
@@ -60,17 +60,13 @@ During warm-up, normal watchdog alerts are suppressed. Startup reachability is
 decided by the dedicated verification path, not by watchdog alerts racing the
 initial sync.
 
-The config file watcher is armed before the first load attempt. If startup
-begins with an invalid config, fixing the file later can recover the node
-without a Node-RED restart. That recovery re-enters the normal startup bootstrap
-flow, including warm-up and alert suppression.
-
 Periodic watchdog and cleanup timers start only after the runtime has applied a
 valid configuration at least once.
 
-## Runtime Reload
+## Runtime Config Update
 
-A successful runtime config reload does **not** restart warm-up.
+A successful inline config update does **not** restart the whole Node-RED
+runtime.
 
 Instead, the runtime:
 
@@ -78,13 +74,13 @@ Instead, the runtime:
 - clears pending click transactions;
 - drops stale low-priority startup/watchdog traffic from the previous config
   generation;
-- schedules a strong post-reload recovery pass;
-- defers that post-reload recovery if startup verification is still pending;
+- schedules a strong post-update recovery pass;
+- defers that post-update recovery if startup verification is still pending;
 - reconfigures MQTT subscriptions only when the effective topic set changes.
 
-If a hot reload fails while a valid config is already active, the runtime keeps
-the last valid config and reports a degraded warning instead of stopping. It
-also keeps the previous MQTT subscription/export state intact instead of
+If a later config update fails while a valid config is already active, the
+runtime keeps the last valid config and reports a warning instead of stopping.
+It also keeps the previous MQTT subscription/export state intact instead of
 emitting redundant unsubscribe/resubscribe churn.
 
 ## Watchdog
@@ -124,10 +120,10 @@ Distributed long-click actions use a request/ACK/confirm lifecycle.
 
 The runtime validates targets before confirming the action. A click fails fast
 when a target device is reachable but lacks an authoritative actuator snapshot;
-guessing would be worse than rejecting that user action and waiting for the next
-one.
+acting from incomplete state would be worse than rejecting that user action and
+waiting for the next one.
 
-Runtime config reloads clear pending click transactions. In-flight distributed
+Runtime config updates clear pending click transactions. In-flight distributed
 clicks are intentionally failed rather than preserved across a config change.
 
 ## Output Ordering
@@ -138,7 +134,7 @@ The adapter guarantees that Node-RED `send()` calls do not overlap.
 - Low-priority bulk startup/watchdog LSH traffic drains in the background.
 - The stagger sleep happens outside the send queue, so later high-priority live
   traffic can overtake future low-priority frames.
-- Reload invalidates stale low-priority queued traffic from older config
+- Config updates invalidate stale low-priority queued traffic from older config
   generations.
 
 ## Alerts
@@ -160,5 +156,5 @@ The lifecycle is designed to be idempotent and robust, not transactionally
 perfect.
 
 It deliberately avoids complex cross-restart recovery for in-flight click
-transactions and rare startup/reload timing races that would add more complexity
+transactions and rare startup/update timing races that would add more complexity
 than they remove.

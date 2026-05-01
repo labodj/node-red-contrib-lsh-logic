@@ -199,7 +199,8 @@ Rules:
 
 Before a distributed click is confirmed, the node checks that each targeted LSH
 device has an authoritative actuator snapshot. If a target is reachable but
-state is missing, the click fails fast instead of guessing.
+state is missing, the click fails fast instead of choosing a toggle direction
+from incomplete information.
 
 ## Other Actors
 
@@ -214,10 +215,9 @@ button action control the whole home.
 
 ## Applying Changes
 
-Version 2 applies configuration changes when you deploy the Node-RED flow. This
-is intentionally simpler than the old file-watcher model: the flow JSON is the
-single source of truth, and deployment is the point where Node-RED makes runtime
-changes effective.
+Configuration changes become active when you deploy the Node-RED flow. The flow
+JSON is the single source of truth, and deployment is the point where Node-RED
+makes runtime changes effective.
 
 When a new inline config is valid:
 
