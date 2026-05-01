@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "A single, powerful node for advanced automation logic on devices implementing the public LSH MQTT/protocol contract.",
   "main": "dist/lsh-logic.js",
   "scripts": {
@@ -38,6 +38,7 @@
     "README.md",
     "CITATION.cff",
     "examples/",
+    "vendor/lsh-protocol/DOCS.md",
     "vendor/lsh-protocol/README.md",
     "vendor/lsh-protocol/docs/profiles-and-roles.md",
     "vendor/lsh-protocol/shared/lsh_protocol.md"
@@ -78,7 +79,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "labo-smart-home-coordinator": "^1.0.0"
+    "labo-smart-home-coordinator": "^1.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
