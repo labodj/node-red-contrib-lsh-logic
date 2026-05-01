@@ -3,8 +3,9 @@
 [![npm](https://img.shields.io/npm/v/node-red-contrib-lsh-logic.svg)](https://www.npmjs.com/package/node-red-contrib-lsh-logic)
 [![Node-RED Library](https://img.shields.io/badge/Node--RED-Library-8f0000.svg)](https://flows.nodered.org/node/node-red-contrib-lsh-logic)
 [![npm downloads](https://img.shields.io/npm/dm/node-red-contrib-lsh-logic.svg)](https://www.npmjs.com/package/node-red-contrib-lsh-logic)
-[![CI](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Flabodj%2Fnode-red-contrib-lsh-logic%2Factions%2Fworkflows%2Fci.yaml%2Fruns%3Fper_page%3D1&query=%24.workflow_runs%5B0%5D.conclusion&label=CI)](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml)
-[![Latest Release](https://img.shields.io/github/release/labodj/node-red-contrib-lsh-logic.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/releases/latest)
+[![CI](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/labodj/node-red-contrib-lsh-logic/actions/workflows/ci.yaml)
+[![Node.js](https://img.shields.io/node/v/node-red-contrib-lsh-logic.svg)](https://www.npmjs.com/package/node-red-contrib-lsh-logic)
+[![Latest Release](https://img.shields.io/github/v/release/labodj/node-red-contrib-lsh-logic?display_name=tag&sort=semver)](https://github.com/labodj/node-red-contrib-lsh-logic/releases/latest)
 [![License](https://img.shields.io/github/license/labodj/node-red-contrib-lsh-logic.svg)](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/LICENSE)
 
 [![works with MQTT Homie](https://homieiot.github.io/img/works-with-homie.svg "works with MQTT Homie")](https://homieiot.github.io/)
