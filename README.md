@@ -30,12 +30,13 @@ LSH-compatible devices:
 - track configured devices, actuator state, and Homie lifecycle;
 - react to long-click and super-long-click events;
 - send commands back to LSH devices;
-- route intents for Zigbee, Tasmota, Home Assistant, or custom non-LSH flows;
+- route generic intents to flows that target Zigbee, Tasmota, Home Assistant, or
+  custom systems;
 - keep startup, watchdog, and recovery behavior predictable after restarts.
 
-It is not a generic MQTT rule engine. Devices that do not speak the LSH
-contract should stay in normal Node-RED flows and receive intents from the
-**Other Actor Commands** output.
+The node is focused on LSH messages; its input expects the LSH protocol. Keep
+other devices in normal Node-RED flows, and handle LSH-generated intents through
+the **Other Actor Commands** output.
 
 ## Install
 
@@ -115,17 +116,17 @@ actuators on device `j1` and also emit an intent for `zigbee_table_lamp`.
 | 4      | Configuration        | The same upstream `mqtt in` node for dynamic subscriptions. |
 | 5      | Debug                | Original inbound messages after successful processing.      |
 
-The second output is deliberately protocol-neutral. The node decides what should
-happen; your surrounding flow decides how a Zigbee light, Tasmota plug, Home
-Assistant service, or local script should receive that intent.
+The second output is deliberately protocol-neutral. The node emits the intended
+state; your surrounding flow decides how a Zigbee light, Tasmota plug, Home
+Assistant service, or local script should receive it.
 
 ## Runtime Behavior
 
 The node is intentionally conservative. It reuses retained `conf` and `state`
 snapshots, but it does not treat retained lifecycle traffic as proof that a
 device is alive right now. Distributed clicks are confirmed only when target
-state is authoritative, and recovery probes are rate-limited so a broken device
-does not flood the broker.
+state is authoritative, and recovery probes are rate-limited so an unreachable
+device does not flood the broker.
 
 JSON payloads are the default. MsgPack is available when your firmware supports
 it and the upstream `mqtt in` node preserves LSH payloads as Buffers.
@@ -134,8 +135,8 @@ it and the upstream `mqtt in` node preserves LSH payloads as Buffers.
 
 The full documentation map lives in
 [DOCS.md](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/DOCS.md).
-Start there when you want configuration details, companion discovery guidance,
-dynamic subscription behavior, or the lifecycle contract.
+Start there when you want configuration details, optional Homie discovery
+guidance, dynamic subscription behavior, or the lifecycle contract.
 
 If you are new to the wider LSH stack, the project-level starting points are:
 

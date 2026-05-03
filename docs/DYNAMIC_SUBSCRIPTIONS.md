@@ -16,8 +16,8 @@ Use one MQTT input dedicated to `lsh-logic`:
 2. `lsh-logic` output 1 -> `mqtt out`
 3. `lsh-logic` output 4 -> the same `mqtt in`
 
-The `mqtt in` node should have an empty topic. The discovery node, if you use it,
-should have its own separate MQTT input.
+The `mqtt in` node should have an empty topic. A separate discovery node, if you
+use one, should have its own MQTT input.
 
 ## What the Node Subscribes To
 
@@ -35,7 +35,7 @@ Example with:
 - `homieBasePath`: `homie/5/`
 - devices: `c1`, `j1`
 
-the generated topic set is:
+The generated topic set is:
 
 ```text
 LSH/c1/conf
@@ -71,8 +71,8 @@ the shape only; a real message contains every generated topic for every
 configured device.
 
 Deploys that keep the same effective topic set do not emit new subscribe
-messages. Changing only click rules or actor lists is therefore cheap and does
-not churn broker subscriptions.
+messages. Changing only click rules or actor lists therefore does not churn
+broker subscriptions.
 
 ## Why Not Use One MQTT Input for Everything?
 
@@ -98,5 +98,6 @@ LSH/#
 homie/5/+/$state
 ```
 
-Dynamic subscriptions are safer for long-running installations because the topic
-set follows the inline device list exactly and avoids forgotten stale topics.
+Dynamic subscriptions are less error-prone for long-running installations
+because the topic set follows the inline device list exactly and avoids
+forgotten stale topics.

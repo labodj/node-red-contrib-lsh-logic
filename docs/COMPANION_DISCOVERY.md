@@ -1,18 +1,19 @@
-# Companion Home Assistant Discovery
+# Optional Home Assistant Discovery
 
-`node-red-contrib-lsh-logic` is the runtime orchestrator. Home Assistant
-discovery is handled by the companion package:
+`node-red-contrib-lsh-logic` is the runtime orchestrator. If you want Home
+Assistant discovery, use the separate optional package:
 
 [`node-red-contrib-homie-home-assistant-discovery`](https://flows.nodered.org/node/node-red-contrib-homie-home-assistant-discovery)
 
-This split keeps both tools cleaner:
+This split keeps responsibilities clear:
 
-- `lsh-logic` owns LSH state, click orchestration, watchdog, recovery and alerts;
-- `homie-ha-discovery` owns Homie v3/v4/v5 metadata parsing and Home Assistant
-  MQTT discovery.
+- `lsh-logic` owns LSH state, click orchestration, watchdog, recovery, and
+  alerts;
+- `homie-ha-discovery` owns generic Homie v3/v4/v5 metadata parsing and Home
+  Assistant MQTT discovery.
 
-The result is more reusable than an LSH-only discovery implementation: the
-discovery node can expose any Homie-compliant device, while `lsh-logic` remains
+The discovery node is generic Homie tooling: it can expose Homie-compliant
+devices whether or not they are part of an LSH installation. `lsh-logic` stays
 focused on the runtime behavior that is specific to the LSH protocol.
 
 ## Recommended Wiring
@@ -30,7 +31,7 @@ Then wire each node's subscription output back to its own MQTT input:
 Do not share one dynamically-managed MQTT input between the two nodes. Each node
 owns a different topic set, and separate MQTT inputs keep that ownership obvious.
 
-## Typical LSH v5 Discovery Settings
+## Optional LSH v5 Discovery Settings
 
 For LSH devices publishing Homie v5 under `homie/5/<device>/...`:
 
@@ -47,14 +48,15 @@ For LSH devices publishing Homie v5 under `homie/5/<device>/...`:
 | Boolean mapping        | `auto` or `light`    |
 | Manufacturer and model | your public branding |
 
-Use the discovery node's override field for Home Assistant names, platforms,
-icons and stable entity IDs. Do not put Home Assistant entity mapping back into
-the LSH inline System Config.
+If you use the discovery node, keep Home Assistant names, platforms, icons, and
+stable entity IDs in its override field. Do not put Home Assistant entity
+mapping back into the LSH inline System Config.
 
 ## Compact LSH-Style Overrides
 
-Many LSH-style devices expose numeric Homie nodes whose `state` property is the
-actual Home Assistant entity. `namedNodeState` keeps that setup short.
+Many LSH-style devices expose numeric Homie nodes where the `state` property
+should become the Home Assistant entity. `namedNodeState` keeps that setup
+short.
 
 The commented block below is `jsonc` for explanation. The Node-RED editor
 requires strict JSON, so paste the clean version after it.
@@ -63,7 +65,7 @@ requires strict JSON, so paste the clean version after it.
 {
   // Shared Home Assistant device identity.
   "deviceDefaults": {
-    // Device discovery object id, for example lsh_c1.
+    // Device discovery object ID, for example lsh_c1.
     "objectId": "lsh_{deviceId}",
 
     // Stable Home Assistant device identifier.
@@ -145,14 +147,14 @@ String entries in `nodeNames` use the shared `namedNodeState` defaults. Object
 entries override one entity. Exact property overrides and ordered rules remain
 available when a device needs full control.
 
-Full override documentation lives in the companion core package:
+Full override documentation lives in the separate core package:
 
 [homie-home-assistant-discovery overrides](https://github.com/labodj/homie-home-assistant-discovery/blob/main/docs/OVERRIDES.md)
 
 ## Migration Notes
 
 If you previously used LSH-specific Home Assistant discovery, preserve history by
-keeping the old Home Assistant object IDs and default entity IDs in the companion
+keeping the old Home Assistant object IDs and default entity IDs in the discovery
 node overrides.
 
 The important fields are:
@@ -161,5 +163,5 @@ The important fields are:
 - property `objectId`, which controls `unique_id`;
 - property `defaultEntityId`, which controls the first Home Assistant entity id.
 
-Once the companion discovery node publishes the same IDs, Home Assistant can keep
-using the existing entity registry entries.
+Once the discovery node publishes the same IDs, Home Assistant can keep using
+the existing entity registry entries.

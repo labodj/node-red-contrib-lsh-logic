@@ -1,7 +1,7 @@
 {
   "name": "node-red-contrib-lsh-logic",
   "version": "3.0.2",
-  "description": "A single, powerful node for advanced automation logic on devices implementing the public LSH MQTT/protocol contract.",
+  "description": "A Node-RED node for coordinating devices that implement the public LSH MQTT/protocol contract.",
   "main": "dist/lsh-logic.js",
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",

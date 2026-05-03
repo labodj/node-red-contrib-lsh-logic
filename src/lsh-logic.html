@@ -441,10 +441,9 @@
     watches device health and reports alerts.
   </p>
   <p>
-    The node is LSH-oriented, not a generic MQTT automation block. Devices must speak the LSH
-    protocol. Non-LSH devices can still be controlled through output 2, where your surrounding
-    Node-RED flow translates abstract actor commands to Zigbee, Tasmota, Home Assistant or any other
-    integration.
+    The node is focused on LSH messages; its input expects the LSH protocol. Non-LSH devices can
+    still be controlled through output 2, where your surrounding Node-RED flow translates abstract
+    actor commands to Zigbee, Tasmota, Home Assistant, or any other integration.
   </p>
 
   <h3>Recommended Wiring</h3>
@@ -481,7 +480,7 @@
   <ol>
     <li>
       <b>LSH Commands:</b> MQTT messages for LSH devices, including state commands, network-click
-      acknowledgements, failovers and watchdog pings.
+      acknowledgements, failover messages, and watchdog pings.
     </li>
     <li>
       <b>Other Actor Commands:</b> generic commands for external targets. The payload carries actor
@@ -536,7 +535,7 @@
   <dl class="message-properties">
     <dt>MQTT &amp; protocol settings</dt>
     <dd>
-      Set the Homie lifecycle base path, LSH topic base path, bridge service topic and payload
+      Set the Homie lifecycle base path, LSH topic base path, bridge service topic, and payload
       format. Base paths must end with <code>/</code> and must not contain MQTT wildcards. The
       service topic must be a concrete publish topic.
     </dd>
@@ -561,7 +560,7 @@
   <p>
     Startup separates last known snapshots from current reachability. Retained
     <code>conf</code> and <code>state</code> accelerate recovery, but a device becomes currently
-    reachable only after live Homie lifecycle traffic, live LSH traffic or a successful watchdog
+    reachable only after live Homie lifecycle traffic, live LSH traffic, or a successful watchdog
     ping response.
   </p>
   <p>
@@ -570,15 +569,14 @@
     replay, then asks only for the missing pieces and pings still-unreachable devices. Watchdog
     recovery alerts are suppressed during warm-up.
   </p>
-  <p>
-    If the inline config is invalid, deployment fails fast with a clear node configuration error.
-  </p>
+  <p>If the inline config is invalid, deployment stops with a clear node configuration error.</p>
 
   <h3>Home Assistant Discovery</h3>
   <p>
-    This node intentionally does not generate Home Assistant MQTT discovery. Use
-    <code>node-red-contrib-homie-home-assistant-discovery</code> beside it. Keep a separate MQTT
-    input for discovery metadata if that node also manages subscriptions dynamically.
+    This node intentionally does not generate Home Assistant MQTT discovery. If you want discovery,
+    use the separate <code>node-red-contrib-homie-home-assistant-discovery</code> node beside it.
+    Keep a separate MQTT input for discovery metadata if that node also manages subscriptions
+    dynamically.
   </p>
 
   <h3>MsgPack</h3>

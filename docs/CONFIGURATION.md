@@ -2,14 +2,14 @@
 
 `node-red-contrib-lsh-logic` has two configuration layers:
 
-- the Node-RED editor settings, which describe MQTT paths, timing and context
+- the Node-RED editor settings, which describe MQTT paths, timing, and context
   exports;
 - the inline **System Config** JSON, which describes your LSH devices and the
   long-click actions that this node should orchestrate.
 
-The mental model is simple: the editor config tells the node **where to listen
-and how to behave**; the inline JSON tells it **which devices exist and what user
-actions mean**.
+The mental model: the editor config tells the node **where to listen and how to
+behave**; the inline JSON tells it **which devices exist and what user actions
+mean**.
 
 ## Node-RED Editor Settings
 
@@ -52,14 +52,14 @@ For a typical LSH v5 setup:
 | Export Effective Config | `none` until you need debug         |
 
 The default timing values are intentionally conservative. Tune them only when
-you understand your bridge latency, controller timeout and broker behavior.
+you understand your bridge latency, controller timeout, and broker behavior.
 
 ## System Config JSON
 
-This JSON is intentionally about LSH orchestration only. It should not contain
-Home Assistant discovery mapping. Use
-`node-red-contrib-homie-home-assistant-discovery` for Home Assistant entity
-names, icons, platforms and discovery IDs.
+This JSON is only for LSH orchestration. Keep Home Assistant discovery mapping
+in the optional Homie discovery node:
+`node-red-contrib-homie-home-assistant-discovery`. That is where Home Assistant
+entity names, icons, platforms, and discovery IDs belong.
 
 Edit it directly in the node dialog. That makes exported flows self-contained:
 the runtime config travels with the flow instead of depending on a separate file
@@ -67,21 +67,21 @@ inside the Node-RED user directory.
 
 ## Minimal Example
 
-JSON does not allow comments. The first block is `jsonc` to explain the file;
-the second block is valid JSON that you can copy.
+JSON files cannot contain comments. The first block is `jsonc` to explain the
+file; the second block is valid JSON that you can copy.
 
 ```jsonc
 {
   // Every LSH device known to the orchestration layer.
   "devices": [
     {
-      // Device id. Must match MQTT topics exactly, for example LSH/c1/state.
+      // Device ID. It must match MQTT topics exactly, for example LSH/c1/state.
       "name": "c1",
 
       // Optional actions fired by long-click events from this device.
       "longClickButtons": [
         {
-          // Button id reported by the controller event.
+          // Button ID reported by the controller event.
           "id": 1,
 
           // LSH devices controlled by this long-click.
@@ -142,7 +142,7 @@ Copyable JSON:
 
 ## Device Entries
 
-`devices[].name` must match the exact MQTT device id and must be a single topic
+`devices[].name` must match the exact MQTT device ID and must be a single topic
 segment using letters, digits, `_` or `-`. Names are checked case-insensitively,
 so `C1` and `c1` cannot coexist.
 
@@ -167,7 +167,7 @@ them.
 
 Each action needs:
 
-- `id`: the numeric button id reported by the device;
+- `id`: the numeric button ID reported by the device;
 - at least one target between `actors` and `otherActors`.
 
 Example with a partial LSH target and one external actor:
@@ -199,19 +199,19 @@ Rules:
 
 Before a distributed click is confirmed, the node checks that each targeted LSH
 device has an authoritative actuator snapshot. If a target is reachable but
-state is missing, the click fails fast instead of choosing a toggle direction
+state is missing, the click fails cleanly instead of choosing a toggle direction
 from incomplete information.
 
 ## Other Actors
 
 `otherActors` are names for non-LSH targets. The node does not know whether they
-are Zigbee lights, Tasmota plugs, Home Assistant services or something else.
+are Zigbee lights, Tasmota plugs, Home Assistant services, or something else.
 
 Instead, it emits a generic command on output 2. Your surrounding Node-RED flow
 reads that message and translates it to the right protocol.
 
-This keeps the LSH runtime focused on LSH correctness while still letting one
-button action control the whole home.
+This keeps the LSH runtime focused on LSH correctness while still letting the
+same button action reach both LSH and external targets.
 
 ## Applying Changes
 
@@ -225,12 +225,12 @@ When a new inline config is valid:
 - pending click transactions are cleared;
 - MQTT subscriptions are updated only if the effective topic set changed.
 
-When the inline JSON is invalid, the node fails fast during deploy and shows a
-clear configuration error. Fix the JSON in the editor and deploy again.
+When the inline JSON is invalid, deployment stops with a clear configuration
+error. Fix the JSON in the editor and deploy again.
 
 ## Context Exports
 
-Context exports are optional. Enable them when you want dashboards, debug flows
+Context exports are optional. Enable them when you want dashboards, debug flows,
 or observability.
 
 - Internal state export gives you the live device registry.
