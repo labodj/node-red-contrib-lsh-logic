@@ -18,17 +18,17 @@ permissions:
 
 jobs:
   quality:
-    name: Quality (Node 22)
+    name: Quality (Node LTS)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Use Node.js 22
+      - name: Use Node.js LTS
         uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "lts/*"
           cache: "npm"
 
       - name: Install dependencies
@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18.x, 20.x, 22.x]
+        node-version: [22.x, 24.x]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -78,10 +78,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Use Node.js 24
+      - name: Use Node.js LTS
         uses: actions/setup-node@v6
         with:
-          node-version: "24"
+          node-version: "lts/*"
           registry-url: "https://registry.npmjs.org"
           cache: "npm"
 

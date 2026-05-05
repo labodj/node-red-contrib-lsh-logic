@@ -26,6 +26,8 @@ const allowedFilePatterns = [
   /^vendor\/lsh-protocol\/CITATION\.cff$/,
   /^vendor\/lsh-protocol\/docs\/profiles-and-roles\.md$/,
   /^vendor\/lsh-protocol\/shared\/lsh_protocol\.md$/,
+  /^vendor\/lsh-protocol\/shared\/lsh_protocol\.schema\.json$/,
+  /^vendor\/lsh-protocol\/shared\/lsh_protocol_manifest\.json$/,
 ];
 
 const requiredFiles = [
