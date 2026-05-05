@@ -72,7 +72,11 @@ describe("LshLogicNode wrapper", () => {
 
     await instance.flush();
 
-    expect(node.status).toHaveBeenCalledWith({ fill: "green", shape: "dot", text: "Ready" });
+    expect(node.status).toHaveBeenLastCalledWith({
+      fill: "green",
+      shape: "dot",
+      text: expect.stringMatching(/^Ready d:2 b:\d\/2 c:\d\/2$/),
+    });
     expect(getOutputFrames(node, NodeOutput.Configuration)).toEqual(
       expect.arrayContaining([
         {
@@ -217,6 +221,62 @@ describe("LshLogicNode wrapper", () => {
     });
     expect(getOutputFrames(node, NodeOutput.Alerts)).toContainEqual({
       payload: expect.objectContaining({ message: "source is offline" }),
+    });
+  });
+
+  it("keeps Node-RED status compact while registry health changes", async () => {
+    const node = createMockNode();
+    const instance = createInstance(node);
+    await instance.flush();
+
+    instance.getCoordinator().emit("state", {
+      lastUpdated: Date.now(),
+      devices: {
+        source: {
+          name: "source",
+          connected: true,
+          controllerLinkConnected: true,
+          isHealthy: true,
+          isStale: false,
+          lastSeenTime: 1,
+          bridgeConnected: true,
+          bridgeLastSeenTime: 1,
+          lastHomieState: "ready",
+          lastHomieStateTime: 1,
+          lastDetailsTime: 1,
+          lastStateTime: 1,
+          actuatorsIDs: [1],
+          buttonsIDs: [1],
+          actuatorStates: [false],
+          actuatorIndexes: { 1: 0 },
+          alertSent: false,
+        },
+        target: {
+          name: "target",
+          connected: false,
+          controllerLinkConnected: false,
+          isHealthy: false,
+          isStale: true,
+          lastSeenTime: 0,
+          bridgeConnected: true,
+          bridgeLastSeenTime: 1,
+          lastHomieState: "ready",
+          lastHomieStateTime: 1,
+          lastDetailsTime: 0,
+          lastStateTime: 0,
+          actuatorsIDs: [],
+          buttonsIDs: [],
+          actuatorStates: [],
+          actuatorIndexes: {},
+          alertSent: true,
+        },
+      },
+    });
+
+    expect(node.status).toHaveBeenLastCalledWith({
+      fill: "green",
+      shape: "dot",
+      text: "Ready d:2 b:2/2 c:1/2",
     });
   });
 

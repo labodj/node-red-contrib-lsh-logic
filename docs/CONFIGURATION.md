@@ -65,6 +65,13 @@ Edit it directly in the node dialog. That makes exported flows self-contained:
 the runtime config travels with the flow instead of depending on a separate file
 inside the Node-RED user directory.
 
+The editor uses the LSH System Config schema to validate the JSON, rejects
+unknown properties, checks that LSH actor targets reference configured devices,
+and previews the exact MQTT subscriptions generated from the current paths and
+device list. It can also import the `lsh-stack-config/v1` JSON emitted by
+`lsh-core`; that fills the MQTT paths, payload protocol, System Config JSON and
+preview QoS values from the generated stack export.
+
 ## Minimal Example
 
 JSON files cannot contain comments. The first block is `jsonc` to explain the

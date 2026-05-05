@@ -75,6 +75,10 @@ Most installations touch two places:
 - the inline **System Config** JSON, which lists LSH devices and long-click
   actions.
 
+The editor validates that JSON against the LSH System Config shape, offers
+LSH-specific JSON completions/snippets, previews the exact MQTT topic set, and
+can import the generated `lsh-stack-config/v1` export from `lsh-core`.
+
 Start with a small config and add actions one at a time:
 
 ```json
@@ -127,6 +131,9 @@ snapshots, but it does not treat retained lifecycle traffic as proof that a
 device is alive right now. Distributed clicks are confirmed only when target
 state is authoritative, and recovery probes are rate-limited so an unreachable
 device does not flood the broker.
+
+The Node-RED status text stays compact: it reports coordinator state plus device
+registry, bridge and controller reachability counts.
 
 JSON payloads are the default. MsgPack is available when your firmware supports
 it and the upstream `mqtt in` node preserves LSH payloads as Buffers.

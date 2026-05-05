@@ -53,6 +53,10 @@ homie/5/j1/$state
 LSH runtime topics are subscribed with QoS 2. Homie lifecycle topics are
 subscribed with QoS 1.
 
+The node editor shows this exact topic set before deploy. If you import a
+generated `lsh-stack-config/v1` file from `lsh-core`, the preview uses the QoS
+values from that stack export instead of the built-in defaults.
+
 ## What Output 4 Emits
 
 When the effective topic set changes, the node sends one subscribe control

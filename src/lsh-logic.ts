@@ -66,6 +66,9 @@ export class LshLogicNode {
   private readonly initPromise: Promise<void>;
   private isClosing = false;
   private lastSubscriptionSignature: string | null = null;
+  private coordinatorStatus: CoordinatorStatus = "stopped";
+  private registrySnapshot: DeviceRegistrySnapshot = {};
+  private configuredDeviceCount = 0;
 
   public constructor(node: Node, config: LshLogicNodeDef) {
     this.node = node;
@@ -128,7 +131,8 @@ export class LshLogicNode {
 
   private wireCoordinatorEvents(): void {
     this.coordinator.on("status", (status) => {
-      this.node.status(STATUS_BY_COORDINATOR_STATUS[status]);
+      this.coordinatorStatus = status;
+      this.refreshNodeStatus();
     });
 
     this.coordinator.on("log", (message) => this.node.log(message));
@@ -152,10 +156,14 @@ export class LshLogicNode {
     });
 
     this.coordinator.on("state", ({ devices, lastUpdated }) => {
+      this.registrySnapshot = devices;
+      this.refreshNodeStatus();
       this.exportState(devices, lastUpdated);
     });
 
     this.coordinator.on("config", (systemConfig) => {
+      this.configuredDeviceCount = systemConfig.devices.length;
+      this.refreshNodeStatus();
       this.exportConfig(systemConfig);
       this.emitSubscriptionMessages();
     });
@@ -235,6 +243,29 @@ export class LshLogicNode {
       all: allTopics,
       lastUpdated: Date.now(),
     });
+  }
+
+  private refreshNodeStatus(): void {
+    const status = STATUS_BY_COORDINATOR_STATUS[this.coordinatorStatus];
+    this.node.status({
+      ...status,
+      text: this.formatCompactStatusText(status.text),
+    });
+  }
+
+  private formatCompactStatusText(baseText: string): string {
+    const devices = Object.values(this.registrySnapshot);
+    const deviceCount = Math.max(devices.length, this.configuredDeviceCount);
+    if (deviceCount === 0) {
+      return baseText;
+    }
+
+    const bridgeOnline = devices.filter((device) => device.bridgeConnected).length;
+    const controllerOnline = devices.filter(
+      (device) => device.controllerLinkConnected ?? device.connected,
+    ).length;
+
+    return `${baseText} d:${deviceCount} b:${bridgeOnline}/${deviceCount} c:${controllerOnline}/${deviceCount}`;
   }
 
   private getContext(contextName: "flow" | "global"): ContextStore {
