@@ -7,7 +7,7 @@ type MockContextStore = {
 };
 
 export type MockNodeInstance = jest.Mocked<
-  Pick<Node, "on" | "send" | "log" | "warn" | "error" | "status" | "context">
+  Pick<Node, "on" | "send" | "log" | "warn" | "error" | "debug" | "status" | "context">
 > & {
   id: string;
   type: string;
@@ -73,6 +73,7 @@ export function createMockNode(): MockNodeInstance {
     log: jest.fn(),
     warn: jest.fn(),
     error: jest.fn(),
+    debug: jest.fn(),
     status: jest.fn(),
     context: jest.fn().mockReturnValue({ flow, global }),
     __context: { flow, global },

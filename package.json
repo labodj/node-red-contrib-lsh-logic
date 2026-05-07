@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "description": "A Node-RED node for coordinating devices that implement the public LSH MQTT/protocol contract.",
   "main": "dist/lsh-logic.js",
   "scripts": {

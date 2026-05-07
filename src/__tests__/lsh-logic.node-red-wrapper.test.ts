@@ -373,7 +373,7 @@ describe("LshLogicNode wrapper", () => {
     instance.getCoordinator().emit("config", systemConfig);
 
     expect(getOutputFrames(node, NodeOutput.Configuration)).toHaveLength(sendCount);
-    expect(node.log).toHaveBeenCalledWith(
+    expect(node.debug).toHaveBeenCalledWith(
       "MQTT topic set unchanged. Skipping runtime subscription reconfiguration.",
     );
   });

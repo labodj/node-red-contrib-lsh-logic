@@ -103,7 +103,7 @@ export class LshLogicNode {
     try {
       this.node.status({ fill: "blue", shape: "dot", text: "Initializing" });
       await this.coordinator.start();
-      this.node.log("Node initialized and inline configuration loaded.");
+      this.node.debug("Node initialized and inline configuration loaded.");
     } catch (error) {
       this.node.error(`Critical error during initialization: ${this.toErrorMessage(error)}`);
       this.node.status({ fill: "red", shape: "ring", text: "Config Error" });
@@ -135,7 +135,7 @@ export class LshLogicNode {
       this.refreshNodeStatus();
     });
 
-    this.coordinator.on("log", (message) => this.node.log(message));
+    this.coordinator.on("log", (message) => this.node.debug(message));
     this.coordinator.on("warning", (message) => this.node.warn(message));
     this.coordinator.on("error", (message) => this.node.error(message));
 
@@ -202,10 +202,10 @@ export class LshLogicNode {
 
     if (signature !== this.lastSubscriptionSignature) {
       this.lastSubscriptionSignature = signature;
-      this.node.log("MQTT topic set changed. Reconfiguring runtime subscriptions.");
+      this.node.debug("MQTT topic set changed. Reconfiguring runtime subscriptions.");
       this.send({ [NodeOutput.Configuration]: subscriptionMessages as unknown as NodeMessage[] });
     } else {
-      this.node.log("MQTT topic set unchanged. Skipping runtime subscription reconfiguration.");
+      this.node.debug("MQTT topic set unchanged. Skipping runtime subscription reconfiguration.");
     }
 
     this.exportTopics(Object.keys(subscriptions).sort());
