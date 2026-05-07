@@ -320,6 +320,33 @@
     }
   };
 
+  const resizeSystemConfigEditor = (node) => {
+    const editor = node._lshSystemConfigEditor;
+    const container = document.getElementById("node-input-systemConfigJson-editor");
+    if (!editor || !container) {
+      return;
+    }
+
+    const width = Math.floor(container.clientWidth);
+    const height = Math.floor(container.clientHeight);
+    if (width > 0 && height > 0 && typeof editor.layout === "function") {
+      editor.layout({ width, height });
+      return;
+    }
+    if (typeof editor.resize === "function") {
+      editor.resize(true);
+    }
+  };
+
+  const scheduleSystemConfigEditorResize = (node) => {
+    const resize = () => resizeSystemConfigEditor(node);
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(resize);
+    }
+    setTimeout(resize, 0);
+    setTimeout(resize, 50);
+  };
+
   RED.nodes.registerType("lsh-logic", {
     category: "function",
     color: "#4a90e2",
@@ -694,6 +721,7 @@
           value: String($("#node-input-systemConfigJson").val() || ""),
         });
         configureSystemConfigEditor(node._lshSystemConfigEditor);
+        scheduleSystemConfigEditorResize(node);
       } else {
         $("#node-input-systemConfigJson").show();
         $("#node-input-systemConfigJson").on("change keyup", refreshSystemConfigTools);
@@ -712,7 +740,7 @@
       destroySystemConfigEditor(this);
     },
     oneditresize: function () {
-      this._lshSystemConfigEditor?.resize();
+      scheduleSystemConfigEditorResize(this);
     },
     inputLabels: "MQTT Messages",
     outputLabels: ["LSH Commands", "Other Actor Commands", "Alerts", "Configuration", "Debug"],
