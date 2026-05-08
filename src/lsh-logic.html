@@ -313,11 +313,23 @@
     return parseSystemConfigForEditor(value).valid;
   };
 
+  const SYSTEM_CONFIG_EDITOR_HEIGHT = 260;
+
   const destroySystemConfigEditor = (node) => {
     if (node._lshSystemConfigEditor) {
       node._lshSystemConfigEditor.destroy();
       delete node._lshSystemConfigEditor;
     }
+  };
+
+  const lockSystemConfigEditorContainerHeight = (container) => {
+    if (!container) {
+      return;
+    }
+
+    container.style.height = `${SYSTEM_CONFIG_EDITOR_HEIGHT}px`;
+    container.style.maxHeight = `${SYSTEM_CONFIG_EDITOR_HEIGHT}px`;
+    container.style.overflow = "hidden";
   };
 
   const resizeSystemConfigEditor = (node) => {
@@ -327,8 +339,9 @@
       return;
     }
 
+    lockSystemConfigEditorContainerHeight(container);
     const width = Math.floor(container.clientWidth);
-    const height = Math.floor(container.clientHeight);
+    const height = Math.floor(container.clientHeight || SYSTEM_CONFIG_EDITOR_HEIGHT);
     if (width > 0 && height > 0 && typeof editor.layout === "function") {
       editor.layout({ width, height });
       return;
@@ -715,6 +728,9 @@
 
       $("#node-input-systemConfigJson").hide();
       if (RED.editor?.createEditor) {
+        lockSystemConfigEditorContainerHeight(
+          document.getElementById("node-input-systemConfigJson-editor"),
+        );
         node._lshSystemConfigEditor = RED.editor.createEditor({
           id: "node-input-systemConfigJson-editor",
           mode: "ace/mode/json",
@@ -806,7 +822,10 @@
     .lsh-system-config-editor {
       box-sizing: border-box;
       width: calc(100% - 110px);
+      height: 260px;
       min-height: 260px;
+      max-height: 260px;
+      overflow: hidden;
       border: 1px solid #ccc;
       border-radius: 4px;
     }
