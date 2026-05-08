@@ -640,8 +640,42 @@
       };
 
       const insertIntoEditor = (snippet) => {
-        if (node._lshSystemConfigEditor?.insert) {
-          node._lshSystemConfigEditor.insert(snippet);
+        const editor = node._lshSystemConfigEditor;
+        if (editor) {
+          const before = typeof editor.getValue === "function" ? editor.getValue() : "";
+          let inserted = false;
+
+          if (typeof editor.insert === "function") {
+            try {
+              if (typeof editor.getCursorPosition === "function") {
+                const position = editor.getCursorPosition();
+                if (
+                  Number.isFinite(position?.row) &&
+                  Number.isFinite(position?.column) &&
+                  editor.insert.length >= 2
+                ) {
+                  editor.insert(position, snippet);
+                  inserted = typeof editor.getValue !== "function" || editor.getValue() !== before;
+                }
+              }
+
+              if (!inserted) {
+                editor.insert(snippet);
+                inserted = typeof editor.getValue !== "function" || editor.getValue() !== before;
+              }
+            } catch {
+              inserted = false;
+            }
+          }
+
+          if (!inserted && typeof editor.setValue === "function") {
+            editor.setValue(`${before}${snippet}`, -1);
+          }
+
+          if (typeof editor.getValue === "function") {
+            $("#node-input-systemConfigJson").val(editor.getValue()).trigger("change");
+          }
+          refreshSystemConfigTools();
           return;
         }
 
