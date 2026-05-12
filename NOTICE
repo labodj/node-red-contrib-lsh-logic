@@ -3,5 +3,4 @@ Copyright 2026 Jacopo Labardi
 
 This product includes software developed by Jacopo Labardi and contributors.
 
-The package vendors the public LSH protocol documentation from the
-labodj/lsh-protocol project.
+The LSH protocol reference is maintained by the labodj/lsh-protocol project.

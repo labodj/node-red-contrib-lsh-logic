@@ -19,15 +19,6 @@ const allowedFilePatterns = [
   /^docs\/[^.][\w./-]*\.md$/,
   /^examples\/[^.][\w./-]*\.json$/,
   /^images\/[^.][\w./-]*\.(png|jpg|jpeg|webp)$/,
-  /^vendor\/lsh-protocol\/DOCS\.md$/,
-  /^vendor\/lsh-protocol\/README\.md$/,
-  /^vendor\/lsh-protocol\/LICENSE$/,
-  /^vendor\/lsh-protocol\/NOTICE$/,
-  /^vendor\/lsh-protocol\/CITATION\.cff$/,
-  /^vendor\/lsh-protocol\/docs\/profiles-and-roles\.md$/,
-  /^vendor\/lsh-protocol\/shared\/lsh_protocol\.md$/,
-  /^vendor\/lsh-protocol\/shared\/lsh_protocol\.schema\.json$/,
-  /^vendor\/lsh-protocol\/shared\/lsh_protocol_manifest\.json$/,
 ];
 
 const requiredFiles = [

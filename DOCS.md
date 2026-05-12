@@ -19,14 +19,14 @@ That path is enough for most installations.
 
 ## Common Tasks
 
-| Task                                              | Read this first                                                 |
-| ------------------------------------------------- | --------------------------------------------------------------- |
-| Add or rename an LSH device                       | [Configuration](docs/CONFIGURATION.md)                          |
-| Wire the MQTT input without broad wildcard topics | [Dynamic subscriptions](docs/DYNAMIC_SUBSCRIPTIONS.md)          |
-| Route a long click to an external flow            | [Configuration](docs/CONFIGURATION.md#other-actors)             |
-| Use optional Home Assistant discovery             | [Optional discovery](docs/COMPANION_DISCOVERY.md)               |
-| Understand startup, watchdog, and recovery        | [Lifecycle contract](LIFECYCLE.md)                              |
-| Check the MQTT/protocol source of truth           | [Vendored protocol](vendor/lsh-protocol/shared/lsh_protocol.md) |
+| Task                                              | Read this first                                                                                      |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Add or rename an LSH device                       | [Configuration](docs/CONFIGURATION.md)                                                               |
+| Wire the MQTT input without broad wildcard topics | [Dynamic subscriptions](docs/DYNAMIC_SUBSCRIPTIONS.md)                                               |
+| Route a long click to an external flow            | [Configuration](docs/CONFIGURATION.md#other-actors)                                                  |
+| Use optional Home Assistant discovery             | [Optional discovery](docs/COMPANION_DISCOVERY.md)                                                    |
+| Understand startup, watchdog, and recovery        | [Lifecycle contract](LIFECYCLE.md)                                                                   |
+| Check the MQTT/protocol source of truth           | [Shared protocol reference](https://github.com/labodj/lsh-protocol/blob/main/shared/lsh_protocol.md) |
 
 ## How the Pieces Fit
 
