@@ -240,9 +240,14 @@ error. Fix the JSON in the editor and deploy again.
 Context exports are optional. Enable them when you want dashboards, debug flows,
 or observability.
 
-- Internal state export gives you the live device registry.
-- Topic export gives you the MQTT subscription set generated from config.
-- Effective config export gives you the parsed runtime config after validation.
+- Internal state export gives you a detached snapshot of the live device
+  registry.
+- Topic export gives you the MQTT subscription set generated from config:
+  grouped `lsh`, `homie`, and `all` topic arrays, plus a `subscriptions` map
+  keyed by topic with QoS values.
+- Effective config export gives you the normalized Node-RED node configuration
+  as a flat object, plus `systemConfig` with the parsed inline JSON and
+  `lastUpdated`.
 
 For normal production flows, it is fine to leave internal state and effective
 config exports disabled and keep only topic export enabled if you use dynamic

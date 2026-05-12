@@ -1,5 +1,5 @@
 import { ClickType, LSH_WIRE_PROTOCOL_MAJOR, LshProtocol } from "labo-smart-home-coordinator";
-import type { SystemConfig } from "labo-smart-home-coordinator";
+import type { DeviceRegistrySnapshot, SystemConfig } from "labo-smart-home-coordinator";
 
 import { LshLogicNode } from "../lsh-logic";
 import { normalizeNodeConfig } from "../lsh-logic.config";
@@ -103,12 +103,26 @@ describe("LshLogicNode wrapper", () => {
     expect(node.__context.flow.set).toHaveBeenCalledWith(
       "lsh_topics",
       expect.objectContaining({
+        lsh: expect.arrayContaining(["LSH/source/conf", "LSH/target/state"]),
+        homie: expect.arrayContaining(["homie/5/source/$state", "homie/5/target/$state"]),
         all: expect.arrayContaining(["LSH/source/conf", "homie/5/source/$state"]),
+        subscriptions: expect.objectContaining({
+          "LSH/source/conf": { qos: 2 },
+          "homie/5/source/$state": { qos: 1 },
+        }),
       }),
     );
     expect(node.__context.global.set).toHaveBeenCalledWith(
       "lsh_config",
-      expect.objectContaining({ devices: expect.any(Array) }),
+      expect.objectContaining({
+        exposeStateKey: "lsh_state",
+        homieBasePath: "homie/5/",
+        lshBasePath: "LSH/",
+        protocol: "json",
+        type: "lsh-logic",
+        systemConfig: expect.objectContaining({ devices: expect.any(Array) }),
+        lastUpdated: expect.any(Number),
+      }),
     );
     expect(node.__context.global.set).toHaveBeenCalledWith(
       "lsh_state",
@@ -278,6 +292,87 @@ describe("LshLogicNode wrapper", () => {
       shape: "dot",
       text: "Ready d:2 b:2/2 c:1/2",
     });
+  });
+
+  it("exports detached internal state snapshots", async () => {
+    const node = createMockNode();
+    const instance = createInstance(node, {
+      ...defaultNodeConfig,
+      exposeStateContext: "global",
+      exposeStateKey: "lsh_state",
+    });
+    await instance.flush();
+
+    const devices: DeviceRegistrySnapshot = {
+      source: {
+        name: "source",
+        connected: true,
+        controllerLinkConnected: true,
+        isHealthy: true,
+        isStale: false,
+        lastSeenTime: 1,
+        bridgeConnected: true,
+        bridgeLastSeenTime: 1,
+        lastHomieState: "ready",
+        lastHomieStateTime: 1,
+        lastDetailsTime: 1,
+        lastStateTime: 1,
+        actuatorsIDs: [1],
+        buttonsIDs: [1],
+        actuatorStates: [false],
+        actuatorIndexes: { 1: 0 },
+        alertSent: false,
+      },
+    };
+
+    instance.getCoordinator().emit("state", { devices, lastUpdated: 100 });
+    const firstExport = node.__context.global.set.mock.calls.at(-1)?.[1] as {
+      devices: { source: { actuatorStates: boolean[] } };
+    };
+    firstExport.devices.source.actuatorStates[0] = true;
+
+    instance.getCoordinator().emit("state", { devices, lastUpdated: 200 });
+    const lastExport = node.__context.global.set.mock.calls.at(-1)?.[1] as {
+      devices: { source: { actuatorStates: boolean[] } };
+      lastUpdated: number;
+    };
+
+    expect(lastExport.devices.source.actuatorStates).toEqual([false]);
+    expect(lastExport.lastUpdated).toBe(200);
+  });
+
+  it("exports detached effective Node-RED config snapshots", async () => {
+    const node = createMockNode();
+    const instance = createInstance(node, {
+      ...defaultNodeConfig,
+      exposeConfigContext: "global",
+      exposeConfigKey: "lsh_config",
+    });
+    await instance.flush();
+
+    const firstExport = node.__context.global.set.mock.calls.find(
+      ([key]) => key === "lsh_config",
+    )?.[1] as
+      | {
+          exposeStateKey: string;
+          systemConfig: SystemConfig;
+        }
+      | undefined;
+
+    expect(firstExport).toBeDefined();
+    firstExport!.exposeStateKey = "mutated_state_key";
+    firstExport!.systemConfig.devices[0].name = "mutated-device";
+
+    const systemConfig = JSON.parse(defaultNodeConfig.systemConfigJson) as SystemConfig;
+    instance.getCoordinator().emit("config", systemConfig);
+
+    const lastExport = node.__context.global.set.mock.calls.at(-1)?.[1] as {
+      exposeStateKey: string;
+      systemConfig: SystemConfig;
+    };
+
+    expect(lastExport.exposeStateKey).toBe("lsh_state");
+    expect(lastExport.systemConfig.devices[0].name).toBe("source");
   });
 
   it("fails fast on invalid inline JSON", () => {

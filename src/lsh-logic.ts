@@ -15,6 +15,7 @@ import {
   buildNodeRedSubscriptionMessages,
 } from "labo-smart-home-coordinator";
 import type {
+  CoordinatorSubscriptionMap,
   CoordinatorStatus,
   DeviceRegistrySnapshot,
   SystemConfig,
@@ -36,6 +37,19 @@ type StatusShape = {
 };
 
 type OutputMap = Partial<Record<NodeOutput, NodeMessage | NodeMessage[]>>;
+
+type EffectiveConfigExport = LshLogicNodeDef & {
+  systemConfig: SystemConfig;
+  lastUpdated: number;
+};
+
+type TopicExport = {
+  lsh: string[];
+  homie: string[];
+  all: string[];
+  subscriptions: CoordinatorSubscriptionMap;
+  lastUpdated: number;
+};
 
 const NODE_OUTPUT_COUNT = 5;
 
@@ -208,7 +222,7 @@ export class LshLogicNode {
       this.node.debug("MQTT topic set unchanged. Skipping runtime subscription reconfiguration.");
     }
 
-    this.exportTopics(Object.keys(subscriptions).sort());
+    this.exportTopics(subscriptions);
   }
 
   private exportState(devices: DeviceRegistrySnapshot, lastUpdated: number): void {
@@ -217,7 +231,7 @@ export class LshLogicNode {
     }
 
     this.getContext(this.config.exposeStateContext).set(this.config.exposeStateKey, {
-      devices,
+      devices: structuredClone(devices),
       lastUpdated,
     });
   }
@@ -227,22 +241,39 @@ export class LshLogicNode {
       return;
     }
 
-    this.getContext(this.config.exposeConfigContext).set(this.config.exposeConfigKey, systemConfig);
+    const effectiveConfig: EffectiveConfigExport = {
+      ...structuredClone(this.config),
+      systemConfig: structuredClone(systemConfig),
+      lastUpdated: Date.now(),
+    };
+
+    this.getContext(this.config.exposeConfigContext).set(
+      this.config.exposeConfigKey,
+      effectiveConfig,
+    );
   }
 
-  private exportTopics(allTopics: string[]): void {
+  private exportTopics(subscriptions: CoordinatorSubscriptionMap): void {
     if (this.config.exportTopics === "none") {
       return;
     }
 
+    const allTopics = Object.keys(subscriptions).sort();
     const lshTopics = allTopics.filter((topic) => topic.startsWith(this.config.lshBasePath));
     const homieTopics = allTopics.filter((topic) => topic.startsWith(this.config.homieBasePath));
-    this.getContext(this.config.exportTopics).set(this.config.exportTopicsKey, {
+    const subscriptionSnapshot = allTopics.reduce<CoordinatorSubscriptionMap>((snapshot, topic) => {
+      snapshot[topic] = { ...subscriptions[topic] };
+      return snapshot;
+    }, {});
+    const topicExport: TopicExport = {
       lsh: lshTopics,
       homie: homieTopics,
       all: allTopics,
+      subscriptions: subscriptionSnapshot,
       lastUpdated: Date.now(),
-    });
+    };
+
+    this.getContext(this.config.exportTopics).set(this.config.exportTopicsKey, topicExport);
   }
 
   private refreshNodeStatus(): void {
