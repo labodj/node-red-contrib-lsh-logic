@@ -177,9 +177,16 @@
       return;
     }
 
-    actor.actuators.forEach((actuatorId, index) =>
-      validatePositiveInteger(actuatorId, `${path}.actuators[${index}]`, errors),
-    );
+    const seenActuatorIds = new Set();
+    actor.actuators.forEach((actuatorId, index) => {
+      validatePositiveInteger(actuatorId, `${path}.actuators[${index}]`, errors);
+      if (Number.isInteger(actuatorId) && actuatorId >= 1) {
+        if (seenActuatorIds.has(actuatorId)) {
+          errors.push(`${path}.actuators[${index}] duplicates another actuator id.`);
+        }
+        seenActuatorIds.add(actuatorId);
+      }
+    });
     if (actor.allActuators === true && actor.actuators.length !== 0) {
       errors.push(`${path}.actuators must be empty when allActuators is true.`);
     }
@@ -197,6 +204,7 @@
       return;
     }
 
+    const seenActionIds = new Set();
     actions.forEach((action, actionIndex) => {
       const actionPath = `${path}[${actionIndex}]`;
       if (!isPlainObject(action)) {
@@ -206,24 +214,43 @@
 
       validateKnownKeys(action, BUTTON_ACTION_KEYS, actionPath, errors);
       validatePositiveInteger(action.id, `${actionPath}.id`, errors);
+      if (Number.isInteger(action.id) && action.id >= 1) {
+        if (seenActionIds.has(action.id)) {
+          errors.push(`${actionPath}.id duplicates another button action id.`);
+        }
+        seenActionIds.add(action.id);
+      }
 
       if (action.actors !== undefined && !Array.isArray(action.actors)) {
         errors.push(`${actionPath}.actors must be an array.`);
       }
       if (Array.isArray(action.actors)) {
-        action.actors.forEach((actor, actorIndex) =>
-          validateActor(actor, `${actionPath}.actors[${actorIndex}]`, deviceNames, errors),
-        );
+        const seenActorNames = new Set();
+        action.actors.forEach((actor, actorIndex) => {
+          validateActor(actor, `${actionPath}.actors[${actorIndex}]`, deviceNames, errors);
+          if (isPlainObject(actor) && typeof actor.name === "string") {
+            if (seenActorNames.has(actor.name)) {
+              errors.push(`${actionPath}.actors[${actorIndex}].name duplicates another actor.`);
+            }
+            seenActorNames.add(actor.name);
+          }
+        });
       }
 
       if (action.otherActors !== undefined && !Array.isArray(action.otherActors)) {
         errors.push(`${actionPath}.otherActors must be an array.`);
       }
       if (Array.isArray(action.otherActors)) {
+        const seenOtherActors = new Set();
         action.otherActors.forEach((actorName, actorIndex) => {
           if (typeof actorName !== "string" || actorName.trim().length === 0) {
             errors.push(`${actionPath}.otherActors[${actorIndex}] must be a non-empty string.`);
+            return;
           }
+          if (seenOtherActors.has(actorName)) {
+            errors.push(`${actionPath}.otherActors[${actorIndex}] duplicates another otherActor.`);
+          }
+          seenOtherActors.add(actorName);
         });
       }
 

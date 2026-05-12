@@ -12,6 +12,9 @@ import type { SystemConfig } from "labo-smart-home-coordinator";
 
 import type { LshLogicNodeDef } from "./types";
 
+type OptionalContextName = LshLogicNodeDef["exposeStateContext"];
+type RequiredContextName = LshLogicNodeDef["otherActorsContext"];
+
 const normalizeRequiredString = (value: string, fieldName: string): string => {
   const normalized = String(value ?? "").trim();
   if (normalized.length === 0) {
@@ -20,10 +23,24 @@ const normalizeRequiredString = (value: string, fieldName: string): string => {
   return normalized;
 };
 
+const normalizeOptionalContextName = (value: unknown, fieldName: string): OptionalContextName => {
+  if (value === "none" || value === "flow" || value === "global") {
+    return value;
+  }
+  throw new Error(`${fieldName} must be none, flow or global.`);
+};
+
+const normalizeRequiredContextName = (value: unknown, fieldName: string): RequiredContextName => {
+  if (value === "flow" || value === "global") {
+    return value;
+  }
+  throw new Error(`${fieldName} must be flow or global.`);
+};
+
 const normalizeContextKey = (
   value: string,
   fieldName: string,
-  contextName: "none" | "flow" | "global",
+  contextName: OptionalContextName,
 ): string => {
   const normalized = String(value ?? "").trim();
   if (contextName !== "none" && normalized.length === 0) {
@@ -49,25 +66,38 @@ export const normalizeNodeConfig = (config: LshLogicNodeDef): LshLogicNodeDef =>
     pingTimeout: config.pingTimeout,
     initialStateTimeout: config.initialStateTimeout,
   });
+  const exposeStateContext = normalizeOptionalContextName(
+    config.exposeStateContext,
+    "State Context",
+  );
+  const exportTopics = normalizeOptionalContextName(config.exportTopics, "Topic Export Context");
+  const exposeConfigContext = normalizeOptionalContextName(
+    config.exposeConfigContext,
+    "Config Context",
+  );
+  const otherActorsContext = normalizeRequiredContextName(
+    config.otherActorsContext,
+    "Other Actors Context",
+  );
 
   return {
     ...config,
     ...coordinatorOptions,
+    exposeStateContext,
+    exportTopics,
+    exposeConfigContext,
+    otherActorsContext,
     systemConfigJson: normalizeRequiredString(config.systemConfigJson, "System Config JSON"),
     exposeStateKey: normalizeContextKey(
       config.exposeStateKey,
       "State Context Key",
-      config.exposeStateContext,
+      exposeStateContext,
     ),
-    exportTopicsKey: normalizeContextKey(
-      config.exportTopicsKey,
-      "Topic Context Key",
-      config.exportTopics,
-    ),
+    exportTopicsKey: normalizeContextKey(config.exportTopicsKey, "Topic Context Key", exportTopics),
     exposeConfigKey: normalizeContextKey(
       config.exposeConfigKey,
       "Config Context Key",
-      config.exposeConfigContext,
+      exposeConfigContext,
     ),
   };
 };

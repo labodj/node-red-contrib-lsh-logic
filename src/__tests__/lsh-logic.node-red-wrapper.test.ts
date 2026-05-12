@@ -320,6 +320,20 @@ describe("LshLogicNode wrapper", () => {
         exposeStateKey: " ",
       }),
     ).toThrow("State Context Key cannot be empty");
+
+    expect(() =>
+      normalizeNodeConfig({
+        ...defaultNodeConfig,
+        exposeStateContext: "bad" as "flow",
+      }),
+    ).toThrow("State Context must be none, flow or global");
+
+    expect(() =>
+      normalizeNodeConfig({
+        ...defaultNodeConfig,
+        otherActorsContext: "none" as "flow",
+      }),
+    ).toThrow("Other Actors Context must be flow or global");
   });
 
   it("reports inbound processing errors through Node-RED done and error APIs", async () => {

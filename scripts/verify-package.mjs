@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const adjacentCoordinatorRoot = resolve(root, "..", "labo-smart-home-coordinator");
 const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
 
 const run = async (command, args, options = {}) => {
@@ -29,10 +30,55 @@ const ensureBuildExists = async () => {
   await access(join(root, "dist", "lsh-logic.html"));
 };
 
-const pack = async (destination) => {
-  const { stdout } = await run(npmBin, ["pack", "--json", "--pack-destination", destination]);
+const readJsonFile = async (path) => JSON.parse(await readFile(path, "utf8"));
+
+const readOptionalJsonFile = async (path) => {
+  try {
+    return await readJsonFile(path);
+  } catch {
+    return null;
+  }
+};
+
+const pack = async (packageRoot, destination) => {
+  const { stdout } = await run(npmBin, ["pack", "--json", "--pack-destination", destination], {
+    cwd: packageRoot,
+  });
   const [entry] = JSON.parse(stdout);
   return join(destination, entry.filename);
+};
+
+const localCoordinatorPackage = async () => {
+  try {
+    const packageJson = await readJsonFile(join(adjacentCoordinatorRoot, "package.json"));
+    if (packageJson.name !== "labo-smart-home-coordinator") {
+      return null;
+    }
+    return {
+      root: adjacentCoordinatorRoot,
+      version: packageJson.version,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const resolvedCoordinatorPackage = async (consumerDir) => {
+  const nestedPath = join(
+    consumerDir,
+    "node_modules",
+    "node-red-contrib-lsh-logic",
+    "node_modules",
+    "labo-smart-home-coordinator",
+    "package.json",
+  );
+  const nestedPackage = await readOptionalJsonFile(nestedPath);
+  if (nestedPackage !== null) {
+    return { path: nestedPath, packageJson: nestedPackage };
+  }
+
+  const rootPath = join(consumerDir, "node_modules", "labo-smart-home-coordinator", "package.json");
+  return { path: rootPath, packageJson: await readJsonFile(rootPath) };
 };
 
 const main = async () => {
@@ -44,8 +90,27 @@ const main = async () => {
     await mkdir(packagesDir);
     await mkdir(consumerDir);
 
-    const tarball = await pack(packagesDir);
+    const localCoordinator = await localCoordinatorPackage();
+    const coordinatorTarball =
+      localCoordinator === null ? null : await pack(localCoordinator.root, packagesDir);
+    const tarball = await pack(root, packagesDir);
     await writeFile(join(consumerDir, "package.json"), JSON.stringify({ private: true }, null, 2));
+    if (coordinatorTarball !== null) {
+      await run(
+        npmBin,
+        [
+          "install",
+          "--package-lock=false",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+          coordinatorTarball,
+        ],
+        {
+          cwd: consumerDir,
+        },
+      );
+    }
     await run(
       npmBin,
       ["install", "--package-lock=false", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
@@ -57,7 +122,16 @@ const main = async () => {
     await access(
       join(consumerDir, "node_modules", "node-red-contrib-lsh-logic", "dist", "lsh-logic.html"),
     );
-    await access(join(consumerDir, "node_modules", "labo-smart-home-coordinator", "package.json"));
+    const installedCoordinator = await resolvedCoordinatorPackage(consumerDir);
+    if (localCoordinator !== null) {
+      if (installedCoordinator.packageJson.version !== localCoordinator.version) {
+        throw new Error(
+          `Node-RED package resolved coordinator ${installedCoordinator.packageJson.version} ` +
+            `from ${installedCoordinator.path}, but local coordinator is ${localCoordinator.version}. ` +
+            "Update the dependency range before release.",
+        );
+      }
+    }
     await run(
       process.execPath,
       [
@@ -72,7 +146,9 @@ const main = async () => {
       { cwd: consumerDir },
     );
 
-    console.log(`Verified local Node-RED package install from ${tarball}`);
+    const coordinatorNote =
+      localCoordinator === null ? "" : ` with local coordinator ${localCoordinator.version}`;
+    console.log(`Verified local Node-RED package install from ${tarball}${coordinatorNote}`);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
