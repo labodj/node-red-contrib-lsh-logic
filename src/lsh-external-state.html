@@ -335,6 +335,18 @@
     <b>Context Ready Wait</b> expires. Set the wait to <code>0</code> for fail-fast behavior.
   </p>
 
+  <h3>Multiple Instances</h3>
+  <p>
+    Multiple <code>lsh-external-state</code> nodes can run side by side. They do not share hidden
+    state; each accepted message writes only the selected context, prefix and actor name. This is
+    useful when different integrations need different State Property, true/false lists, retained
+    policy, metadata policy, or fixed actor names.
+  </p>
+  <p>
+    Avoid writing the same actor under the same context and prefix from two helpers unless that is
+    deliberate. In that case the last accepted update wins.
+  </p>
+
   <h3>Outputs</h3>
   <p>
     When a state is stored, the node emits a normalized message with <code>msg.topic</code> set to

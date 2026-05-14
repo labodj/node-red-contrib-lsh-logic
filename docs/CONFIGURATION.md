@@ -40,16 +40,17 @@ must not end with `/`.
 
 For a typical LSH v5 setup:
 
-| Setting                 | Typical value                       |
-| ----------------------- | ----------------------------------- |
-| Homie Base Path         | `homie/5/`                          |
-| LSH Base Path           | `LSH/`                              |
-| Service Topic           | `LSH/Node-RED/SRV`                  |
-| LSH Protocol            | `JSON` unless firmware uses MsgPack |
-| System Config           | inline JSON in the node editor      |
-| Export MQTT Topics      | `flow`, key `lsh_topics`            |
-| Export Internal State   | `none` until you need debug         |
-| Export Effective Config | `none` until you need debug         |
+| Setting                   | Typical value                                      |
+| ------------------------- | -------------------------------------------------- |
+| Homie Base Path           | `homie/5/`                                         |
+| LSH Base Path             | `LSH/`                                             |
+| Service Topic             | `LSH/Node-RED/SRV`                                 |
+| LSH Protocol              | `JSON` unless firmware uses MsgPack                |
+| System Config             | inline JSON in the node editor                     |
+| Export MQTT Topics        | `flow`, key `lsh_topics`                           |
+| Export Internal State     | `none`, unless dashboards or sync helpers need it  |
+| Export Effective Config   | `none`, unless helper nodes need exported settings |
+| Read External Actor State | `flow` for same-flow state, `global` across flows  |
 
 The default timing values are intentionally conservative. Tune them only when
 you understand your bridge latency, controller timeout, and broker behavior.
@@ -264,6 +265,63 @@ For normal production flows, it is fine to leave internal state and effective
 config exports disabled and keep only topic export enabled if you use dynamic
 subscriptions.
 
+### Context Scope Choices
+
+The editor uses three context choices for optional exports:
+
+- `none` disables an optional export. Use it when no dashboard, debug flow or
+  helper node reads that data. This reduces context writes and avoids accidental
+  key collisions. `none` is not available for **Read External Actor State**
+  because that setting is a read location, not an export; if your System Config
+  has no `otherActors`, the selected read context is simply unused.
+- `flow` stores or reads data in the current Node-RED flow tab. Use it when the
+  `lsh-logic` node, its helper nodes and its MQTT wiring live together. It is
+  the safest scope for importable examples and self-contained installations
+  because another flow cannot accidentally read or overwrite the same keys.
+- `global` stores or reads data across flow tabs. Use it when external state is
+  collected in one flow and consumed by a coordinator in another, when dashboards
+  need cross-flow access, or when shared helper flows must read the same
+  coordinator exports. With `global`, choose explicit keys and prefixes because
+  every flow can see the same namespace.
+
+For `lsh-actuator-sync`, enable both **Export Internal State** and **Export
+Effective Config** on the owning `lsh-logic` node, then point the helper at the
+same context/key pair. For `lsh-external-state`, use the same context selected
+by `lsh-logic` in **Read External Actor State**.
+
+### Multiple LSH Logic Nodes
+
+You can run multiple `lsh-logic` nodes in the same Node-RED runtime. This is
+useful when you intentionally split responsibilities:
+
+- separate physical LSH installations or MQTT topic spaces;
+- production and test coordinators on the same Node-RED host;
+- independent floors, buildings or controller groups;
+- gradual migrations where one coordinator owns only a subset of devices.
+
+Each `lsh-logic` instance has its own in-memory coordinator. They do not share
+hidden runtime state, but they can still conflict through MQTT topics and
+Node-RED context keys. Keep these boundaries explicit:
+
+- avoid letting two coordinators command the same `homieBasePath` device and
+  actuator unless the duplication is deliberate;
+- use distinct `lshBasePath`, `homieBasePath` and `serviceTopic` values for
+  truly separate LSH stacks;
+- keep each `systemConfigJson` responsible for a clear, non-overlapping device
+  set;
+- use unique `exposeStateKey`, `exposeConfigKey` and `exportTopicsKey` values
+  whenever those exports are enabled;
+- use different `otherDevicesPrefix` values when two coordinators read external
+  actors with overlapping names;
+- point every helper node at the state/config exports of the coordinator it is
+  meant to support.
+
+Sharing `global` context is fine when it is intentional, for example when many
+flows publish external actor state for one coordinator. It becomes risky when
+several coordinators use the same default keys, because a helper may read the
+latest export from the wrong coordinator. Prefer `flow` for isolated flows and
+switch to `global` only when cross-flow sharing is part of the design.
+
 ## External State Helper
 
 `lsh-external-state` stores state for non-LSH actors used in `otherActors`. It
@@ -323,6 +381,33 @@ When the prefix is read from `lsh_config` and the config export is not ready
 yet, the helper keeps the latest update per actor and retries until **Context
 Ready Wait** expires. The default wait is `5000` ms. Set it to `0` for
 fail-fast behavior.
+
+### Multiple External State Helpers
+
+You can use multiple `lsh-external-state` nodes in the same Node-RED runtime.
+They do not share hidden runtime state; each accepted message writes only the
+configured context path:
+
+```text
+<storeContext>:<otherDevicesPrefix>.<actorName>.state
+```
+
+That makes multiple instances safe when each one writes a different actor name,
+or when separate flows intentionally use different context stores or prefixes.
+Use multiple helpers when it makes the flow clearer:
+
+- one helper per integration family, such as ESPHome, Zigbee2MQTT, Shelly or
+  Home Assistant;
+- one helper per room or functional area;
+- separate helpers for payloads that need different **State Property**,
+  true/false lists, retained-message policy or metadata policy;
+- fixed actor names for simple single-device flows, and message-derived actor
+  names for shared fan-in flows.
+
+Avoid wiring two helpers to write the same actor under the same context and
+prefix unless that is deliberate. In that case the last accepted update wins,
+which is useful for redundant state sources but confusing when two integrations
+can report different truth values for the same actor.
 
 ## Actuator Sync Helper
 
@@ -390,3 +475,33 @@ When **Require Known LSH State** is enabled and an external state arrives before
 not drop it immediately. It keeps the latest state per `deviceId/actuatorId` and
 retries until **Context Ready Wait** expires. The default wait is `5000` ms. Set
 it to `0` if you prefer the older fail-fast behavior.
+
+### Multiple Actuator Sync Helpers
+
+You can use multiple `lsh-actuator-sync` nodes in the same Node-RED runtime.
+They do not share hidden runtime state; each instance reads the configured
+`lsh_state` and `lsh_config` exports, then emits a command only for the
+`deviceId/actuatorId` carried by the current message.
+
+The safest pattern is one helper instance per downstream device, or one helper
+per small group of downstream devices that share the same policy. Multiple
+instances are useful when devices need different settings:
+
+- **Direction**, for example `OFF only` for powered smart lights and `Sync ON
+and OFF` for always-powered Shelly modules;
+- **Retained Messages**, when one integration has reliable retained state and
+  another does not;
+- **Command Cooldown**, when some devices publish noisy state bursts;
+- **State Property** and true/false parsing, when payloads come from different
+  systems;
+- **QoS**, when selected command paths need a stronger delivery policy.
+
+Do not run two sync helpers that can command the same LSH `deviceId/actuatorId`
+unless the duplication is intentional and externally de-duplicated. The helper
+will avoid commands when LSH is already aligned, but two independent instances
+watching the same target can still make the flow harder to reason about and may
+emit duplicate commands during rapid state changes.
+
+If a flow contains more than one `lsh-logic` node, give each coordinator unique
+state and config export keys. Point each `lsh-actuator-sync` instance at the
+matching pair so it never reads one coordinator and commands another.

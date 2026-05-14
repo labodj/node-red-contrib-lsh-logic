@@ -1315,9 +1315,30 @@
     <dt>Context Stores</dt>
     <dd>
       Optional exports for the live device registry, generated MQTT topic set and effective runtime
-      config. Useful for dashboards and debugging.
+      config. Useful for dashboards, debugging and helper nodes.
     </dd>
   </dl>
+
+  <h3>Context Scope</h3>
+  <p>
+    Use <b>Disabled</b> for optional exports that no flow reads. Use <b>Flow Context</b> when the
+    coordinator, helper nodes and MQTT wiring live in the same flow tab. Use
+    <b>Global Context</b> only when another flow must read or write the same data, such as shared
+    external actor state, dashboards, or helper flows.
+  </p>
+  <p>
+    <b>Read External Actor State</b> cannot be disabled because it is a read location, not an
+    export. If the System Config has no <code>otherActors</code>, the selected context is simply
+    unused.
+  </p>
+
+  <h3>Multiple LSH Logic Nodes</h3>
+  <p>
+    Multiple <code>lsh-logic</code> nodes can run in one Node-RED runtime when they own separate LSH
+    stacks, MQTT topic spaces, test flows, or controller groups. Keep their MQTT paths, exported
+    context keys and external-state prefixes separate. If helper nodes read exported state or
+    config, point each helper at the matching coordinator instance.
+  </p>
 
   <h3>Startup and Recovery</h3>
   <p>

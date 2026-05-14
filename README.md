@@ -92,6 +92,12 @@ The editor validates that JSON against the LSH System Config shape, offers
 LSH-specific JSON completions/snippets, previews the exact MQTT topic set, and
 can import the generated `lsh-stack-config/v1` export from `lsh-core`.
 
+Multiple `lsh-logic` nodes can run in the same Node-RED runtime when each one
+owns a distinct LSH stack, MQTT topic space, or isolated test flow. Keep their
+context export keys separate when helpers read exported state or config: use
+`flow` for self-contained flows, `global` when helper flows must share the same
+coordinator exports, and `none` when no flow needs that optional export.
+
 Start with a small config and add actions one at a time:
 
 ```json
@@ -155,6 +161,10 @@ the same context selected by the `lsh-logic` node in **Read External Actor
 State**. The prefix can come from the exported `lsh_config.otherDevicesPrefix`,
 which avoids mismatches when the main node uses a custom prefix.
 
+Multiple `lsh-external-state` nodes can run in the same Node-RED instance. They
+do not conflict when each instance stores a different actor, or when separated
+flows intentionally use different context stores or prefixes.
+
 Example import:
 [examples/lsh-external-state.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/lsh-external-state.json)
 
@@ -173,6 +183,10 @@ or Function node to add `msg.deviceId` and `msg.actuatorId`, then wire the helpe
 output to the same MQTT output used for LSH commands. If you run more than one
 `lsh-logic` node, give each one unique state/config export keys and point each
 helper instance at the matching keys.
+
+Multiple `lsh-actuator-sync` nodes can run side by side. The normal pattern is
+one helper policy per downstream device, or per group of devices that share the
+same retained-message, direction, cooldown and state-parsing rules.
 
 Example import:
 [examples/lsh-actuator-sync.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/lsh-actuator-sync.json)

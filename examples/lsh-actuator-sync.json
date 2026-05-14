@@ -233,7 +233,7 @@
     "type": "global-config",
     "env": [],
     "modules": {
-      "node-red-contrib-lsh-logic": "3.1.9"
+      "node-red-contrib-lsh-logic": "3.1.10"
     }
   }
 ]

@@ -300,9 +300,9 @@
   <h3>Startup Timing</h3>
   <p>
     If external state arrives before <code>lsh-logic</code> has exported authoritative actuator
-    state, the helper keeps the latest state per LSH device/actuator and retries until LSH Ready
-    Context Ready Wait expires. This avoids losing retained startup state while still preventing
-    commands based on incomplete LSH snapshots.
+    state, the helper keeps the latest state per LSH device/actuator and retries until
+    <b>Context Ready Wait</b> expires. This avoids losing retained startup state while still
+    preventing commands based on incomplete LSH snapshots.
   </p>
 
   <h3>Direction Policy</h3>
@@ -313,6 +313,19 @@
     downstream OFF back to LSH, but ignores downstream ON states that may only mean the device
     booted after power was restored. <b>ON only</b> is available for flows that should never switch
     an LSH actuator off.
+  </p>
+
+  <h3>Multiple Sync Helpers</h3>
+  <p>
+    Multiple <code>lsh-actuator-sync</code> nodes can run in the same runtime. Use separate
+    instances when downstream devices need different Direction, retained-message handling, cooldown,
+    QoS or state parsing. A common pattern is <b>OFF only</b> for powered smart lights and
+    <b>Sync ON and OFF</b> for always-powered modules such as Shelly devices.
+  </p>
+  <p>
+    Avoid two helpers commanding the same <code>deviceId</code>/<code>actuatorId</code> unless that
+    duplication is intentional. The helper suppresses commands when LSH is already aligned, but
+    duplicate watchers can still make rapid state changes harder to reason about.
   </p>
 
   <h3>Multiple LSH Nodes</h3>
