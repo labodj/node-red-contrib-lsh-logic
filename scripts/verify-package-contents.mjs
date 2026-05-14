@@ -40,9 +40,17 @@ const requiredFiles = [
   "dist/lsh-logic.html",
   "dist/node-red-runtime.js",
   "dist/node-red-runtime.d.ts",
-  "examples/lsh-logic-example.json",
+  "examples/lsh-actuator-sync.json",
+  "examples/lsh-external-state.json",
+  "examples/lsh-logic.json",
   "examples/inline-config.minimal.json",
   "examples/inline-config.multi-device.json",
+  "images/actuator-sync-flow.png",
+  "images/external-state-flow.png",
+  "images/logic-flow.png",
+  "images/lsh-actuator-sync-node.png",
+  "images/lsh-external-state-node.png",
+  "images/lsh-logic-node.png",
 ];
 
 const unexpected = files.filter(

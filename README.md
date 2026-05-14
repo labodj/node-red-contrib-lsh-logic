@@ -27,7 +27,7 @@ The original LSH installation uses Controllino controllers and ESP32 bridges,
 but the useful boundary is the protocol: if a device stack publishes the same
 LSH and Homie topics, this node can orchestrate it from Node-RED.
 
-![Node Appearance](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/node-appearance.png)
+![LSH Logic Node](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/lsh-logic-node.png)
 
 ## When to Use It
 
@@ -70,11 +70,14 @@ The usual flow is small:
 5. Wire output 4 back to the same `mqtt in` node for dynamic subscriptions.
 6. Use output 5 while developing or diagnosing a flow.
 
-![Dynamic MQTT Flow](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/dynamic_mqtt_listener.png)
+![LSH Logic Flow](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/logic-flow.png)
 
 Dynamic subscriptions are the recommended setup. Leave the `mqtt in` topic empty
 and let `lsh-logic` keep the topic list aligned with the devices in the inline
 System Config.
+
+Example import:
+[examples/lsh-logic.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/lsh-logic.json)
 
 ## Configure the Node
 
@@ -152,6 +155,11 @@ the same context selected by the `lsh-logic` node in **Read External Actor
 State**. The prefix can come from the exported `lsh_config.otherDevicesPrefix`,
 which avoids mismatches when the main node uses a custom prefix.
 
+Example import:
+[examples/lsh-external-state.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/lsh-external-state.json)
+
+![External State Flow](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/external-state-flow.png)
+
 ## Actuator Sync Helper
 
 Use `lsh-actuator-sync` when a smart device is powered through an LSH actuator
@@ -165,6 +173,11 @@ or Function node to add `msg.deviceId` and `msg.actuatorId`, then wire the helpe
 output to the same MQTT output used for LSH commands. If you run more than one
 `lsh-logic` node, give each one unique state/config export keys and point each
 helper instance at the matching keys.
+
+Example import:
+[examples/lsh-actuator-sync.json](https://github.com/labodj/node-red-contrib-lsh-logic/blob/main/examples/lsh-actuator-sync.json)
+
+![Actuator Sync Flow](https://raw.githubusercontent.com/labodj/node-red-contrib-lsh-logic/main/images/actuator-sync-flow.png)
 
 ## Runtime Behavior
 

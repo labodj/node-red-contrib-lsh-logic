@@ -14,21 +14,26 @@ Read these in order if you are setting up a new flow:
    Config JSON shape.
 3. [Dynamic subscriptions](docs/DYNAMIC_SUBSCRIPTIONS.md) for the recommended
    MQTT wiring pattern.
+4. Import [lsh-logic](examples/lsh-logic.json),
+   [lsh-external-state](examples/lsh-external-state.json), or
+   [lsh-actuator-sync](examples/lsh-actuator-sync.json) when you want a
+   concrete Node-RED starting point.
 
 That path is enough for most installations.
 
 ## Common Tasks
 
-| Task                                              | Read this first                                                                                      |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Add or rename an LSH device                       | [Configuration](docs/CONFIGURATION.md)                                                               |
-| Wire the MQTT input without broad wildcard topics | [Dynamic subscriptions](docs/DYNAMIC_SUBSCRIPTIONS.md)                                               |
-| Route a long click to an external flow            | [Configuration](docs/CONFIGURATION.md#other-actors)                                                  |
-| Store external actor state for smart toggles      | [External state helper](docs/CONFIGURATION.md#external-state-helper)                                 |
-| Sync a downstream smart device to an LSH relay    | [Actuator sync helper](docs/CONFIGURATION.md#actuator-sync-helper)                                   |
-| Use optional Home Assistant discovery             | [Optional discovery](docs/COMPANION_DISCOVERY.md)                                                    |
-| Understand startup, watchdog, and recovery        | [Lifecycle contract](LIFECYCLE.md)                                                                   |
-| Check the MQTT/protocol source of truth           | [Shared protocol reference](https://github.com/labodj/lsh-protocol/blob/main/shared/lsh_protocol.md) |
+| Task                                              | Read this first                                                                                                                            |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Add or rename an LSH device                       | [Configuration](docs/CONFIGURATION.md)                                                                                                     |
+| Wire the MQTT input without broad wildcard topics | [Dynamic subscriptions](docs/DYNAMIC_SUBSCRIPTIONS.md)                                                                                     |
+| Route a long click to an external flow            | [Configuration](docs/CONFIGURATION.md#other-actors)                                                                                        |
+| Store external actor state for smart toggles      | [External state helper](docs/CONFIGURATION.md#external-state-helper)                                                                       |
+| Sync a downstream smart device to an LSH relay    | [Actuator sync helper](docs/CONFIGURATION.md#actuator-sync-helper)                                                                         |
+| Import example flows                              | [LSH logic](examples/lsh-logic.json), [external state](examples/lsh-external-state.json), [actuator sync](examples/lsh-actuator-sync.json) |
+| Use optional Home Assistant discovery             | [Optional discovery](docs/COMPANION_DISCOVERY.md)                                                                                          |
+| Understand startup, watchdog, and recovery        | [Lifecycle contract](LIFECYCLE.md)                                                                                                         |
+| Check the MQTT/protocol source of truth           | [Shared protocol reference](https://github.com/labodj/lsh-protocol/blob/main/shared/lsh_protocol.md)                                       |
 
 ## How the Pieces Fit
 
