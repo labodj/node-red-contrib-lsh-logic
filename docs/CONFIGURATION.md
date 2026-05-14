@@ -252,3 +252,69 @@ or observability.
 For normal production flows, it is fine to leave internal state and effective
 config exports disabled and keep only topic export enabled if you use dynamic
 subscriptions.
+
+## Actuator Sync Helper
+
+`lsh-actuator-sync` is a separate helper node for a specific edge case: a smart
+device is powered by an LSH relay or actuator, but it can also change state from
+another system such as Home Assistant, Shelly, ESPHome or a vendor app.
+
+The helper does not subscribe to those systems directly. Keep that integration
+in normal Node-RED nodes, then pass a clean state message into the helper.
+
+Recommended wiring:
+
+1. Enable **Export Internal State** and **Export Effective Config** on the
+   `lsh-logic` node that owns the upstream actuator.
+2. Use unique export keys when a flow has more than one `lsh-logic` node.
+3. Feed external state updates into `lsh-actuator-sync`.
+4. Add the target LSH device and actuator to each message, usually with a Change
+   node.
+5. Wire the helper output to the same MQTT output used by `lsh-logic` commands.
+
+Default message contract:
+
+| Property         | Meaning                                    |
+| ---------------- | ------------------------------------------ |
+| `msg.payload`    | Desired downstream state.                  |
+| `msg.deviceId`   | Upstream LSH device id, for example `j1`.  |
+| `msg.actuatorId` | Upstream LSH actuator id, for example `7`. |
+
+The state property can be changed in the editor. Values are accepted as boolean,
+`1/0`, `true/false`, `on/off` or `yes/no`.
+
+The helper reads `homieBasePath` from the selected effective config export and
+the current actuator state from the selected internal state export. If the LSH
+state is already aligned, it emits nothing. If it differs, it emits:
+
+```json
+{
+  "topic": "homie/5/j1/7/state/set",
+  "payload": true,
+  "qos": 2,
+  "retain": false
+}
+```
+
+The default policy ignores retained external-state messages and requires an
+authoritative LSH state before commanding. Those defaults avoid surprising relay
+writes after a deploy or broker replay. Disable **Require LSH state** only when
+the external state should be applied even if the LSH registry has not caught up.
+
+Use **Direction** to limit which external state changes may command LSH:
+
+| Direction       | Use when                                                                  |
+| --------------- | ------------------------------------------------------------------------- |
+| Sync ON and OFF | The downstream device stays powered and reachable, such as a Shelly.      |
+| OFF only        | The downstream light loses power when LSH is off, such as a powered lamp. |
+| ON only         | A flow should never turn an LSH actuator off.                             |
+
+For powered smart lights, **OFF only** avoids treating a boot-time ON report as
+an instruction to turn LSH on. The helper can still mirror a deliberate
+downstream OFF back to LSH.
+
+When **Require LSH state** is enabled and an external state arrives before
+`lsh-logic` has exported an authoritative actuator snapshot, the helper does not
+drop it immediately. It keeps the latest state per `deviceId/actuatorId` and
+retries until **LSH Ready Wait** expires. The default wait is `5000` ms. Set it
+to `0` if you prefer the older fail-fast behavior.

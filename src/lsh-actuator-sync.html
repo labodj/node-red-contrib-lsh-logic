@@ -1,0 +1,318 @@
+<!-- Node-RED Registration Script -->
+<script type="text/javascript">
+  (function () {
+    const validateRequiredTrimmed = (value) => String(value || "").trim().length > 0;
+    const validateNonNegativeNumber = (value) => {
+      const numericValue = Number(value);
+      return Number.isFinite(numericValue) && numericValue >= 0;
+    };
+
+    RED.nodes.registerType("lsh-actuator-sync", {
+      category: "function",
+      color: "#4a90e2",
+      defaults: {
+        name: { value: "" },
+        stateContext: { value: "global", required: true },
+        stateKey: { value: "lsh_state", required: true, validate: validateRequiredTrimmed },
+        configContext: { value: "global", required: true },
+        configKey: { value: "lsh_config", required: true, validate: validateRequiredTrimmed },
+        desiredStateProperty: {
+          value: "payload",
+          required: true,
+          validate: validateRequiredTrimmed,
+        },
+        deviceIdProperty: {
+          value: "deviceId",
+          required: true,
+          validate: validateRequiredTrimmed,
+        },
+        actuatorIdProperty: {
+          value: "actuatorId",
+          required: true,
+          validate: validateRequiredTrimmed,
+        },
+        qos: { value: "2", required: true },
+        allowedDirection: { value: "both", required: true },
+        ignoreRetained: { value: true },
+        requireKnownState: { value: true },
+        commandCooldownMs: {
+          value: 0,
+          required: true,
+          validate: validateNonNegativeNumber,
+        },
+        stateWaitTimeoutMs: {
+          value: 5000,
+          required: true,
+          validate: validateNonNegativeNumber,
+        },
+      },
+      inputs: 1,
+      outputs: 1,
+      icon: "font-awesome/fa-exchange",
+      label: function () {
+        return this.name || "LSH Actuator Sync";
+      },
+      inputLabels: "External device state",
+      outputLabels: ["LSH state/set command"],
+    });
+  })();
+</script>
+
+<!-- Node Configuration Panel Template -->
+<script type="text/html" data-template-name="lsh-actuator-sync">
+  <style>
+    .lsh-sync-section {
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      padding: 15px;
+      margin-top: 20px;
+    }
+    .lsh-sync-section-title {
+      font-size: 14px;
+      font-weight: bold;
+      margin-bottom: 15px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 8px;
+      display: flex;
+      align-items: center;
+      color: #333;
+    }
+    .lsh-sync-section-title i {
+      margin-right: 10px;
+      color: #999;
+    }
+    .lsh-sync-tip {
+      display: block;
+      box-sizing: border-box;
+      margin-top: 5px;
+      margin-left: 110px;
+      max-width: calc(100% - 110px);
+      color: #666;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .lsh-sync-inline {
+      width: 70%;
+    }
+  </style>
+
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="LSH Actuator Sync" />
+  </div>
+
+  <div class="lsh-sync-section">
+    <div class="lsh-sync-section-title"><i class="fa fa-database"></i> LSH Context Exports</div>
+    <div class="form-row">
+      <label for="node-input-stateContext">State Store</label>
+      <select id="node-input-stateContext" class="lsh-sync-inline">
+        <option value="flow">Flow Context</option>
+        <option value="global">Global Context</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="node-input-stateKey">State Key</label>
+      <input type="text" id="node-input-stateKey" class="lsh-sync-inline" />
+      <span class="lsh-sync-tip"
+        >Must match the Internal State export key of the target <code>lsh-logic</code> node.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-configContext">Config Store</label>
+      <select id="node-input-configContext" class="lsh-sync-inline">
+        <option value="flow">Flow Context</option>
+        <option value="global">Global Context</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="node-input-configKey">Config Key</label>
+      <input type="text" id="node-input-configKey" class="lsh-sync-inline" />
+      <span class="lsh-sync-tip"
+        >Must match the Effective Config export key of the same <code>lsh-logic</code> node.</span
+      >
+    </div>
+  </div>
+
+  <div class="lsh-sync-section">
+    <div class="lsh-sync-section-title"><i class="fa fa-random"></i> Message Mapping</div>
+    <div class="form-row">
+      <label for="node-input-desiredStateProperty">State Property</label>
+      <input type="text" id="node-input-desiredStateProperty" class="lsh-sync-inline" />
+      <span class="lsh-sync-tip"
+        >Message property containing the downstream device state. Accepted values are boolean,
+        <code>1/0</code>, <code>true/false</code>, <code>on/off</code> and
+        <code>yes/no</code>.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-deviceIdProperty">Device ID Property</label>
+      <input type="text" id="node-input-deviceIdProperty" class="lsh-sync-inline" />
+      <span class="lsh-sync-tip"
+        >Message property containing the upstream LSH device id, for example <code>j1</code>.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-actuatorIdProperty">Actuator ID Property</label>
+      <input type="text" id="node-input-actuatorIdProperty" class="lsh-sync-inline" />
+      <span class="lsh-sync-tip"
+        >Message property containing the upstream LSH actuator id, for example <code>7</code>.</span
+      >
+    </div>
+  </div>
+
+  <div class="lsh-sync-section">
+    <div class="lsh-sync-section-title"><i class="fa fa-sliders"></i> Command Policy</div>
+    <div class="form-row">
+      <label for="node-input-qos">MQTT QoS</label>
+      <select id="node-input-qos" style="width: 80px;">
+        <option value="0">0</option>
+        <option value="1">1</option>
+        <option value="2">2</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="node-input-allowedDirection">Direction</label>
+      <select id="node-input-allowedDirection" class="lsh-sync-inline">
+        <option value="both">Sync ON and OFF</option>
+        <option value="off-only">OFF only</option>
+        <option value="on-only">ON only</option>
+      </select>
+      <span class="lsh-sync-tip"
+        >Limits which external state changes may command LSH. Use OFF only for downstream lights
+        that cannot be powered on through their own controller while the LSH relay is off.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-ignoreRetained">Ignore retained</label>
+      <input
+        type="checkbox"
+        id="node-input-ignoreRetained"
+        style="display: inline-block; width: auto; vertical-align: top;"
+      />
+      <span class="lsh-sync-tip"
+        >Prevents stale external MQTT state from commanding LSH immediately after deploy.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-requireKnownState">Require LSH state</label>
+      <input
+        type="checkbox"
+        id="node-input-requireKnownState"
+        style="display: inline-block; width: auto; vertical-align: top;"
+      />
+      <span class="lsh-sync-tip"
+        >Only command when the exported LSH actuator state is authoritative and differs from the
+        downstream state.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-commandCooldownMs">Cooldown (ms)</label>
+      <input
+        type="number"
+        id="node-input-commandCooldownMs"
+        style="width: 110px;"
+        min="0"
+        step="100"
+      />
+      <span class="lsh-sync-tip">Optional per-actuator guard against rapid feedback loops.</span>
+    </div>
+    <div class="form-row">
+      <label for="node-input-stateWaitTimeoutMs">LSH Ready Wait (ms)</label>
+      <input
+        type="number"
+        id="node-input-stateWaitTimeoutMs"
+        style="width: 110px;"
+        min="0"
+        step="100"
+      />
+      <span class="lsh-sync-tip"
+        >When LSH state/config exports are not ready yet, keep the latest state for each actuator
+        and retry until this timeout expires. Set to 0 to fail immediately.</span
+      >
+    </div>
+  </div>
+</script>
+
+<!-- The Help tab documentation for the node -->
+<script type="text/html" data-help-name="lsh-actuator-sync">
+  <p>
+    Helper node for synchronizing a downstream smart device state back to the LSH relay or actuator
+    that powers it.
+  </p>
+  <p>
+    The node reads the selected <code>lsh-logic</code> state and effective config exports. Each
+    input message identifies the LSH target with message properties such as
+    <code>msg.deviceId</code> and <code>msg.actuatorId</code>.
+  </p>
+
+  <h3>Recommended Wiring</h3>
+  <ol>
+    <li>
+      Enable Internal State and Effective Config exports on the target <code>lsh-logic</code>.
+    </li>
+    <li>Wire external device state messages into this helper.</li>
+    <li>
+      Use a Change node or Function node to add the target LSH device and actuator properties.
+    </li>
+    <li>Wire this helper output to the same MQTT output used for LSH commands.</li>
+  </ol>
+
+  <h3>Inputs</h3>
+  <dl class="message-properties">
+    <dt>payload <span class="property-type">boolean | string | number</span></dt>
+    <dd>
+      Downstream smart-device state, or another property selected by State Property. Accepted values
+      are boolean, <code>1/0</code>, <code>true/false</code>, <code>on/off</code> and
+      <code>yes/no</code>.
+    </dd>
+    <dt>deviceId <span class="property-type">string</span></dt>
+    <dd>Default property containing the upstream LSH device id.</dd>
+    <dt>actuatorId <span class="property-type">string | number</span></dt>
+    <dd>Default property containing the upstream LSH actuator id.</dd>
+  </dl>
+
+  <h3>Outputs</h3>
+  <p>
+    Emits one MQTT message only when the downstream state differs from the exported LSH actuator
+    state, or when Require LSH state is disabled and the current LSH state is unknown. The Direction
+    setting can limit output to ON-only or OFF-only commands.
+  </p>
+  <dl class="message-properties">
+    <dt>topic <span class="property-type">string</span></dt>
+    <dd><code>&lt;homieBasePath&gt;&lt;deviceId&gt;/&lt;actuatorId&gt;/state/set</code></dd>
+    <dt>payload <span class="property-type">boolean</span></dt>
+    <dd>The downstream state to apply to the LSH actuator.</dd>
+    <dt>qos <span class="property-type">number</span></dt>
+    <dd>The configured MQTT QoS.</dd>
+    <dt>retain <span class="property-type">boolean</span></dt>
+    <dd>Always <code>false</code>.</dd>
+  </dl>
+
+  <h3>Startup Timing</h3>
+  <p>
+    If external state arrives before <code>lsh-logic</code> has exported authoritative actuator
+    state, the helper keeps the latest state per LSH device/actuator and retries until LSH Ready
+    Wait expires. This avoids losing retained startup state while still preventing commands based on
+    incomplete LSH snapshots.
+  </p>
+
+  <h3>Direction Policy</h3>
+  <p>
+    <b>Sync ON and OFF</b> is suitable for downstream devices that remain powered and reachable,
+    such as Shelly devices wired to an LSH-controlled input. <b>OFF only</b> is suitable for smart
+    lights that lose power when the LSH actuator is off: the helper can mirror a deliberate
+    downstream OFF back to LSH, but ignores downstream ON states that may only mean the device
+    booted after power was restored. <b>ON only</b> is available for flows that should never switch
+    an LSH actuator off.
+  </p>
+
+  <h3>Multiple LSH Nodes</h3>
+  <p>
+    Give each <code>lsh-logic</code> node unique state/config export keys, then point each helper
+    instance at the matching keys. The target device and actuator remain per-message properties, so
+    one helper can handle many downstream devices that belong to the same LSH coordinator instance.
+  </p>
+</script>

@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-lsh-logic",
-  "version": "3.1.6",
+  "version": "3.1.7",
   "description": "A Node-RED node for coordinating devices that implement the public LSH MQTT/protocol contract.",
   "main": "dist/lsh-logic.js",
   "scripts": {
@@ -69,7 +69,8 @@
   "homepage": "https://github.com/labodj/node-red-contrib-lsh-logic#readme",
   "node-red": {
     "nodes": {
-      "lsh-logic": "dist/lsh-logic.js"
+      "lsh-logic": "dist/lsh-logic.js",
+      "lsh-actuator-sync": "dist/lsh-actuator-sync.js"
     },
     "version": ">=4.0.0"
   },

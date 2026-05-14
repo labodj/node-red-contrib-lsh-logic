@@ -16,6 +16,10 @@ keeps a live registry of configured devices, coordinates distributed long-click
 actions, publishes commands, and emits alerts when a bridge or controller needs
 attention.
 
+The package also includes `lsh-actuator-sync`, a small helper node for flows
+that mirror a downstream smart device state back to the LSH actuator that powers
+it.
+
 The original LSH installation uses Controllino controllers and ESP32 bridges,
 but the useful boundary is the protocol: if a device stack publishes the same
 LSH and Homie topics, this node can orchestrate it from Node-RED.
@@ -32,6 +36,8 @@ LSH-compatible devices:
 - send commands back to LSH devices;
 - route generic intents to flows that target Zigbee, Tasmota, Home Assistant, or
   custom systems;
+- synchronize downstream smart bulbs or modules back to the upstream LSH relay
+  when an external app changes their state;
 - keep startup, watchdog, and recovery behavior predictable after restarts.
 
 The node is focused on LSH messages; its input expects the LSH protocol. Keep
@@ -123,6 +129,20 @@ actuators on device `j1` and also emit an intent for `zigbee_table_lamp`.
 The second output is deliberately protocol-neutral. The node emits the intended
 state; your surrounding flow decides how a Zigbee light, Tasmota plug, Home
 Assistant service, or local script should receive it.
+
+## Actuator Sync Helper
+
+Use `lsh-actuator-sync` when a smart device is powered through an LSH actuator
+but can also be controlled from another app or system. The helper consumes those
+external state updates, reads the selected `lsh-logic` context exports, and
+emits a Homie `state/set` command only when the upstream LSH actuator needs to
+be aligned.
+
+The flow remains explicit: collect the external device state, use a Change node
+or Function node to add `msg.deviceId` and `msg.actuatorId`, then wire the helper
+output to the same MQTT output used for LSH commands. If you run more than one
+`lsh-logic` node, give each one unique state/config export keys and point each
+helper instance at the matching keys.
 
 ## Runtime Behavior
 

@@ -83,6 +83,19 @@ export function createMockNode(): MockNodeInstance {
 export function createMockRed(userDir = process.cwd()): NodeAPI {
   return {
     nodes: { createNode: jest.fn(), registerType: jest.fn() },
+    util: {
+      getMessageProperty: (msg: Record<string, unknown>, propertyPath: string): unknown =>
+        propertyPath
+          .replace(/^msg\./, "")
+          .split(".")
+          .reduce<unknown>(
+            (currentValue, key) =>
+              currentValue !== null && typeof currentValue === "object" && key in currentValue
+                ? (currentValue as Record<string, unknown>)[key]
+                : undefined,
+            msg,
+          ),
+    },
     settings: { userDir },
   } as unknown as NodeAPI;
 }

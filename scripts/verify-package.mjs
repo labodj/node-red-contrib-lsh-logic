@@ -122,6 +122,15 @@ const main = async () => {
     await access(
       join(consumerDir, "node_modules", "node-red-contrib-lsh-logic", "dist", "lsh-logic.html"),
     );
+    await access(
+      join(
+        consumerDir,
+        "node_modules",
+        "node-red-contrib-lsh-logic",
+        "dist",
+        "lsh-actuator-sync.html",
+      ),
+    );
     const installedCoordinator = await resolvedCoordinatorPackage(consumerDir);
     if (localCoordinator !== null) {
       if (installedCoordinator.packageJson.version !== localCoordinator.version) {
@@ -141,6 +150,9 @@ const main = async () => {
           if (typeof register !== "function") throw new Error("missing Node-RED register export");
           if (typeof register.LshLogicNode !== "function") throw new Error("missing runtime export");
           if (!register.Output || register.Output.Lsh !== 0) throw new Error("missing Output enum export");
+          const syncRegister = require("node-red-contrib-lsh-logic/dist/lsh-actuator-sync.js");
+          if (typeof syncRegister !== "function") throw new Error("missing sync register export");
+          if (typeof syncRegister.LshActuatorSyncNode !== "function") throw new Error("missing sync runtime export");
         `,
       ],
       { cwd: consumerDir },

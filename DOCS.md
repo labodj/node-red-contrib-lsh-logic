@@ -24,6 +24,7 @@ That path is enough for most installations.
 | Add or rename an LSH device                       | [Configuration](docs/CONFIGURATION.md)                                                               |
 | Wire the MQTT input without broad wildcard topics | [Dynamic subscriptions](docs/DYNAMIC_SUBSCRIPTIONS.md)                                               |
 | Route a long click to an external flow            | [Configuration](docs/CONFIGURATION.md#other-actors)                                                  |
+| Sync a downstream smart device to an LSH relay    | [Actuator sync helper](docs/CONFIGURATION.md#actuator-sync-helper)                                   |
 | Use optional Home Assistant discovery             | [Optional discovery](docs/COMPANION_DISCOVERY.md)                                                    |
 | Understand startup, watchdog, and recovery        | [Lifecycle contract](LIFECYCLE.md)                                                                   |
 | Check the MQTT/protocol source of truth           | [Shared protocol reference](https://github.com/labodj/lsh-protocol/blob/main/shared/lsh_protocol.md) |
@@ -33,6 +34,11 @@ That path is enough for most installations.
 `lsh-logic` is intentionally narrow. It owns LSH runtime behavior inside
 Node-RED: device registry, distributed clicks, watchdog probes, recovery, alerts,
 and command emission.
+
+`lsh-actuator-sync` is a companion helper for one specific integration pattern:
+an external smart device lives downstream of an LSH relay and reports state from
+another system. The helper reads `lsh-logic` context exports and emits an LSH
+command only when that relay must be aligned.
 
 If you want Home Assistant discovery, use the separate optional Homie discovery
 node. Non-LSH systems stay in your own Node-RED flows and receive generic
