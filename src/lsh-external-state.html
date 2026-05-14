@@ -1,0 +1,345 @@
+<!-- Node-RED Registration Script -->
+<script type="text/javascript">
+  (function () {
+    const validateRequiredTrimmed = (value) => String(value || "").trim().length > 0;
+    const validateNonNegativeNumber = (value) => {
+      const numericValue = Number(value);
+      return Number.isFinite(numericValue) && numericValue >= 0;
+    };
+
+    RED.nodes.registerType("lsh-external-state", {
+      category: "function",
+      color: "#4a90e2",
+      defaults: {
+        name: { value: "" },
+        storeContext: { value: "global", required: true },
+        prefixSource: { value: "config", required: true },
+        prefix: { value: "other_devices" },
+        configContext: { value: "global", required: true },
+        configKey: { value: "lsh_config", required: true, validate: validateRequiredTrimmed },
+        actorNameSource: { value: "msg", required: true },
+        actorName: { value: "" },
+        actorNameProperty: { value: "topic" },
+        stateProperty: { value: "payload", required: true, validate: validateRequiredTrimmed },
+        trueValues: { value: "1,true,on,yes,open,active" },
+        falseValues: { value: "0,false,off,no,closed,inactive" },
+        caseSensitive: { value: false },
+        invert: { value: false },
+        acceptRetained: { value: true },
+        storeOnlyChanges: { value: true },
+        storeMetadata: { value: true },
+        configWaitTimeoutMs: {
+          value: 5000,
+          required: true,
+          validate: validateNonNegativeNumber,
+        },
+      },
+      inputs: 1,
+      outputs: 1,
+      icon: "font-awesome/fa-database",
+      label: function () {
+        return this.name || "LSH External State";
+      },
+      inputLabels: "External actor state",
+      outputLabels: ["Stored normalized state"],
+      oneditprepare: function () {
+        const toggleRow = (rowSelector, isEnabled) => {
+          $(rowSelector).toggle(isEnabled);
+        };
+        const refreshPrefixRows = () => {
+          const fromConfig = $("#node-input-prefixSource").val() === "config";
+          toggleRow(".lsh-external-config-prefix", fromConfig);
+          toggleRow(".lsh-external-manual-prefix", !fromConfig);
+        };
+        const refreshActorRows = () => {
+          const fromMessage = $("#node-input-actorNameSource").val() === "msg";
+          toggleRow(".lsh-external-msg-actor", fromMessage);
+          toggleRow(".lsh-external-fixed-actor", !fromMessage);
+        };
+
+        $("#node-input-acceptRetained").val(String(this.acceptRetained ?? true));
+        $("#node-input-prefixSource").on("change", refreshPrefixRows);
+        $("#node-input-actorNameSource").on("change", refreshActorRows);
+        refreshPrefixRows();
+        refreshActorRows();
+      },
+    });
+  })();
+</script>
+
+<!-- Node Configuration Panel Template -->
+<script type="text/html" data-template-name="lsh-external-state">
+  <style>
+    .lsh-external-section {
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      padding: 15px;
+      margin-top: 20px;
+    }
+    .lsh-external-section-title {
+      font-size: 14px;
+      font-weight: bold;
+      margin-bottom: 15px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 8px;
+      display: flex;
+      align-items: center;
+      color: #333;
+    }
+    .lsh-external-section-title i {
+      margin-right: 10px;
+      color: #999;
+    }
+    .lsh-external-tip {
+      display: block;
+      box-sizing: border-box;
+      margin-top: 5px;
+      margin-left: 110px;
+      max-width: calc(100% - 110px);
+      color: #666;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .lsh-external-inline {
+      width: 70%;
+    }
+    .lsh-external-section input.lsh-external-checkbox {
+      display: inline-block;
+      width: auto !important;
+      height: auto;
+      margin-left: 0;
+      vertical-align: middle;
+    }
+  </style>
+
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="LSH External State" />
+  </div>
+
+  <div class="lsh-external-section">
+    <div class="lsh-external-section-title"><i class="fa fa-database"></i> Coordinator Context</div>
+    <div class="form-row">
+      <label for="node-input-storeContext">External State Store</label>
+      <select id="node-input-storeContext" class="lsh-external-inline">
+        <option value="flow">Flow Context</option>
+        <option value="global">Global Context</option>
+      </select>
+      <span class="lsh-external-tip"
+        >Must match the <b>Read External Actor State</b> context of the target
+        <code>lsh-logic</code> node.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-prefixSource">Prefix</label>
+      <select id="node-input-prefixSource" class="lsh-external-inline">
+        <option value="config">From lsh_config export</option>
+        <option value="manual">Manual</option>
+      </select>
+    </div>
+    <div class="form-row lsh-external-config-prefix">
+      <label for="node-input-configContext">Config Store</label>
+      <select id="node-input-configContext" class="lsh-external-inline">
+        <option value="flow">Flow Context</option>
+        <option value="global">Global Context</option>
+      </select>
+    </div>
+    <div class="form-row lsh-external-config-prefix">
+      <label for="node-input-configKey">Config Key</label>
+      <input type="text" id="node-input-configKey" class="lsh-external-inline" />
+      <span class="lsh-external-tip"
+        >Must match the Effective Config export key of the target <code>lsh-logic</code> node.</span
+      >
+    </div>
+    <div class="form-row lsh-external-manual-prefix">
+      <label for="node-input-prefix">Manual Prefix</label>
+      <input type="text" id="node-input-prefix" class="lsh-external-inline" />
+      <span class="lsh-external-tip"
+        >Usually <code>other_devices</code>. The coordinator reads
+        <code>&lt;prefix&gt;.&lt;actor&gt;.state</code>.</span
+      >
+    </div>
+    <div class="form-row lsh-external-config-prefix">
+      <label for="node-input-configWaitTimeoutMs">Context Ready Wait (ms)</label>
+      <input
+        type="number"
+        id="node-input-configWaitTimeoutMs"
+        style="width: 110px;"
+        min="0"
+        step="100"
+      />
+      <span class="lsh-external-tip"
+        >Keeps the latest state per actor while <code>lsh_config</code> is not ready.</span
+      >
+    </div>
+  </div>
+
+  <div class="lsh-external-section">
+    <div class="lsh-external-section-title"><i class="fa fa-random"></i> Message Mapping</div>
+    <div class="form-row">
+      <label for="node-input-actorNameSource">Actor Name</label>
+      <select id="node-input-actorNameSource" class="lsh-external-inline">
+        <option value="msg">From message</option>
+        <option value="config">Fixed</option>
+      </select>
+    </div>
+    <div class="form-row lsh-external-msg-actor">
+      <label for="node-input-actorNameProperty">Actor Property</label>
+      <input type="text" id="node-input-actorNameProperty" class="lsh-external-inline" />
+      <span class="lsh-external-tip"
+        >Message property containing the actor name used in <code>otherActors</code>. Commonly
+        <code>topic</code> after a Change node.</span
+      >
+    </div>
+    <div class="form-row lsh-external-fixed-actor">
+      <label for="node-input-actorName">Fixed Actor</label>
+      <input type="text" id="node-input-actorName" class="lsh-external-inline" />
+      <span class="lsh-external-tip"
+        >Use this when one node instance stores exactly one external actor.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-stateProperty">State Property</label>
+      <input type="text" id="node-input-stateProperty" class="lsh-external-inline" />
+      <span class="lsh-external-tip"
+        >Examples: <code>payload</code>, <code>payload.state</code>, <code>payload.ison</code>. The
+        value is normalized to boolean.</span
+      >
+    </div>
+  </div>
+
+  <div class="lsh-external-section">
+    <div class="lsh-external-section-title"><i class="fa fa-sliders"></i> State Parser</div>
+    <div class="form-row">
+      <label for="node-input-trueValues">True Values</label>
+      <input type="text" id="node-input-trueValues" class="lsh-external-inline" />
+      <span class="lsh-external-tip">Comma-separated text values accepted as ON/true.</span>
+    </div>
+    <div class="form-row">
+      <label for="node-input-falseValues">False Values</label>
+      <input type="text" id="node-input-falseValues" class="lsh-external-inline" />
+      <span class="lsh-external-tip">Comma-separated text values accepted as OFF/false.</span>
+    </div>
+    <div class="form-row">
+      <label for="node-input-caseSensitive">Case sensitive</label>
+      <input type="checkbox" id="node-input-caseSensitive" class="lsh-external-checkbox" />
+    </div>
+    <div class="form-row">
+      <label for="node-input-invert">Invert state</label>
+      <input type="checkbox" id="node-input-invert" class="lsh-external-checkbox" />
+      <span class="lsh-external-tip"
+        >Use for integrations whose active value means logically off.</span
+      >
+    </div>
+  </div>
+
+  <div class="lsh-external-section">
+    <div class="lsh-external-section-title"><i class="fa fa-shield"></i> Store Policy</div>
+    <div class="form-row">
+      <label for="node-input-acceptRetained">Retained Messages</label>
+      <select id="node-input-acceptRetained" class="lsh-external-inline">
+        <option value="true">Store retained states</option>
+        <option value="false">Ignore retained states</option>
+      </select>
+      <span class="lsh-external-tip"
+        >Recommended for state recovery after Node-RED restarts. This helper only stores state; it
+        does not command devices.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-storeOnlyChanges">Store Only Changes</label>
+      <input type="checkbox" id="node-input-storeOnlyChanges" class="lsh-external-checkbox" />
+      <span class="lsh-external-tip"
+        >Avoids repeated context writes when the boolean state is unchanged.</span
+      >
+    </div>
+    <div class="form-row">
+      <label for="node-input-storeMetadata">Store Metadata</label>
+      <input type="checkbox" id="node-input-storeMetadata" class="lsh-external-checkbox" />
+      <span class="lsh-external-tip"
+        >Also stores <code>updatedAt</code>, <code>sourceTopic</code>, <code>rawState</code> and
+        <code>retain</code> beside the boolean state.</span
+      >
+    </div>
+  </div>
+</script>
+
+<!-- Help tab documentation -->
+<script type="text/html" data-help-name="lsh-external-state">
+  <p>
+    Stores external actor state in Node-RED context so <code>lsh-logic</code> can include those
+    actors when it decides smart-toggle direction.
+  </p>
+
+  <h3>What It Writes</h3>
+  <p>
+    The coordinator reads boolean states from
+    <code>&lt;prefix&gt;.&lt;actor&gt;.state</code>. With the default prefix and actor
+    <code>bedside_lamp</code>, this helper writes:
+  </p>
+  <pre>other_devices.bedside_lamp.state = true</pre>
+
+  <p>
+    When metadata is enabled, it also writes <code>updatedAt</code>, <code>sourceTopic</code>,
+    <code>rawState</code> and <code>retain</code> next to the state. The coordinator ignores these
+    metadata fields; they are for diagnostics and user flows.
+  </p>
+
+  <h3>Configuration</h3>
+  <dl class="message-properties">
+    <dt>External State Store</dt>
+    <dd>Context store used by the target <code>lsh-logic</code> node for external actor reads.</dd>
+    <dt>Prefix</dt>
+    <dd>
+      Read <code>otherDevicesPrefix</code> from the exported <code>lsh_config</code>, or set a
+      manual prefix such as <code>other_devices</code>.
+    </dd>
+    <dt>Actor Name</dt>
+    <dd>
+      Use a fixed actor name for one-device flows, or read it from a message property such as
+      <code>topic</code>.
+    </dd>
+    <dt>State Property</dt>
+    <dd>
+      Message property containing the external state. Common values are <code>payload</code>,
+      <code>payload.state</code> for ESPHome/Zigbee2MQTT, and <code>payload.ison</code> for Shelly.
+    </dd>
+  </dl>
+
+  <h3>State Parsing</h3>
+  <p>
+    Boolean and numeric <code>1/0</code> values are accepted directly. Text values are compared
+    against the configured true/false lists. Defaults cover common ON/OFF payloads:
+    <code>on/off</code>, <code>true/false</code>, <code>yes/no</code>, <code>1/0</code>,
+    <code>open/closed</code> and <code>active/inactive</code>.
+  </p>
+  <p>
+    Invalid, missing or ambiguous states are dropped with a warning. They are never silently turned
+    into <code>false</code>.
+  </p>
+
+  <h3>Retained Messages</h3>
+  <p>
+    Retained MQTT messages are accepted by default because this node stores observed state only.
+    This helps rebuild external actor state after a Node-RED restart. Disable it only when retained
+    messages from that integration are known to be stale or misleading.
+  </p>
+
+  <h3>Startup Order</h3>
+  <p>
+    When the prefix comes from the exported <code>lsh_config</code>, the helper keeps the latest
+    state per actor while that config export is not ready. It retries until
+    <b>Context Ready Wait</b> expires. Set the wait to <code>0</code> for fail-fast behavior.
+  </p>
+
+  <h3>Outputs</h3>
+  <p>
+    When a state is stored, the node emits a normalized message with <code>msg.topic</code> set to
+    the actor name, <code>msg.payload</code> set to the boolean state and
+    <code>msg.lshExternalState</code> containing diagnostics. Wire it to Debug if you want
+    visibility, or leave the output unwired for store-only use.
+  </p>
+</script>

@@ -9,19 +9,32 @@
 
 import type { Node, NodeAPI, NodeMessage } from "node-red";
 
-type ContextName = "flow" | "global";
+import {
+  BASIC_FALSE_TEXT_VALUES,
+  BASIC_TRUE_TEXT_VALUES,
+  clearPendingTimers,
+  formatState,
+  getNodeContext,
+  isObjectRecord,
+  normalizeBoolean,
+  normalizeBooleanState,
+  normalizeContextName,
+  normalizeMessageString,
+  normalizeNonNegativeNumber,
+  normalizeRequiredString,
+  readMessageProperty,
+  warnAndSetStatus,
+} from "./node-red-runtime";
+import type {
+  ContextName,
+  ContextReader,
+  DoneFunction,
+  SendFunction,
+  StatusShape,
+} from "./node-red-runtime";
+
 type CommandQos = 0 | 1 | 2;
 type AllowedDirection = "both" | "on-only" | "off-only";
-
-type ContextStore = {
-  get(key: string): unknown;
-};
-
-type StatusShape = {
-  fill: "red" | "green" | "yellow" | "blue" | "grey";
-  shape: "dot" | "ring";
-  text: string;
-};
 
 type LshActuatorSyncNodeDef = {
   id: string;
@@ -69,9 +82,6 @@ type ConfigExportLike = {
   homieBasePath: string;
 };
 
-type SendFunction = (msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void;
-type DoneFunction = (err?: Error) => void;
-
 type SyncTarget = {
   deviceId: string;
   actuatorId: string;
@@ -89,27 +99,12 @@ type CommandBuildResult = NodeMessage | null | RetryableReason;
 
 const STATE_RETRY_INTERVAL_MS = 250;
 const QOS_VALUES = new Set([0, 1, 2]);
-const BOOLEAN_TRUE_STRINGS = new Set(["1", "true", "on", "yes"]);
-const BOOLEAN_FALSE_STRINGS = new Set(["0", "false", "off", "no"]);
+const DESIRED_TRUE_VALUES: ReadonlySet<string> = new Set(BASIC_TRUE_TEXT_VALUES);
+const DESIRED_FALSE_VALUES: ReadonlySet<string> = new Set(BASIC_FALSE_TEXT_VALUES);
 
-const normalizeRequiredString = (value: unknown, fieldName: string): string => {
-  const normalized =
-    typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-      ? String(value).trim()
-      : "";
-  if (normalized.length === 0) {
-    throw new Error(`${fieldName} cannot be empty.`);
-  }
-  return normalized;
-};
-
-const normalizeContextName = (value: unknown, fieldName: string): ContextName => {
-  if (value === "flow" || value === "global") {
-    return value;
-  }
-  throw new Error(`${fieldName} must be flow or global.`);
-};
-
+/**
+ * Normalizes the Direction editor option, defaulting to full bidirectional sync.
+ */
 const normalizeAllowedDirection = (value: unknown): AllowedDirection => {
   if (value === undefined || value === null || value === "") {
     return "both";
@@ -120,25 +115,9 @@ const normalizeAllowedDirection = (value: unknown): AllowedDirection => {
   throw new Error("Allowed Direction must be both, on-only or off-only.");
 };
 
-const normalizeBoolean = (value: unknown, defaultValue: boolean): boolean => {
-  if (value === undefined || value === null || value === "") {
-    return defaultValue;
-  }
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (BOOLEAN_TRUE_STRINGS.has(normalized)) {
-      return true;
-    }
-    if (BOOLEAN_FALSE_STRINGS.has(normalized)) {
-      return false;
-    }
-  }
-  return Boolean(value);
-};
-
+/**
+ * Normalizes the MQTT QoS editor value and rejects invalid levels up front.
+ */
 const normalizeQos = (value: unknown): CommandQos => {
   const numericValue = Number(value);
   if (QOS_VALUES.has(numericValue)) {
@@ -147,21 +126,9 @@ const normalizeQos = (value: unknown): CommandQos => {
   throw new Error("Command QoS must be 0, 1 or 2.");
 };
 
-const normalizeNonNegativeNumber = (
-  value: unknown,
-  fieldName: string,
-  defaultValue: number,
-): number => {
-  if (value === undefined || value === null || value === "") {
-    return defaultValue;
-  }
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue) || numericValue < 0) {
-    throw new Error(`${fieldName} must be a non-negative number.`);
-  }
-  return numericValue;
-};
-
+/**
+ * Converts the raw Node-RED editor config into a runtime-safe immutable shape.
+ */
 const normalizeConfig = (config: LshActuatorSyncNodeDef): NormalizedLshActuatorSyncNodeDef => ({
   ...config,
   stateContext: normalizeContextName(config.stateContext, "State Context"),
@@ -182,9 +149,9 @@ const normalizeConfig = (config: LshActuatorSyncNodeDef): NormalizedLshActuatorS
   allowedDirection: normalizeAllowedDirection(config.allowedDirection),
 });
 
-const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
+/**
+ * Narrows the exported LSH state snapshot to the fields this helper needs.
+ */
 const asStateExport = (value: unknown): StateExportLike | undefined => {
   if (!isObjectRecord(value) || !isObjectRecord(value.devices)) {
     return undefined;
@@ -192,6 +159,9 @@ const asStateExport = (value: unknown): StateExportLike | undefined => {
   return { devices: value.devices };
 };
 
+/**
+ * Narrows the exported effective config to a valid Homie base path.
+ */
 const asConfigExport = (value: unknown): ConfigExportLike | undefined => {
   if (!isObjectRecord(value) || typeof value.homieBasePath !== "string") {
     return undefined;
@@ -199,6 +169,9 @@ const asConfigExport = (value: unknown): ConfigExportLike | undefined => {
   return { homieBasePath: value.homieBasePath };
 };
 
+/**
+ * Narrows one device entry from the exported LSH registry.
+ */
 const asDeviceState = (value: unknown): DeviceStateLike | undefined => {
   if (!isObjectRecord(value)) {
     return undefined;
@@ -210,37 +183,15 @@ const asDeviceState = (value: unknown): DeviceStateLike | undefined => {
   };
 };
 
-const normalizeMessageString = (value: unknown): string | undefined => {
-  const normalized =
-    typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
-  return normalized.length > 0 ? normalized : undefined;
-};
-
+/**
+ * Normalizes the requested downstream state to a boolean command target.
+ */
 const normalizeDesiredState = (value: unknown): boolean | undefined => {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (value === 1) {
-      return true;
-    }
-    if (value === 0) {
-      return false;
-    }
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (BOOLEAN_TRUE_STRINGS.has(normalized)) {
-      return true;
-    }
-    if (BOOLEAN_FALSE_STRINGS.has(normalized)) {
-      return false;
-    }
-  }
-  return undefined;
+  return normalizeBooleanState(value, {
+    trueValues: DESIRED_TRUE_VALUES,
+    falseValues: DESIRED_FALSE_VALUES,
+  });
 };
-
-const formatState = (state: boolean): string => (state ? "on" : "off");
 
 /**
  * Runtime class attached to a single `lsh-actuator-sync` Node-RED node instance.
@@ -252,6 +203,9 @@ export class LshActuatorSyncNode {
   private readonly lastCommandTimes = new Map<string, number>();
   private readonly pendingSyncs = new Map<string, PendingSync>();
 
+  /**
+   * Creates one runtime instance and validates the editor configuration once.
+   */
   public constructor(node: Node, red: NodeAPI, config: LshActuatorSyncNodeDef) {
     this.node = node;
     this.red = red;
@@ -260,22 +214,23 @@ export class LshActuatorSyncNode {
     this.registerNodeEventHandlers();
   }
 
+  /**
+   * Wires Node-RED lifecycle events and guarantees pending timers are cleaned up.
+   */
   private registerNodeEventHandlers(): void {
     this.node.on("input", (msg, send, done) => {
       this.handleInput(msg, send, done);
     });
 
     this.node.on("close", (done: () => void) => {
-      for (const pending of this.pendingSyncs.values()) {
-        if (pending.timer !== undefined) {
-          clearTimeout(pending.timer);
-        }
-      }
-      this.pendingSyncs.clear();
+      clearPendingTimers(this.pendingSyncs);
       done();
     });
   }
 
+  /**
+   * Handles one external state message and always completes the Node-RED callback.
+   */
   private handleInput(msg: NodeMessage, send: SendFunction, done?: DoneFunction): void {
     try {
       if (this.config.ignoreRetained && msg.retain === true) {
@@ -297,6 +252,9 @@ export class LshActuatorSyncNode {
     }
   }
 
+  /**
+   * Parses input into a concrete sync target, applies direction policy, then builds a command.
+   */
   private handleSyncRequest(msg: NodeMessage): NodeMessage | null {
     const desiredState = normalizeDesiredState(
       this.readMessageProperty(msg, this.config.desiredStateProperty),
@@ -321,7 +279,12 @@ export class LshActuatorSyncNode {
       );
     }
 
-    const target = { deviceId, actuatorId, desiredState, sourceTopic: msg.topic };
+    const target = {
+      deviceId,
+      actuatorId,
+      desiredState,
+      sourceTopic: normalizeMessageString(msg.topic),
+    };
     if (!this.isDirectionAllowed(target)) {
       this.setStatus({
         fill: "grey",
@@ -338,6 +301,9 @@ export class LshActuatorSyncNode {
     return result;
   }
 
+  /**
+   * Reads current LSH exports and returns either a command, a no-op, or a retryable reason.
+   */
   private tryBuildCommand(target: SyncTarget): CommandBuildResult {
     const { deviceId, actuatorId, desiredState, sourceTopic } = target;
     const configExport = asConfigExport(
@@ -391,6 +357,9 @@ export class LshActuatorSyncNode {
     };
   }
 
+  /**
+   * Queues retryable startup problems or reports them immediately when waiting is disabled.
+   */
   private deferOrSkip(target: SyncTarget, reason: RetryableReason): null {
     if (this.config.stateWaitTimeoutMs <= 0) {
       return this.skip(
@@ -406,6 +375,9 @@ export class LshActuatorSyncNode {
     return null;
   }
 
+  /**
+   * Stores the latest pending state for a target and schedules the next readiness check.
+   */
   private queuePendingSync(pending: PendingSync): void {
     const targetKey = this.targetKey(pending);
     const existing = this.pendingSyncs.get(targetKey);
@@ -416,6 +388,9 @@ export class LshActuatorSyncNode {
       clearTimeout(pending.timer);
     }
 
+    // The helper keeps only the latest input per actuator. Retrying at a short
+    // fixed interval avoids dropping retained startup state while still letting
+    // lsh-logic finish exporting authoritative state/config snapshots.
     const delay = Math.max(0, Math.min(STATE_RETRY_INTERVAL_MS, pending.deadline - Date.now()));
     const nextPending = {
       ...pending,
@@ -429,6 +404,9 @@ export class LshActuatorSyncNode {
     });
   }
 
+  /**
+   * Re-checks one queued target and emits a command only after LSH state is safe to trust.
+   */
   private retryPendingSync(targetKey: string): void {
     const pending = this.pendingSyncs.get(targetKey);
     if (pending === undefined) {
@@ -453,6 +431,9 @@ export class LshActuatorSyncNode {
     }
   }
 
+  /**
+   * Reads the authoritative actuator state from the exported LSH device registry.
+   */
   private readCurrentState(deviceId: string, actuatorId: string): boolean | "unknown" {
     const stateExport = asStateExport(
       this.getContext(this.config.stateContext).get(this.config.stateKey),
@@ -475,14 +456,23 @@ export class LshActuatorSyncNode {
     return typeof currentState === "boolean" ? currentState : "unknown";
   }
 
+  /**
+   * Reads a configured Node-RED message property using the runtime utility API.
+   */
   private readMessageProperty(msg: NodeMessage, propertyPath: string): unknown {
-    return this.red.util.getMessageProperty(msg, propertyPath);
+    return readMessageProperty(this.red, msg, propertyPath);
   }
 
-  private getContext(contextName: ContextName): ContextStore {
-    return this.node.context()[contextName];
+  /**
+   * Selects the configured flow/global context store.
+   */
+  private getContext(contextName: ContextName): ContextReader {
+    return getNodeContext(this.node, contextName);
   }
 
+  /**
+   * Enforces a per-actuator command cooldown to avoid feedback loops.
+   */
   private isCoolingDown(targetKey: string): boolean {
     if (this.config.commandCooldownMs === 0) {
       return false;
@@ -494,6 +484,9 @@ export class LshActuatorSyncNode {
     );
   }
 
+  /**
+   * Applies the ON-only/OFF-only guard used for powered smart-light edge cases.
+   */
   private isDirectionAllowed(target: Pick<SyncTarget, "desiredState">): boolean {
     if (this.config.allowedDirection === "both") {
       return true;
@@ -504,10 +497,16 @@ export class LshActuatorSyncNode {
     return !target.desiredState;
   }
 
+  /**
+   * Builds the stable map key used for cooldown and pending-sync tracking.
+   */
   private targetKey(target: Pick<SyncTarget, "deviceId" | "actuatorId">): string {
     return `${target.deviceId}/${target.actuatorId}`;
   }
 
+  /**
+   * Formats the warning shown when a retryable problem ultimately times out.
+   */
   private warningForRetryableReason(
     target: Pick<SyncTarget, "deviceId" | "actuatorId">,
     reason: RetryableReason,
@@ -518,22 +517,39 @@ export class LshActuatorSyncNode {
     return `No authoritative LSH state for ${target.deviceId}/${target.actuatorId}.`;
   }
 
+  /**
+   * Formats compact status text for retryable startup problems.
+   */
   private statusForReason(reason: RetryableReason): string {
     return reason === "missing-config" ? "Missing config" : "Unknown LSH state";
   }
 
+  /**
+   * Reports an intentional no-op without throwing or failing the Node-RED message.
+   */
   private skip(warning: string, statusText: string): null {
-    this.node.warn(warning);
-    this.setStatus({ fill: "yellow", shape: "ring", text: statusText });
-    return null;
+    return warnAndSetStatus(this.node, warning, {
+      fill: "yellow",
+      shape: "ring",
+      text: statusText,
+    });
   }
 
+  /**
+   * Updates the Node-RED node status with the package-wide status shape.
+   */
   private setStatus(status: StatusShape): void {
     this.node.status(status);
   }
 }
 
+/**
+ * Node-RED module entry point; registers the runtime class with the editor type.
+ */
 const nodeRedModule = function (RED: NodeAPI) {
+  /**
+   * Node-RED constructor wrapper that translates editor config into runtime state.
+   */
   function LshActuatorSyncNodeWrapper(this: Node, config: LshActuatorSyncNodeDef) {
     RED.nodes.createNode(this, config);
     try {

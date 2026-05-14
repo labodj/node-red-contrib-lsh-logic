@@ -22,19 +22,10 @@ import type {
 } from "labo-smart-home-coordinator";
 
 import { normalizeNodeConfig, parseSystemConfigJson } from "./lsh-logic.config";
+import { getNodeContext } from "./node-red-runtime";
 import { NodeOutput } from "./types";
+import type { ContextStore, StatusShape } from "./node-red-runtime";
 import type { LshLogicNodeDef } from "./types";
-
-type ContextStore = {
-  get(key: string): unknown;
-  set(key: string, value: unknown): void;
-};
-
-type StatusShape = {
-  fill: "red" | "green" | "yellow" | "blue" | "grey";
-  shape: "dot" | "ring";
-  text: string;
-};
 
 type OutputMap = Partial<Record<NodeOutput, NodeMessage | NodeMessage[]>>;
 
@@ -300,8 +291,7 @@ export class LshLogicNode {
   }
 
   private getContext(contextName: "flow" | "global"): ContextStore {
-    const context = this.node.context();
-    return context[contextName];
+    return getNodeContext(this.node, contextName);
   }
 
   private send(messages: OutputMap): void {

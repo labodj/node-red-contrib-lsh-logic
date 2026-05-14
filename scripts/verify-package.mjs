@@ -28,6 +28,11 @@ const run = async (command, args, options = {}) => {
 const ensureBuildExists = async () => {
   await access(join(root, "dist", "lsh-logic.js"));
   await access(join(root, "dist", "lsh-logic.html"));
+  await access(join(root, "dist", "lsh-actuator-sync.js"));
+  await access(join(root, "dist", "lsh-actuator-sync.html"));
+  await access(join(root, "dist", "lsh-external-state.js"));
+  await access(join(root, "dist", "lsh-external-state.html"));
+  await access(join(root, "dist", "node-red-runtime.js"));
 };
 
 const readJsonFile = async (path) => JSON.parse(await readFile(path, "utf8"));
@@ -131,6 +136,15 @@ const main = async () => {
         "lsh-actuator-sync.html",
       ),
     );
+    await access(
+      join(
+        consumerDir,
+        "node_modules",
+        "node-red-contrib-lsh-logic",
+        "dist",
+        "lsh-external-state.html",
+      ),
+    );
     const installedCoordinator = await resolvedCoordinatorPackage(consumerDir);
     if (localCoordinator !== null) {
       if (installedCoordinator.packageJson.version !== localCoordinator.version) {
@@ -153,6 +167,11 @@ const main = async () => {
           const syncRegister = require("node-red-contrib-lsh-logic/dist/lsh-actuator-sync.js");
           if (typeof syncRegister !== "function") throw new Error("missing sync register export");
           if (typeof syncRegister.LshActuatorSyncNode !== "function") throw new Error("missing sync runtime export");
+          const externalStateRegister = require("node-red-contrib-lsh-logic/dist/lsh-external-state.js");
+          if (typeof externalStateRegister !== "function") throw new Error("missing external-state register export");
+          if (typeof externalStateRegister.LshExternalStateNode !== "function") throw new Error("missing external-state runtime export");
+          const runtimeHelpers = require("node-red-contrib-lsh-logic/dist/node-red-runtime.js");
+          if (typeof runtimeHelpers.normalizeBooleanState !== "function") throw new Error("missing shared runtime helpers");
         `,
       ],
       { cwd: consumerDir },

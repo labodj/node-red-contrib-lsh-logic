@@ -16,9 +16,12 @@ keeps a live registry of configured devices, coordinates distributed long-click
 actions, publishes commands, and emits alerts when a bridge or controller needs
 attention.
 
-The package also includes `lsh-actuator-sync`, a small helper node for flows
-that mirror a downstream smart device state back to the LSH actuator that powers
-it.
+The package also includes two small helper nodes:
+
+- `lsh-external-state` stores non-LSH actor state in the context shape that the
+  coordinator reads for smart toggles;
+- `lsh-actuator-sync` mirrors a downstream smart device state back to the LSH
+  actuator that powers it.
 
 The original LSH installation uses Controllino controllers and ESP32 bridges,
 but the useful boundary is the protocol: if a device stack publishes the same
@@ -36,6 +39,7 @@ LSH-compatible devices:
 - send commands back to LSH devices;
 - route generic intents to flows that target Zigbee, Tasmota, Home Assistant, or
   custom systems;
+- keep external actor state available for smart-toggle decisions;
 - synchronize downstream smart bulbs or modules back to the upstream LSH relay
   when an external app changes their state;
 - keep startup, watchdog, and recovery behavior predictable after restarts.
@@ -129,6 +133,24 @@ actuators on device `j1` and also emit an intent for `zigbee_table_lamp`.
 The second output is deliberately protocol-neutral. The node emits the intended
 state; your surrounding flow decides how a Zigbee light, Tasmota plug, Home
 Assistant service, or local script should receive it.
+
+## External State Helper
+
+Use `lsh-external-state` when a non-LSH actor appears in `otherActors` and the
+coordinator must know its current boolean state before choosing a smart-toggle
+direction. The helper accepts MQTT or flow messages from ESPHome, Zigbee2MQTT,
+Shelly, Home Assistant, or custom integrations, normalizes the configured state
+property to a boolean, and stores it as:
+
+```text
+<otherDevicesPrefix>.<actorName>.state
+```
+
+Retained MQTT state is accepted by default because this helper only stores
+observed state; it does not command devices. Point **External State Store** at
+the same context selected by the `lsh-logic` node in **Read External Actor
+State**. The prefix can come from the exported `lsh_config.otherDevicesPrefix`,
+which avoids mismatches when the main node uses a custom prefix.
 
 ## Actuator Sync Helper
 

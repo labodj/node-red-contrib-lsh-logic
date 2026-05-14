@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["src/lsh-logic.ts", "src/lsh-actuator-sync.ts"],
+  "entry": ["src/lsh-logic.ts", "src/lsh-actuator-sync.ts", "src/lsh-external-state.ts"],
   "project": ["src/**/*.ts"],
   "ignore": ["dist/**"]
 }

@@ -24,6 +24,7 @@ That path is enough for most installations.
 | Add or rename an LSH device                       | [Configuration](docs/CONFIGURATION.md)                                                               |
 | Wire the MQTT input without broad wildcard topics | [Dynamic subscriptions](docs/DYNAMIC_SUBSCRIPTIONS.md)                                               |
 | Route a long click to an external flow            | [Configuration](docs/CONFIGURATION.md#other-actors)                                                  |
+| Store external actor state for smart toggles      | [External state helper](docs/CONFIGURATION.md#external-state-helper)                                 |
 | Sync a downstream smart device to an LSH relay    | [Actuator sync helper](docs/CONFIGURATION.md#actuator-sync-helper)                                   |
 | Use optional Home Assistant discovery             | [Optional discovery](docs/COMPANION_DISCOVERY.md)                                                    |
 | Understand startup, watchdog, and recovery        | [Lifecycle contract](LIFECYCLE.md)                                                                   |
@@ -39,6 +40,11 @@ and command emission.
 an external smart device lives downstream of an LSH relay and reports state from
 another system. The helper reads `lsh-logic` context exports and emits an LSH
 command only when that relay must be aligned.
+
+`lsh-external-state` is the companion helper for external actors used by smart
+toggles. It normalizes arbitrary integration payloads to booleans and stores
+them under the context path that the coordinator already reads:
+`<otherDevicesPrefix>.<actor>.state`.
 
 If you want Home Assistant discovery, use the separate optional Homie discovery
 node. Non-LSH systems stay in your own Node-RED flows and receive generic

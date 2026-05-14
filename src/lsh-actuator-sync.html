@@ -52,6 +52,9 @@
       label: function () {
         return this.name || "LSH Actuator Sync";
       },
+      oneditprepare: function () {
+        $("#node-input-ignoreRetained").val(String(this.ignoreRetained ?? true));
+      },
       inputLabels: "External device state",
       outputLabels: ["LSH state/set command"],
     });
@@ -97,6 +100,13 @@
     .lsh-sync-inline {
       width: 70%;
     }
+    .lsh-sync-section input.lsh-sync-checkbox {
+      display: inline-block;
+      width: auto !important;
+      height: auto;
+      margin-left: 0;
+      vertical-align: middle;
+    }
   </style>
 
   <div class="form-row">
@@ -105,7 +115,7 @@
   </div>
 
   <div class="lsh-sync-section">
-    <div class="lsh-sync-section-title"><i class="fa fa-database"></i> LSH Context Exports</div>
+    <div class="lsh-sync-section-title"><i class="fa fa-database"></i> Coordinator Context</div>
     <div class="form-row">
       <label for="node-input-stateContext">State Store</label>
       <select id="node-input-stateContext" class="lsh-sync-inline">
@@ -186,23 +196,19 @@
       >
     </div>
     <div class="form-row">
-      <label for="node-input-ignoreRetained">Ignore retained</label>
-      <input
-        type="checkbox"
-        id="node-input-ignoreRetained"
-        style="display: inline-block; width: auto; vertical-align: top;"
-      />
+      <label for="node-input-ignoreRetained">Retained Messages</label>
+      <select id="node-input-ignoreRetained" class="lsh-sync-inline">
+        <option value="true">Ignore retained states</option>
+        <option value="false">Process retained states</option>
+      </select>
       <span class="lsh-sync-tip"
-        >Prevents stale external MQTT state from commanding LSH immediately after deploy.</span
+        >Ignored by default because this node emits commands. Process retained states only when that
+        integration publishes authoritative retained state.</span
       >
     </div>
     <div class="form-row">
-      <label for="node-input-requireKnownState">Require LSH state</label>
-      <input
-        type="checkbox"
-        id="node-input-requireKnownState"
-        style="display: inline-block; width: auto; vertical-align: top;"
-      />
+      <label for="node-input-requireKnownState">Require Known LSH State</label>
+      <input type="checkbox" id="node-input-requireKnownState" class="lsh-sync-checkbox" />
       <span class="lsh-sync-tip"
         >Only command when the exported LSH actuator state is authoritative and differs from the
         downstream state.</span
@@ -220,7 +226,7 @@
       <span class="lsh-sync-tip">Optional per-actuator guard against rapid feedback loops.</span>
     </div>
     <div class="form-row">
-      <label for="node-input-stateWaitTimeoutMs">LSH Ready Wait (ms)</label>
+      <label for="node-input-stateWaitTimeoutMs">Context Ready Wait (ms)</label>
       <input
         type="number"
         id="node-input-stateWaitTimeoutMs"
@@ -277,8 +283,8 @@
   <h3>Outputs</h3>
   <p>
     Emits one MQTT message only when the downstream state differs from the exported LSH actuator
-    state, or when Require LSH state is disabled and the current LSH state is unknown. The Direction
-    setting can limit output to ON-only or OFF-only commands.
+    state, or when Require Known LSH State is disabled and the current LSH state is unknown. The
+    Direction setting can limit output to ON-only or OFF-only commands.
   </p>
   <dl class="message-properties">
     <dt>topic <span class="property-type">string</span></dt>
@@ -295,8 +301,8 @@
   <p>
     If external state arrives before <code>lsh-logic</code> has exported authoritative actuator
     state, the helper keeps the latest state per LSH device/actuator and retries until LSH Ready
-    Wait expires. This avoids losing retained startup state while still preventing commands based on
-    incomplete LSH snapshots.
+    Context Ready Wait expires. This avoids losing retained startup state while still preventing
+    commands based on incomplete LSH snapshots.
   </p>
 
   <h3>Direction Policy</h3>

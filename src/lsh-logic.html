@@ -868,6 +868,9 @@
       overflow-wrap: anywhere;
       word-break: break-word;
     }
+    .lsh-config-inline {
+      width: 70%;
+    }
     #node-row-protocol-msgpack-tip .lsh-form-tip {
       margin-left: 0;
       max-width: 100%;
@@ -938,9 +941,7 @@
   </div>
 
   <div class="lsh-config-section">
-    <div class="lsh-config-section-title">
-      <i class="fa fa-sitemap"></i> MQTT & protocol settings
-    </div>
+    <div class="lsh-config-section-title"><i class="fa fa-sitemap"></i> MQTT & Protocol</div>
     <div class="form-row">
       <label for="node-input-homieBasePath">Homie Base Path</label>
       <input type="text" id="node-input-homieBasePath" placeholder="e.g., homie/5/" />
@@ -1121,57 +1122,61 @@
   </div>
 
   <div class="lsh-config-section">
-    <div class="lsh-config-section-title"><i class="fa fa-exchange"></i> Context Interaction</div>
+    <div class="lsh-config-section-title"><i class="fa fa-exchange"></i> Context Stores</div>
     <div style="padding-left: 10px;">
-      <h4>Export Internal State</h4>
+      <h4>State Export</h4>
       <div class="form-row">
-        <label for="node-input-exposeStateContext">Store in</label>
-        <select id="node-input-exposeStateContext" style="width: 70%;">
-          <option value="none">Nowhere (Disabled)</option>
+        <label for="node-input-exposeStateContext">State Store</label>
+        <select id="node-input-exposeStateContext" class="lsh-config-inline">
+          <option value="none">Disabled</option>
           <option value="flow">Flow Context</option>
           <option value="global">Global Context</option>
         </select>
       </div>
       <div class="form-row" id="node-row-exposeStateKey">
-        <label for="node-input-exposeStateKey">With key</label>
-        <input type="text" id="node-input-exposeStateKey" style="width: 70%;" />
-        <span class="lsh-form-tip">Required only when state export is enabled.</span>
+        <label for="node-input-exposeStateKey">State Key</label>
+        <input type="text" id="node-input-exposeStateKey" class="lsh-config-inline" />
+        <span class="lsh-form-tip"
+          >Context key read by <code>lsh-actuator-sync</code> for live actuator state.</span
+        >
       </div>
       <hr />
-      <h4>Export MQTT Topics (Context)</h4>
+      <h4>Topic Export</h4>
       <div class="form-row">
-        <label for="node-input-exportTopics">Store in</label>
-        <select id="node-input-exportTopics" style="width: 70%;">
-          <option value="none">Nowhere (Disabled)</option>
+        <label for="node-input-exportTopics">Topic Store</label>
+        <select id="node-input-exportTopics" class="lsh-config-inline">
+          <option value="none">Disabled</option>
           <option value="flow">Flow Context</option>
           <option value="global">Global Context</option>
         </select>
       </div>
       <div class="form-row" id="node-row-exportTopicsKey">
-        <label for="node-input-exportTopicsKey">With key</label>
-        <input type="text" id="node-input-exportTopicsKey" style="width: 70%;" />
-        <span class="lsh-form-tip">Required only when topic export is enabled.</span>
+        <label for="node-input-exportTopicsKey">Topic Key</label>
+        <input type="text" id="node-input-exportTopicsKey" class="lsh-config-inline" />
+        <span class="lsh-form-tip">Context key for generated MQTT subscription metadata.</span>
       </div>
       <hr />
-      <h4>Export Effective Config</h4>
+      <h4>Config Export</h4>
       <div class="form-row">
-        <label for="node-input-exposeConfigContext">Store in</label>
-        <select id="node-input-exposeConfigContext" style="width: 70%;">
-          <option value="none">Nowhere (Disabled)</option>
+        <label for="node-input-exposeConfigContext">Config Store</label>
+        <select id="node-input-exposeConfigContext" class="lsh-config-inline">
+          <option value="none">Disabled</option>
           <option value="flow">Flow Context</option>
           <option value="global">Global Context</option>
         </select>
       </div>
       <div class="form-row" id="node-row-exposeConfigKey">
-        <label for="node-input-exposeConfigKey">With key</label>
-        <input type="text" id="node-input-exposeConfigKey" style="width: 70%;" />
-        <span class="lsh-form-tip">Required only when config export is enabled.</span>
+        <label for="node-input-exposeConfigKey">Config Key</label>
+        <input type="text" id="node-input-exposeConfigKey" class="lsh-config-inline" />
+        <span class="lsh-form-tip"
+          >Context key read by helper nodes for effective coordinator settings.</span
+        >
       </div>
       <hr />
       <h4>Read External Actor State</h4>
       <div class="form-row">
-        <label for="node-input-otherActorsContext">From</label>
-        <select id="node-input-otherActorsContext" style="width: 70%;">
+        <label for="node-input-otherActorsContext">External State Store</label>
+        <select id="node-input-otherActorsContext" class="lsh-config-inline">
           <option value="flow">Flow Context</option>
           <option value="global">Global Context</option>
         </select>
@@ -1179,7 +1184,9 @@
       <div class="form-row">
         <label for="node-input-otherDevicesPrefix">External State Prefix</label>
         <input type="text" id="node-input-otherDevicesPrefix" placeholder="e.g., other_devices" />
-        <span class="lsh-form-tip">Prefix for reading external actor states.</span>
+        <span class="lsh-form-tip"
+          >Prefix read by the coordinator and written by <code>lsh-external-state</code>.</span
+        >
       </div>
     </div>
   </div>
@@ -1305,7 +1312,7 @@
       change them only when you know your bridge/controller timing.
     </dd>
 
-    <dt>Context Interaction</dt>
+    <dt>Context Stores</dt>
     <dd>
       Optional exports for the live device registry, generated MQTT topic set and effective runtime
       config. Useful for dashboards and debugging.

@@ -220,6 +220,17 @@ reads that message and translates it to the right protocol.
 This keeps the LSH runtime focused on LSH correctness while still letting the
 same button action reach both LSH and external targets.
 
+For toggle semantics, the coordinator only trusts boolean state stored in the
+configured external actor context. Actor `zigbee_table_lamp` with prefix
+`other_devices` is read from:
+
+```text
+other_devices.zigbee_table_lamp.state
+```
+
+Use `lsh-external-state` to keep those values current from MQTT or other
+Node-RED integrations.
+
 ## Applying Changes
 
 Configuration changes become active when you deploy the Node-RED flow. The flow
@@ -252,6 +263,66 @@ or observability.
 For normal production flows, it is fine to leave internal state and effective
 config exports disabled and keep only topic export enabled if you use dynamic
 subscriptions.
+
+## External State Helper
+
+`lsh-external-state` stores state for non-LSH actors used in `otherActors`. It
+does not subscribe to MQTT by itself. Keep each integration in normal Node-RED
+nodes, then feed its state messages into this helper.
+
+Recommended wiring:
+
+1. In `lsh-logic`, set **Read External Actor State** to `flow` or `global`.
+2. If you use **Prefix: From lsh_config export**, also enable **Export Effective
+   Config** and keep the default key `lsh_config`, or point the helper at your
+   custom key.
+3. Feed external state messages into `lsh-external-state`.
+4. Configure **Actor Name** as a fixed value for one-device nodes, or read it
+   from a message property such as `msg.topic` after a Change node.
+5. Configure **State Property** for the integration payload.
+
+The helper writes:
+
+```text
+<otherDevicesPrefix>.<actorName>.state = true|false
+```
+
+When **Metadata** is enabled, it also writes diagnostic fields beside the state:
+
+| Field         | Meaning                                       |
+| ------------- | --------------------------------------------- |
+| `updatedAt`   | Node-RED timestamp of the accepted update.    |
+| `sourceTopic` | Original `msg.topic`, when present.           |
+| `rawState`    | Raw value read from the configured property.  |
+| `retain`      | Whether the input message had `retain: true`. |
+
+The coordinator ignores metadata and reads only `.state`.
+
+Common state mappings:
+
+| Integration         | Actor Name            | State Property  |
+| ------------------- | --------------------- | --------------- |
+| ESPHome light MQTT  | Fixed, or `msg.topic` | `payload.state` |
+| Zigbee2MQTT switch  | Fixed, or `msg.topic` | `payload.state` |
+| Shelly status topic | Fixed, or `msg.topic` | `payload.ison`  |
+| Already normalized  | Fixed, or `msg.topic` | `payload`       |
+
+Boolean and numeric `1/0` values are accepted directly. Text values are matched
+against the configured true/false lists. Defaults cover `on/off`, `true/false`,
+`yes/no`, `1/0`, `open/closed` and `active/inactive`. Missing, invalid or
+ambiguous values are dropped with a warning; they are never silently converted
+to `false`.
+
+Retained MQTT messages are accepted by default because this helper only stores
+observed state and does not command devices. That makes startup recovery work
+when external devices publish retained state. Set **Retained Messages** to
+**Ignore retained states** only for integrations whose retained state is known
+to be stale or misleading.
+
+When the prefix is read from `lsh_config` and the config export is not ready
+yet, the helper keeps the latest update per actor and retries until **Context
+Ready Wait** expires. The default wait is `5000` ms. Set it to `0` for
+fail-fast behavior.
 
 ## Actuator Sync Helper
 
@@ -298,8 +369,9 @@ state is already aligned, it emits nothing. If it differs, it emits:
 
 The default policy ignores retained external-state messages and requires an
 authoritative LSH state before commanding. Those defaults avoid surprising relay
-writes after a deploy or broker replay. Disable **Require LSH state** only when
-the external state should be applied even if the LSH registry has not caught up.
+writes after a deploy or broker replay. Disable **Require Known LSH State** only
+when the external state should be applied even if the LSH registry has not
+caught up.
 
 Use **Direction** to limit which external state changes may command LSH:
 
@@ -313,8 +385,8 @@ For powered smart lights, **OFF only** avoids treating a boot-time ON report as
 an instruction to turn LSH on. The helper can still mirror a deliberate
 downstream OFF back to LSH.
 
-When **Require LSH state** is enabled and an external state arrives before
-`lsh-logic` has exported an authoritative actuator snapshot, the helper does not
-drop it immediately. It keeps the latest state per `deviceId/actuatorId` and
-retries until **LSH Ready Wait** expires. The default wait is `5000` ms. Set it
-to `0` if you prefer the older fail-fast behavior.
+When **Require Known LSH State** is enabled and an external state arrives before
+`lsh-logic` has exported an authoritative actuator snapshot, the helper does
+not drop it immediately. It keeps the latest state per `deviceId/actuatorId` and
+retries until **Context Ready Wait** expires. The default wait is `5000` ms. Set
+it to `0` if you prefer the older fail-fast behavior.
