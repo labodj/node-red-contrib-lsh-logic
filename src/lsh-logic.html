@@ -388,7 +388,7 @@
   };
 
   RED.nodes.registerType("lsh-logic", {
-    category: "function",
+    category: "home automation",
     color: "#4a90e2",
     defaults: {
       name: { value: "" },
@@ -787,8 +787,12 @@
         reader.readAsText(file);
       });
 
-      $("#node-input-systemConfigJson").hide();
+      const $systemConfigTextarea = $("#node-input-systemConfigJson");
+      const $systemConfigEditorContainer = $("#node-input-systemConfigJson-editor");
+      $systemConfigTextarea.hide();
+      $systemConfigEditorContainer.hide();
       if (RED.editor?.createEditor) {
+        $systemConfigEditorContainer.show();
         lockSystemConfigEditorContainerHeight(
           document.getElementById("node-input-systemConfigJson-editor"),
         );
@@ -800,8 +804,8 @@
         configureSystemConfigEditor(node._lshSystemConfigEditor);
         scheduleSystemConfigEditorResize(node);
       } else {
-        $("#node-input-systemConfigJson").show();
-        $("#node-input-systemConfigJson").on("change keyup", refreshSystemConfigTools);
+        $systemConfigTextarea.show();
+        $systemConfigTextarea.on("change keyup", refreshSystemConfigTools);
       }
 
       refreshConditionalFields();
@@ -884,6 +888,7 @@
       margin-bottom: 8px;
     }
     .lsh-system-config-editor {
+      display: none;
       box-sizing: border-box;
       width: calc(100% - 110px);
       height: 260px;
