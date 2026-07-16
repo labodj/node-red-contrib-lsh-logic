@@ -4,7 +4,8 @@ const raw = execFileSync("npm", ["pack", "--dry-run", "--json"], {
   encoding: "utf8",
   stdio: ["ignore", "pipe", "pipe"],
 });
-const [pack] = JSON.parse(raw);
+const packResult = JSON.parse(raw);
+const [pack] = Array.isArray(packResult) ? packResult : Object.values(packResult);
 const files = pack.files.map((entry) => entry.path).sort();
 
 const allowedFilePatterns = [

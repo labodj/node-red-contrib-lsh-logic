@@ -10,8 +10,9 @@ const packOutput = execFileSync("npm", ["pack", "--dry-run", "--json"], {
   encoding: "utf8",
   stdio: ["ignore", "pipe", "pipe"],
 });
-const packEntries = JSON.parse(packOutput);
-if (!Array.isArray(packEntries) || packEntries.length !== 1) {
+const packResult = JSON.parse(packOutput);
+const packEntries = Array.isArray(packResult) ? packResult : Object.values(packResult);
+if (packEntries.length !== 1) {
   throw new Error("Expected npm pack --dry-run --json to return exactly one package entry");
 }
 

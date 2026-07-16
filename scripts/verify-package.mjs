@@ -49,7 +49,8 @@ const pack = async (packageRoot, destination) => {
   const { stdout } = await run(npmBin, ["pack", "--json", "--pack-destination", destination], {
     cwd: packageRoot,
   });
-  const [entry] = JSON.parse(stdout);
+  const packResult = JSON.parse(stdout);
+  const [entry] = Array.isArray(packResult) ? packResult : Object.values(packResult);
   return join(destination, entry.filename);
 };
 
