@@ -71,6 +71,7 @@
       margin-top: 20px;
     }
     .lsh-sync-section-title {
+      cursor: pointer;
       font-size: 14px;
       font-weight: bold;
       margin-bottom: 15px;
@@ -79,6 +80,24 @@
       display: flex;
       align-items: center;
       color: #333;
+      list-style: none;
+    }
+    .lsh-sync-section-title::-webkit-details-marker {
+      display: none;
+    }
+    .lsh-sync-section-title::after {
+      content: "\f107";
+      font-family: FontAwesome;
+      margin-left: auto;
+      color: #999;
+    }
+    .lsh-sync-section:not([open]) .lsh-sync-section-title {
+      margin-bottom: 0;
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+    .lsh-sync-section:not([open]) .lsh-sync-section-title::after {
+      transform: rotate(-90deg);
     }
     .lsh-sync-section-title i {
       margin-right: 10px;
@@ -109,13 +128,14 @@
     }
   </style>
 
-  <div class="form-row">
-    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
-    <input type="text" id="node-input-name" placeholder="LSH Actuator Sync" />
-  </div>
-
-  <div class="lsh-sync-section">
-    <div class="lsh-sync-section-title"><i class="fa fa-database"></i> Coordinator Context</div>
+  <details class="lsh-sync-section" open>
+    <summary class="lsh-sync-section-title">
+      <i class="fa fa-database"></i> Coordinator Context
+    </summary>
+    <div class="form-row">
+      <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+      <input type="text" id="node-input-name" placeholder="LSH Actuator Sync" />
+    </div>
     <div class="form-row">
       <label for="node-input-stateContext">State Store</label>
       <select id="node-input-stateContext" class="lsh-sync-inline">
@@ -144,10 +164,10 @@
         >Must match the Effective Config export key of the same <code>lsh-logic</code> node.</span
       >
     </div>
-  </div>
+  </details>
 
-  <div class="lsh-sync-section">
-    <div class="lsh-sync-section-title"><i class="fa fa-random"></i> Message Mapping</div>
+  <details class="lsh-sync-section">
+    <summary class="lsh-sync-section-title"><i class="fa fa-random"></i> Message Mapping</summary>
     <div class="form-row">
       <label for="node-input-desiredStateProperty">State Property</label>
       <input type="text" id="node-input-desiredStateProperty" class="lsh-sync-inline" />
@@ -171,10 +191,10 @@
         >Message property containing the upstream LSH actuator id, for example <code>7</code>.</span
       >
     </div>
-  </div>
+  </details>
 
-  <div class="lsh-sync-section">
-    <div class="lsh-sync-section-title"><i class="fa fa-sliders"></i> Command Policy</div>
+  <details class="lsh-sync-section">
+    <summary class="lsh-sync-section-title"><i class="fa fa-sliders"></i> Command Policy</summary>
     <div class="form-row">
       <label for="node-input-qos">MQTT QoS</label>
       <select id="node-input-qos" style="width: 80px;">
@@ -239,7 +259,7 @@
         and retry until this timeout expires. Set to 0 to fail immediately.</span
       >
     </div>
-  </div>
+  </details>
 </script>
 
 <!-- The Help tab documentation for the node -->

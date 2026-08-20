@@ -6,6 +6,22 @@
       const numericValue = Number(value);
       return Number.isFinite(numericValue) && numericValue >= 0;
     };
+    const selectedValue = (node, fieldName) => {
+      const $field = $(`#node-input-${fieldName}`);
+      return $field.length ? $field.val() : node[fieldName];
+    };
+
+    function validateManualPrefix(value) {
+      return selectedValue(this, "prefixSource") !== "manual" || validateRequiredTrimmed(value);
+    }
+
+    function validateFixedActorName(value) {
+      return selectedValue(this, "actorNameSource") !== "config" || validateRequiredTrimmed(value);
+    }
+
+    function validateActorNameProperty(value) {
+      return selectedValue(this, "actorNameSource") !== "msg" || validateRequiredTrimmed(value);
+    }
 
     RED.nodes.registerType("lsh-external-state", {
       category: "home automation",
@@ -14,12 +30,12 @@
         name: { value: "" },
         storeContext: { value: "global", required: true },
         prefixSource: { value: "config", required: true },
-        prefix: { value: "other_devices" },
+        prefix: { value: "other_devices", validate: validateManualPrefix },
         configContext: { value: "global", required: true },
         configKey: { value: "lsh_config", required: true, validate: validateRequiredTrimmed },
         actorNameSource: { value: "msg", required: true },
-        actorName: { value: "" },
-        actorNameProperty: { value: "topic" },
+        actorName: { value: "", validate: validateFixedActorName },
+        actorNameProperty: { value: "topic", validate: validateActorNameProperty },
         stateProperty: { value: "payload", required: true, validate: validateRequiredTrimmed },
         trueValues: { value: "1,true,on,yes,open,active" },
         falseValues: { value: "0,false,off,no,closed,inactive" },
@@ -58,8 +74,14 @@
         };
 
         $("#node-input-acceptRetained").val(String(this.acceptRetained ?? true));
-        $("#node-input-prefixSource").on("change", refreshPrefixRows);
-        $("#node-input-actorNameSource").on("change", refreshActorRows);
+        $("#node-input-prefixSource").on("change", () => {
+          refreshPrefixRows();
+          $("#node-input-prefix").trigger("change");
+        });
+        $("#node-input-actorNameSource").on("change", () => {
+          refreshActorRows();
+          $("#node-input-actorName, #node-input-actorNameProperty").trigger("change");
+        });
         refreshPrefixRows();
         refreshActorRows();
       },
@@ -77,6 +99,7 @@
       margin-top: 20px;
     }
     .lsh-external-section-title {
+      cursor: pointer;
       font-size: 14px;
       font-weight: bold;
       margin-bottom: 15px;
@@ -85,6 +108,24 @@
       display: flex;
       align-items: center;
       color: #333;
+      list-style: none;
+    }
+    .lsh-external-section-title::-webkit-details-marker {
+      display: none;
+    }
+    .lsh-external-section-title::after {
+      content: "\f107";
+      font-family: FontAwesome;
+      margin-left: auto;
+      color: #999;
+    }
+    .lsh-external-section:not([open]) .lsh-external-section-title {
+      margin-bottom: 0;
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+    .lsh-external-section:not([open]) .lsh-external-section-title::after {
+      transform: rotate(-90deg);
     }
     .lsh-external-section-title i {
       margin-right: 10px;
@@ -115,13 +156,14 @@
     }
   </style>
 
-  <div class="form-row">
-    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
-    <input type="text" id="node-input-name" placeholder="LSH External State" />
-  </div>
-
-  <div class="lsh-external-section">
-    <div class="lsh-external-section-title"><i class="fa fa-database"></i> Coordinator Context</div>
+  <details class="lsh-external-section" open>
+    <summary class="lsh-external-section-title">
+      <i class="fa fa-database"></i> Coordinator Context
+    </summary>
+    <div class="form-row">
+      <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+      <input type="text" id="node-input-name" placeholder="LSH External State" />
+    </div>
     <div class="form-row">
       <label for="node-input-storeContext">External State Store</label>
       <select id="node-input-storeContext" class="lsh-external-inline">
@@ -175,10 +217,12 @@
         >Keeps the latest state per actor while <code>lsh_config</code> is not ready.</span
       >
     </div>
-  </div>
+  </details>
 
-  <div class="lsh-external-section">
-    <div class="lsh-external-section-title"><i class="fa fa-random"></i> Message Mapping</div>
+  <details class="lsh-external-section">
+    <summary class="lsh-external-section-title">
+      <i class="fa fa-random"></i> Message Mapping
+    </summary>
     <div class="form-row">
       <label for="node-input-actorNameSource">Actor Name</label>
       <select id="node-input-actorNameSource" class="lsh-external-inline">
@@ -209,10 +253,10 @@
         value is normalized to boolean.</span
       >
     </div>
-  </div>
+  </details>
 
-  <div class="lsh-external-section">
-    <div class="lsh-external-section-title"><i class="fa fa-sliders"></i> State Parser</div>
+  <details class="lsh-external-section">
+    <summary class="lsh-external-section-title"><i class="fa fa-sliders"></i> State Parser</summary>
     <div class="form-row">
       <label for="node-input-trueValues">True Values</label>
       <input type="text" id="node-input-trueValues" class="lsh-external-inline" />
@@ -234,10 +278,10 @@
         >Use for integrations whose active value means logically off.</span
       >
     </div>
-  </div>
+  </details>
 
-  <div class="lsh-external-section">
-    <div class="lsh-external-section-title"><i class="fa fa-shield"></i> Store Policy</div>
+  <details class="lsh-external-section">
+    <summary class="lsh-external-section-title"><i class="fa fa-shield"></i> Store Policy</summary>
     <div class="form-row">
       <label for="node-input-acceptRetained">Retained Messages</label>
       <select id="node-input-acceptRetained" class="lsh-external-inline">
@@ -264,7 +308,7 @@
         <code>retain</code> beside the boolean state.</span
       >
     </div>
-  </div>
+  </details>
 </script>
 
 <!-- Help tab documentation -->

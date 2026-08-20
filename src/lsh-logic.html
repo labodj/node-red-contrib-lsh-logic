@@ -1,831 +1,794 @@
 <!-- Node-RED Registration Script -->
 <script type="text/javascript">
-  const validatePositiveNumber = (value) => {
-    const numericValue = Number(value);
-    return Number.isFinite(numericValue) && numericValue > 0;
-  };
+  (function () {
+    const validatePositiveNumber = (value) => {
+      const numericValue = Number(value);
+      return Number.isFinite(numericValue) && numericValue > 0;
+    };
 
-  const validateRequiredTrimmed = (value) => String(value || "").trim().length > 0;
+    const validateRequiredTrimmed = (value) => String(value || "").trim().length > 0;
 
-  const validateTopicBase = (value) => {
-    const normalized = String(value || "").trim();
-    if (normalized.length === 0 || !normalized.endsWith("/")) {
-      return false;
-    }
+    const validateTopicBase = (value) => {
+      const normalized = String(value || "").trim();
+      if (normalized.length === 0 || !normalized.endsWith("/")) {
+        return false;
+      }
 
-    const topicBody = normalized.slice(0, -1);
-    if (topicBody.length === 0 || /[+#]/.test(normalized)) {
-      return false;
-    }
+      const topicBody = normalized.slice(0, -1);
+      if (topicBody.length === 0 || /[+#]/.test(normalized)) {
+        return false;
+      }
 
-    return topicBody.split("/").every((segment) => segment.length > 0);
-  };
+      return topicBody.split("/").every((segment) => segment.length > 0);
+    };
 
-  const validateConcreteTopic = (value) => {
-    const normalized = String(value || "").trim();
-    if (normalized.length === 0 || normalized.endsWith("/") || /[+#]/.test(normalized)) {
-      return false;
-    }
+    const validateConcreteTopic = (value) => {
+      const normalized = String(value || "").trim();
+      if (normalized.length === 0 || normalized.endsWith("/") || /[+#]/.test(normalized)) {
+        return false;
+      }
 
-    return normalized.split("/").every((segment) => segment.length > 0);
-  };
+      return normalized.split("/").every((segment) => segment.length > 0);
+    };
 
-  const LSH_SYSTEM_CONFIG_SCHEMA = Object.freeze({
-    type: "object",
-    required: ["devices"],
-    additionalProperties: false,
-    properties: {
-      devices: {
-        type: "array",
-        minItems: 0,
-        items: {
-          type: "object",
-          required: ["name"],
-          additionalProperties: false,
-          properties: {
-            name: { type: "string", pattern: "^[A-Za-z0-9_-]+$" },
-            longClickButtons: { $ref: "#/$defs/buttonActions" },
-            superLongClickButtons: { $ref: "#/$defs/buttonActions" },
+    const LSH_SYSTEM_CONFIG_SCHEMA = Object.freeze({
+      type: "object",
+      required: ["devices"],
+      additionalProperties: false,
+      properties: {
+        devices: {
+          type: "array",
+          minItems: 0,
+          items: {
+            type: "object",
+            required: ["name"],
+            additionalProperties: false,
+            properties: {
+              name: { type: "string", pattern: "^[A-Za-z0-9_-]+$" },
+              longClickButtons: { $ref: "#/$defs/buttonActions" },
+              superLongClickButtons: { $ref: "#/$defs/buttonActions" },
+            },
           },
         },
       },
-    },
-    $defs: {
-      buttonActions: {
-        type: "array",
-        items: {
-          type: "object",
-          required: ["id"],
-          additionalProperties: false,
-          properties: {
-            id: { type: "integer", minimum: 1 },
-            actors: {
-              type: "array",
-              items: {
-                type: "object",
-                required: ["name", "allActuators", "actuators"],
-                additionalProperties: false,
-                properties: {
-                  name: { type: "string", pattern: "^[A-Za-z0-9_-]+$" },
-                  allActuators: { type: "boolean" },
-                  actuators: {
-                    type: "array",
-                    items: { type: "integer", minimum: 1 },
+      $defs: {
+        buttonActions: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["id"],
+            additionalProperties: false,
+            properties: {
+              id: { type: "integer", minimum: 1, maximum: 255 },
+              actors: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["name", "allActuators"],
+                  additionalProperties: false,
+                  properties: {
+                    name: { type: "string", pattern: "^[A-Za-z0-9_-]+$" },
+                    allActuators: { type: "boolean" },
+                    actuators: {
+                      type: "array",
+                      items: { type: "integer", minimum: 1, maximum: 255 },
+                      uniqueItems: true,
+                    },
                   },
                 },
               },
-            },
-            otherActors: {
-              type: "array",
-              items: { type: "string", minLength: 1 },
+              otherActors: {
+                type: "array",
+                items: { type: "string", minLength: 1 },
+              },
             },
           },
         },
       },
-    },
-  });
-
-  const SYSTEM_CONFIG_KEYS = Object.keys(LSH_SYSTEM_CONFIG_SCHEMA.properties);
-  const DEVICE_CONFIG_KEYS = Object.keys(
-    LSH_SYSTEM_CONFIG_SCHEMA.properties.devices.items.properties,
-  );
-  const BUTTON_ACTION_KEYS = Object.keys(
-    LSH_SYSTEM_CONFIG_SCHEMA.$defs.buttonActions.items.properties,
-  );
-  const ACTOR_KEYS = Object.keys(
-    LSH_SYSTEM_CONFIG_SCHEMA.$defs.buttonActions.items.properties.actors.items.properties,
-  );
-
-  const SYSTEM_CONFIG_COMPLETIONS = [
-    {
-      caption: "devices",
-      value: '"devices": [\n  {\n    "name": ""\n  }\n]',
-      meta: "LSH schema",
-    },
-    {
-      caption: "device",
-      value: '{\n  "name": ""\n}',
-      meta: "LSH schema",
-    },
-    {
-      caption: "longClickButtons",
-      value:
-        '"longClickButtons": [\n  {\n    "id": 1,\n    "actors": [],\n    "otherActors": []\n  }\n]',
-      meta: "LSH schema",
-    },
-    {
-      caption: "actor",
-      value: '{\n  "name": "",\n  "allActuators": true,\n  "actuators": []\n}',
-      meta: "LSH schema",
-    },
-  ];
-
-  const parseSystemConfigForEditor = (value) => {
-    try {
-      const parsed = JSON.parse(String(value || ""));
-      const errors = validateSystemConfigShape(parsed);
-      return { parsed, errors, valid: errors.length === 0 };
-    } catch (error) {
-      return {
-        parsed: null,
-        errors: [`Invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
-        valid: false,
-      };
-    }
-  };
-
-  const isPlainObject = (value) =>
-    value !== null && typeof value === "object" && !Array.isArray(value);
-
-  const validateKnownKeys = (value, allowedKeys, path, errors) => {
-    for (const key of Object.keys(value)) {
-      if (!allowedKeys.includes(key)) {
-        errors.push(`${path}.${key} is not allowed by the LSH System Config schema.`);
-      }
-    }
-  };
-
-  const validateDeviceName = (value, path, errors) => {
-    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) {
-      errors.push(`${path} must be a non-empty device id using letters, digits, '_' or '-'.`);
-    }
-  };
-
-  const validatePositiveInteger = (value, path, errors) => {
-    if (!Number.isInteger(value) || value < 1) {
-      errors.push(`${path} must be a positive integer.`);
-    }
-  };
-
-  const validateActor = (actor, path, deviceNames, errors) => {
-    if (!isPlainObject(actor)) {
-      errors.push(`${path} must be an object.`);
-      return;
-    }
-
-    validateKnownKeys(actor, ACTOR_KEYS, path, errors);
-    validateDeviceName(actor.name, `${path}.name`, errors);
-    if (typeof actor.name === "string" && !deviceNames.has(actor.name)) {
-      errors.push(`${path}.name must reference a configured LSH device.`);
-    }
-
-    if (typeof actor.allActuators !== "boolean") {
-      errors.push(`${path}.allActuators must be true or false.`);
-    }
-    if (!Array.isArray(actor.actuators)) {
-      errors.push(`${path}.actuators must be an array.`);
-      return;
-    }
-
-    const seenActuatorIds = new Set();
-    actor.actuators.forEach((actuatorId, index) => {
-      validatePositiveInteger(actuatorId, `${path}.actuators[${index}]`, errors);
-      if (Number.isInteger(actuatorId) && actuatorId >= 1) {
-        if (seenActuatorIds.has(actuatorId)) {
-          errors.push(`${path}.actuators[${index}] duplicates another actuator id.`);
-        }
-        seenActuatorIds.add(actuatorId);
-      }
     });
-    if (actor.allActuators === true && actor.actuators.length !== 0) {
-      errors.push(`${path}.actuators must be empty when allActuators is true.`);
-    }
-    if (actor.allActuators === false && actor.actuators.length === 0) {
-      errors.push(`${path}.actuators must list at least one actuator when allActuators is false.`);
-    }
-  };
 
-  const validateButtonActions = (actions, path, deviceNames, errors) => {
-    if (actions === undefined) {
-      return;
-    }
-    if (!Array.isArray(actions)) {
-      errors.push(`${path} must be an array.`);
-      return;
-    }
+    const SYSTEM_CONFIG_KEYS = Object.keys(LSH_SYSTEM_CONFIG_SCHEMA.properties);
+    const DEVICE_CONFIG_KEYS = Object.keys(
+      LSH_SYSTEM_CONFIG_SCHEMA.properties.devices.items.properties,
+    );
+    const BUTTON_ACTION_KEYS = Object.keys(
+      LSH_SYSTEM_CONFIG_SCHEMA.$defs.buttonActions.items.properties,
+    );
+    const ACTOR_KEYS = Object.keys(
+      LSH_SYSTEM_CONFIG_SCHEMA.$defs.buttonActions.items.properties.actors.items.properties,
+    );
 
-    const seenActionIds = new Set();
-    actions.forEach((action, actionIndex) => {
-      const actionPath = `${path}[${actionIndex}]`;
-      if (!isPlainObject(action)) {
-        errors.push(`${actionPath} must be an object.`);
+    const SYSTEM_CONFIG_COMPLETIONS = [
+      {
+        caption: "devices",
+        value: '"devices": [\n  {\n    "name": ""\n  }\n]',
+        meta: "LSH schema",
+      },
+      {
+        caption: "device",
+        value: '{\n  "name": ""\n}',
+        meta: "LSH schema",
+      },
+      {
+        caption: "longClickButtons",
+        value:
+          '"longClickButtons": [\n  {\n    "id": 1,\n    "actors": [],\n    "otherActors": []\n  }\n]',
+        meta: "LSH schema",
+      },
+      {
+        caption: "actor",
+        value: '{\n  "name": "",\n  "allActuators": true,\n  "actuators": []\n}',
+        meta: "LSH schema",
+      },
+    ];
+
+    const parseSystemConfigForEditor = (value) => {
+      try {
+        const parsed = JSON.parse(String(value || ""));
+        const errors = validateSystemConfigShape(parsed);
+        return { parsed, errors, valid: errors.length === 0 };
+      } catch (error) {
+        return {
+          parsed: null,
+          errors: [`Invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
+          valid: false,
+        };
+      }
+    };
+
+    const isPlainObject = (value) =>
+      value !== null && typeof value === "object" && !Array.isArray(value);
+
+    const validateKnownKeys = (value, allowedKeys, path, errors) => {
+      for (const key of Object.keys(value)) {
+        if (!allowedKeys.includes(key)) {
+          errors.push(`${path}.${key} is not allowed by the LSH System Config schema.`);
+        }
+      }
+    };
+
+    const validateDeviceName = (value, path, errors) => {
+      if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) {
+        errors.push(`${path} must be a non-empty device id using letters, digits, '_' or '-'.`);
+      }
+    };
+
+    const validatePositiveInteger = (value, path, errors) => {
+      if (!Number.isInteger(value) || value < 1 || value > 255) {
+        errors.push(`${path} must be an integer between 1 and 255.`);
+      }
+    };
+
+    const validateActor = (actor, path, deviceNames, errors) => {
+      if (!isPlainObject(actor)) {
+        errors.push(`${path} must be an object.`);
         return;
       }
 
-      validateKnownKeys(action, BUTTON_ACTION_KEYS, actionPath, errors);
-      validatePositiveInteger(action.id, `${actionPath}.id`, errors);
-      if (Number.isInteger(action.id) && action.id >= 1) {
-        if (seenActionIds.has(action.id)) {
-          errors.push(`${actionPath}.id duplicates another button action id.`);
-        }
-        seenActionIds.add(action.id);
+      validateKnownKeys(actor, ACTOR_KEYS, path, errors);
+      validateDeviceName(actor.name, `${path}.name`, errors);
+      if (typeof actor.name === "string" && !deviceNames.has(actor.name)) {
+        errors.push(`${path}.name must reference a configured LSH device.`);
       }
 
-      if (action.actors !== undefined && !Array.isArray(action.actors)) {
-        errors.push(`${actionPath}.actors must be an array.`);
+      if (typeof actor.allActuators !== "boolean") {
+        errors.push(`${path}.allActuators must be true or false.`);
       }
-      if (Array.isArray(action.actors)) {
-        const seenActorNames = new Set();
-        action.actors.forEach((actor, actorIndex) => {
-          validateActor(actor, `${actionPath}.actors[${actorIndex}]`, deviceNames, errors);
-          if (isPlainObject(actor) && typeof actor.name === "string") {
-            if (seenActorNames.has(actor.name)) {
-              errors.push(`${actionPath}.actors[${actorIndex}].name duplicates another actor.`);
+      if (actor.actuators !== undefined && !Array.isArray(actor.actuators)) {
+        errors.push(`${path}.actuators must be an array.`);
+        return;
+      }
+
+      const actuators = Array.isArray(actor.actuators) ? actor.actuators : [];
+      const seenActuatorIds = new Set();
+      actuators.forEach((actuatorId, index) => {
+        validatePositiveInteger(actuatorId, `${path}.actuators[${index}]`, errors);
+        if (Number.isInteger(actuatorId) && actuatorId >= 1 && actuatorId <= 255) {
+          if (seenActuatorIds.has(actuatorId)) {
+            errors.push(`${path}.actuators[${index}] duplicates another actuator id.`);
+          }
+          seenActuatorIds.add(actuatorId);
+        }
+      });
+      if (actor.allActuators === true && actuators.length !== 0) {
+        errors.push(`${path}.actuators must be empty when allActuators is true.`);
+      }
+      if (actor.allActuators === false && actuators.length === 0) {
+        errors.push(
+          `${path}.actuators must list at least one actuator when allActuators is false.`,
+        );
+      }
+    };
+
+    const validateButtonActions = (actions, path, deviceNames, errors) => {
+      if (actions === undefined) {
+        return;
+      }
+      if (!Array.isArray(actions)) {
+        errors.push(`${path} must be an array.`);
+        return;
+      }
+
+      const seenActionIds = new Set();
+      actions.forEach((action, actionIndex) => {
+        const actionPath = `${path}[${actionIndex}]`;
+        if (!isPlainObject(action)) {
+          errors.push(`${actionPath} must be an object.`);
+          return;
+        }
+
+        validateKnownKeys(action, BUTTON_ACTION_KEYS, actionPath, errors);
+        validatePositiveInteger(action.id, `${actionPath}.id`, errors);
+        if (Number.isInteger(action.id) && action.id >= 1) {
+          if (seenActionIds.has(action.id)) {
+            errors.push(`${actionPath}.id duplicates another button action id.`);
+          }
+          seenActionIds.add(action.id);
+        }
+
+        if (action.actors !== undefined && !Array.isArray(action.actors)) {
+          errors.push(`${actionPath}.actors must be an array.`);
+        }
+        if (Array.isArray(action.actors)) {
+          const seenActorNames = new Set();
+          action.actors.forEach((actor, actorIndex) => {
+            validateActor(actor, `${actionPath}.actors[${actorIndex}]`, deviceNames, errors);
+            if (isPlainObject(actor) && typeof actor.name === "string") {
+              if (seenActorNames.has(actor.name)) {
+                errors.push(`${actionPath}.actors[${actorIndex}].name duplicates another actor.`);
+              }
+              seenActorNames.add(actor.name);
             }
-            seenActorNames.add(actor.name);
+          });
+        }
+
+        if (action.otherActors !== undefined && !Array.isArray(action.otherActors)) {
+          errors.push(`${actionPath}.otherActors must be an array.`);
+        }
+        if (Array.isArray(action.otherActors)) {
+          const seenOtherActors = new Set();
+          action.otherActors.forEach((actorName, actorIndex) => {
+            if (typeof actorName !== "string" || actorName.trim().length === 0) {
+              errors.push(`${actionPath}.otherActors[${actorIndex}] must be a non-empty string.`);
+              return;
+            }
+            if (seenOtherActors.has(actorName)) {
+              errors.push(
+                `${actionPath}.otherActors[${actorIndex}] duplicates another otherActor.`,
+              );
+            }
+            seenOtherActors.add(actorName);
+          });
+        }
+
+        const actorCount = Array.isArray(action.actors) ? action.actors.length : 0;
+        const otherActorCount = Array.isArray(action.otherActors) ? action.otherActors.length : 0;
+        if (actorCount + otherActorCount === 0) {
+          errors.push(`${actionPath} must target at least one actor or otherActor.`);
+        }
+      });
+    };
+
+    const validateSystemConfigShape = (parsed) => {
+      const errors = [];
+      if (!isPlainObject(parsed)) {
+        return ["System Config must be a JSON object."];
+      }
+
+      validateKnownKeys(parsed, SYSTEM_CONFIG_KEYS, "$", errors);
+      if (!Array.isArray(parsed.devices)) {
+        errors.push("$.devices must be an array.");
+        return errors;
+      }
+
+      const seenDeviceNames = new Set();
+      const deviceNames = new Set();
+      parsed.devices.forEach((device, index) => {
+        const devicePath = `$.devices[${index}]`;
+        if (!isPlainObject(device)) {
+          errors.push(`${devicePath} must be an object.`);
+          return;
+        }
+
+        validateKnownKeys(device, DEVICE_CONFIG_KEYS, devicePath, errors);
+        validateDeviceName(device.name, `${devicePath}.name`, errors);
+        if (typeof device.name === "string") {
+          const normalizedName = device.name.toLocaleLowerCase();
+          if (seenDeviceNames.has(normalizedName)) {
+            errors.push(`${devicePath}.name duplicates another device name.`);
           }
-        });
-      }
+          seenDeviceNames.add(normalizedName);
+          deviceNames.add(device.name);
+        }
+      });
 
-      if (action.otherActors !== undefined && !Array.isArray(action.otherActors)) {
-        errors.push(`${actionPath}.otherActors must be an array.`);
-      }
-      if (Array.isArray(action.otherActors)) {
-        const seenOtherActors = new Set();
-        action.otherActors.forEach((actorName, actorIndex) => {
-          if (typeof actorName !== "string" || actorName.trim().length === 0) {
-            errors.push(`${actionPath}.otherActors[${actorIndex}] must be a non-empty string.`);
-            return;
-          }
-          if (seenOtherActors.has(actorName)) {
-            errors.push(`${actionPath}.otherActors[${actorIndex}] duplicates another otherActor.`);
-          }
-          seenOtherActors.add(actorName);
-        });
-      }
+      parsed.devices.forEach((device, index) => {
+        if (!isPlainObject(device)) {
+          return;
+        }
+        validateButtonActions(
+          device.longClickButtons,
+          `$.devices[${index}].longClickButtons`,
+          deviceNames,
+          errors,
+        );
+        validateButtonActions(
+          device.superLongClickButtons,
+          `$.devices[${index}].superLongClickButtons`,
+          deviceNames,
+          errors,
+        );
+      });
 
-      const actorCount = Array.isArray(action.actors) ? action.actors.length : 0;
-      const otherActorCount = Array.isArray(action.otherActors) ? action.otherActors.length : 0;
-      if (actorCount + otherActorCount === 0) {
-        errors.push(`${actionPath} must target at least one actor or otherActor.`);
-      }
-    });
-  };
-
-  const validateSystemConfigShape = (parsed) => {
-    const errors = [];
-    if (!isPlainObject(parsed)) {
-      return ["System Config must be a JSON object."];
-    }
-
-    validateKnownKeys(parsed, SYSTEM_CONFIG_KEYS, "$", errors);
-    if (!Array.isArray(parsed.devices)) {
-      errors.push("$.devices must be an array.");
       return errors;
+    };
+
+    function validateContextBackedKey(value, contextFieldName) {
+      const contextValue = this[contextFieldName];
+      if (contextValue === "none") {
+        return true;
+      }
+      return validateRequiredTrimmed(value);
     }
 
-    const seenDeviceNames = new Set();
-    const deviceNames = new Set();
-    parsed.devices.forEach((device, index) => {
-      const devicePath = `$.devices[${index}]`;
-      if (!isPlainObject(device)) {
-        errors.push(`${devicePath} must be an object.`);
+    function validateExposeStateKey(value) {
+      return validateContextBackedKey.call(this, value, "exposeStateContext");
+    }
+
+    function validateExportTopicsKey(value) {
+      return validateContextBackedKey.call(this, value, "exportTopics");
+    }
+
+    function validateExposeConfigKey(value) {
+      return validateContextBackedKey.call(this, value, "exposeConfigContext");
+    }
+
+    const validateSystemConfigJson = (value) => {
+      return parseSystemConfigForEditor(value).valid;
+    };
+
+    const SYSTEM_CONFIG_EDITOR_HEIGHT = 260;
+
+    const destroySystemConfigEditor = (node) => {
+      if (node._lshSystemConfigEditor) {
+        node._lshSystemConfigEditor.destroy();
+        delete node._lshSystemConfigEditor;
+      }
+    };
+
+    const lockSystemConfigEditorContainerHeight = (container) => {
+      if (!container) {
         return;
       }
 
-      validateKnownKeys(device, DEVICE_CONFIG_KEYS, devicePath, errors);
-      validateDeviceName(device.name, `${devicePath}.name`, errors);
-      if (typeof device.name === "string") {
-        const normalizedName = device.name.toLocaleLowerCase();
-        if (seenDeviceNames.has(normalizedName)) {
-          errors.push(`${devicePath}.name duplicates another device name.`);
-        }
-        seenDeviceNames.add(normalizedName);
-        deviceNames.add(device.name);
-      }
-    });
+      container.style.height = `${SYSTEM_CONFIG_EDITOR_HEIGHT}px`;
+      container.style.maxHeight = `${SYSTEM_CONFIG_EDITOR_HEIGHT}px`;
+      container.style.overflow = "hidden";
+    };
 
-    parsed.devices.forEach((device, index) => {
-      if (!isPlainObject(device)) {
+    const resizeSystemConfigEditor = (node) => {
+      const editor = node._lshSystemConfigEditor;
+      const container = document.getElementById("node-input-systemConfigJson-editor");
+      if (!editor || !container) {
         return;
       }
-      validateButtonActions(
-        device.longClickButtons,
-        `$.devices[${index}].longClickButtons`,
-        deviceNames,
-        errors,
-      );
-      validateButtonActions(
-        device.superLongClickButtons,
-        `$.devices[${index}].superLongClickButtons`,
-        deviceNames,
-        errors,
-      );
-    });
 
-    return errors;
-  };
+      lockSystemConfigEditorContainerHeight(container);
+      const width = Math.floor(container.clientWidth);
+      const height = Math.floor(container.clientHeight || SYSTEM_CONFIG_EDITOR_HEIGHT);
+      if (width > 0 && height > 0 && typeof editor.layout === "function") {
+        editor.layout({ width, height });
+        return;
+      }
+      if (typeof editor.resize === "function") {
+        editor.resize(true);
+      }
+    };
 
-  function validateContextBackedKey(value, contextFieldName) {
-    const contextValue = this[contextFieldName];
-    if (contextValue === "none") {
-      return true;
-    }
-    return validateRequiredTrimmed(value);
-  }
+    const scheduleSystemConfigEditorResize = (node) => {
+      const resize = () => resizeSystemConfigEditor(node);
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(resize);
+      }
+      setTimeout(resize, 0);
+      setTimeout(resize, 50);
+    };
 
-  function validateExposeStateKey(value) {
-    return validateContextBackedKey.call(this, value, "exposeStateContext");
-  }
-
-  function validateExportTopicsKey(value) {
-    return validateContextBackedKey.call(this, value, "exportTopics");
-  }
-
-  function validateExposeConfigKey(value) {
-    return validateContextBackedKey.call(this, value, "exposeConfigContext");
-  }
-
-  const validateSystemConfigJson = (value) => {
-    return parseSystemConfigForEditor(value).valid;
-  };
-
-  const SYSTEM_CONFIG_EDITOR_HEIGHT = 260;
-
-  const destroySystemConfigEditor = (node) => {
-    if (node._lshSystemConfigEditor) {
-      node._lshSystemConfigEditor.destroy();
-      delete node._lshSystemConfigEditor;
-    }
-  };
-
-  const lockSystemConfigEditorContainerHeight = (container) => {
-    if (!container) {
-      return;
-    }
-
-    container.style.height = `${SYSTEM_CONFIG_EDITOR_HEIGHT}px`;
-    container.style.maxHeight = `${SYSTEM_CONFIG_EDITOR_HEIGHT}px`;
-    container.style.overflow = "hidden";
-  };
-
-  const resizeSystemConfigEditor = (node) => {
-    const editor = node._lshSystemConfigEditor;
-    const container = document.getElementById("node-input-systemConfigJson-editor");
-    if (!editor || !container) {
-      return;
-    }
-
-    lockSystemConfigEditorContainerHeight(container);
-    const width = Math.floor(container.clientWidth);
-    const height = Math.floor(container.clientHeight || SYSTEM_CONFIG_EDITOR_HEIGHT);
-    if (width > 0 && height > 0 && typeof editor.layout === "function") {
-      editor.layout({ width, height });
-      return;
-    }
-    if (typeof editor.resize === "function") {
-      editor.resize(true);
-    }
-  };
-
-  const scheduleSystemConfigEditorResize = (node) => {
-    const resize = () => resizeSystemConfigEditor(node);
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(resize);
-    }
-    setTimeout(resize, 0);
-    setTimeout(resize, 50);
-  };
-
-  RED.nodes.registerType("lsh-logic", {
-    category: "home automation",
-    color: "#4a90e2",
-    defaults: {
-      name: { value: "" },
-      // MQTT Path Settings
-      homieBasePath: { value: "homie/5/", required: true, validate: validateTopicBase },
-      lshBasePath: { value: "LSH/", required: true, validate: validateTopicBase },
-      serviceTopic: {
-        value: "LSH/Node-RED/SRV",
-        required: true,
-        validate: validateConcreteTopic,
+    RED.nodes.registerType("lsh-logic", {
+      category: "home automation",
+      color: "#4a90e2",
+      defaults: {
+        name: { value: "" },
+        // MQTT Path Settings
+        homieBasePath: { value: "homie/5/", required: true, validate: validateTopicBase },
+        lshBasePath: { value: "LSH/", required: true, validate: validateTopicBase },
+        serviceTopic: {
+          value: "LSH/Node-RED/SRV",
+          required: true,
+          validate: validateConcreteTopic,
+        },
+        protocol: { value: "json", required: true },
+        // Context Key Prefixes
+        otherDevicesPrefix: {
+          value: "other_devices",
+          required: true,
+          validate: validateRequiredTrimmed,
+        },
+        // Inline Config
+        systemConfigJson: {
+          value: '{\n  "devices": []\n}',
+          required: true,
+          validate: validateSystemConfigJson,
+        },
+        // Context Export
+        exposeStateContext: { value: "none", required: true },
+        exposeStateKey: { value: "lsh_state", validate: validateExposeStateKey },
+        exportTopics: { value: "flow", required: true },
+        exportTopicsKey: { value: "lsh_topics", validate: validateExportTopicsKey },
+        exposeConfigContext: { value: "none", required: true },
+        exposeConfigKey: { value: "lsh_config", validate: validateExposeConfigKey },
+        // Other Actors
+        otherActorsContext: { value: "global", required: true },
+        // Timing
+        clickTimeout: {
+          value: 2,
+          required: true,
+          validate: validatePositiveNumber,
+        },
+        clickCleanupInterval: {
+          value: 30,
+          required: true,
+          validate: validatePositiveNumber,
+        },
+        watchdogInterval: {
+          value: 60,
+          required: true,
+          validate: validatePositiveNumber,
+        },
+        interrogateThreshold: {
+          value: 120,
+          required: true,
+          validate: validatePositiveNumber,
+        },
+        initialStateTimeout: {
+          value: 2,
+          required: true,
+          validate: validatePositiveNumber,
+        },
+        pingTimeout: {
+          value: 3,
+          required: true,
+          validate: validatePositiveNumber,
+        },
       },
-      protocol: { value: "json", required: true },
-      // Context Key Prefixes
-      otherDevicesPrefix: {
-        value: "other_devices",
-        required: true,
-        validate: validateRequiredTrimmed,
+      inputs: 1,
+      outputs: 5,
+      icon: "font-awesome/fa-cogs",
+      label: function () {
+        return this.name || "LSH Logic";
       },
-      // Inline Config
-      systemConfigJson: {
-        value: '{\n  "devices": []\n}',
-        required: true,
-        validate: validateSystemConfigJson,
-      },
-      // Context Export
-      exposeStateContext: { value: "none", required: true },
-      exposeStateKey: { value: "lsh_state", validate: validateExposeStateKey },
-      exportTopics: { value: "flow", required: true },
-      exportTopicsKey: { value: "lsh_topics", validate: validateExportTopicsKey },
-      exposeConfigContext: { value: "none", required: true },
-      exposeConfigKey: { value: "lsh_config", validate: validateExposeConfigKey },
-      // Other Actors
-      otherActorsContext: { value: "global", required: true },
-      // Timing
-      clickTimeout: {
-        value: 2,
-        required: true,
-        validate: validatePositiveNumber,
-      },
-      clickCleanupInterval: {
-        value: 30,
-        required: true,
-        validate: validatePositiveNumber,
-      },
-      watchdogInterval: {
-        value: 60,
-        required: true,
-        validate: validatePositiveNumber,
-      },
-      interrogateThreshold: {
-        value: 120,
-        required: true,
-        validate: validatePositiveNumber,
-      },
-      initialStateTimeout: {
-        value: 2,
-        required: true,
-        validate: validatePositiveNumber,
-      },
-      pingTimeout: {
-        value: 3,
-        required: true,
-        validate: validatePositiveNumber,
-      },
-    },
-    inputs: 1,
-    outputs: 5,
-    icon: "font-awesome/fa-cogs",
-    label: function () {
-      return this.name || "LSH Logic";
-    },
-    oneditprepare: function () {
-      const node = this;
-      let importedSubscriptions = {};
+      oneditprepare: function () {
+        const node = this;
+        let importedSubscriptions = {};
 
-      const toggleRow = (inputSelector, rowSelector, isEnabled) => {
-        const $row = $(rowSelector);
-        const $input = $(inputSelector);
-        $row.toggle(isEnabled);
-        $input.prop("disabled", !isEnabled);
-      };
+        const toggleRow = (inputSelector, rowSelector, isEnabled) => {
+          const $row = $(rowSelector);
+          const $input = $(inputSelector);
+          $row.toggle(isEnabled);
+          $input.prop("disabled", !isEnabled);
+        };
 
-      const getSystemConfigText = () =>
-        node._lshSystemConfigEditor
-          ? node._lshSystemConfigEditor.getValue()
-          : String($("#node-input-systemConfigJson").val() || "");
+        const getSystemConfigText = () =>
+          node._lshSystemConfigEditor
+            ? node._lshSystemConfigEditor.getValue()
+            : String($("#node-input-systemConfigJson").val() || "");
 
-      const setSystemConfigText = (value) => {
-        const text = String(value || "");
-        if (node._lshSystemConfigEditor) {
-          node._lshSystemConfigEditor.setValue(text, -1);
-        }
-        $("#node-input-systemConfigJson").val(text).trigger("change");
-        refreshSystemConfigTools();
-      };
-
-      const formatJson = (value) => JSON.stringify(value, null, 2);
-
-      const normalizeImportedSubscriptions = (subscriptions) => {
-        if (!isPlainObject(subscriptions)) {
-          return {};
-        }
-
-        const normalized = {};
-        for (const [topic, config] of Object.entries(subscriptions)) {
-          if (
-            typeof topic === "string" &&
-            isPlainObject(config) &&
-            [0, 1, 2].includes(config.qos)
-          ) {
-            normalized[topic] = { qos: config.qos };
+        const setSystemConfigText = (value) => {
+          const text = String(value || "");
+          if (node._lshSystemConfigEditor) {
+            node._lshSystemConfigEditor.setValue(text, -1);
           }
-        }
-        return normalized;
-      };
+          $("#node-input-systemConfigJson").val(text).trigger("change");
+          refreshSystemConfigTools();
+        };
 
-      const subscriptionQosFor = (topic, fallbackQos) =>
-        importedSubscriptions[topic]?.qos ?? fallbackQos;
+        const formatJson = (value) => JSON.stringify(value, null, 2);
 
-      const buildTopicPreviewRows = (systemConfig) => {
-        const homieBasePath = String($("#node-input-homieBasePath").val() || "");
-        const lshBasePath = String($("#node-input-lshBasePath").val() || "");
-        const rows = [];
+        const normalizeImportedSubscriptions = (subscriptions) => {
+          if (!isPlainObject(subscriptions)) {
+            return {};
+          }
 
-        for (const device of systemConfig.devices || []) {
-          const deviceName = device.name;
-          const lshTopics = [
-            ["conf", "configuration", 2],
-            ["state", "state", 2],
-            ["events", "controller events", 2],
-            ["bridge", "bridge diagnostics", 2],
-          ];
+          const normalized = {};
+          for (const [topic, config] of Object.entries(subscriptions)) {
+            if (
+              typeof topic === "string" &&
+              isPlainObject(config) &&
+              [0, 1, 2].includes(config.qos)
+            ) {
+              normalized[topic] = { qos: config.qos };
+            }
+          }
+          return normalized;
+        };
 
-          for (const [suffix, purpose, fallbackQos] of lshTopics) {
-            const topic = `${lshBasePath}${deviceName}/${suffix}`;
+        const subscriptionQosFor = (topic, fallbackQos) =>
+          importedSubscriptions[topic]?.qos ?? fallbackQos;
+
+        const buildTopicPreviewRows = (systemConfig) => {
+          const homieBasePath = String($("#node-input-homieBasePath").val() || "");
+          const lshBasePath = String($("#node-input-lshBasePath").val() || "");
+          const rows = [];
+
+          for (const device of systemConfig.devices || []) {
+            const deviceName = device.name;
+            const lshTopics = [
+              ["conf", "configuration", 2],
+              ["state", "state", 2],
+              ["events", "controller events", 2],
+              ["bridge", "bridge diagnostics", 2],
+            ];
+
+            for (const [suffix, purpose, fallbackQos] of lshTopics) {
+              const topic = `${lshBasePath}${deviceName}/${suffix}`;
+              rows.push({
+                device: deviceName,
+                purpose,
+                qos: subscriptionQosFor(topic, fallbackQos),
+                topic,
+              });
+            }
+
+            const homieTopic = `${homieBasePath}${deviceName}/$state`;
             rows.push({
               device: deviceName,
-              purpose,
-              qos: subscriptionQosFor(topic, fallbackQos),
-              topic,
+              purpose: "Homie lifecycle",
+              qos: subscriptionQosFor(homieTopic, 1),
+              topic: homieTopic,
             });
           }
 
-          const homieTopic = `${homieBasePath}${deviceName}/$state`;
-          rows.push({
-            device: deviceName,
-            purpose: "Homie lifecycle",
-            qos: subscriptionQosFor(homieTopic, 1),
-            topic: homieTopic,
-          });
-        }
+          return rows.sort((left, right) => left.topic.localeCompare(right.topic));
+        };
 
-        return rows.sort((left, right) => left.topic.localeCompare(right.topic));
-      };
+        const renderTopicPreview = (result) => {
+          const $tbody = $("#node-input-topicPreview tbody");
+          const $summary = $("#node-input-topicPreviewSummary");
+          $tbody.empty();
 
-      const renderTopicPreview = (result) => {
-        const $tbody = $("#node-input-topicPreview tbody");
-        const $summary = $("#node-input-topicPreviewSummary");
-        $tbody.empty();
+          if (!result.valid) {
+            $summary.text("Fix the System Config JSON to preview exact MQTT subscriptions.");
+            return;
+          }
 
-        if (!result.valid) {
-          $summary.text("Fix the System Config JSON to preview exact MQTT subscriptions.");
-          return;
-        }
+          const rows = buildTopicPreviewRows(result.parsed);
+          $summary.text(
+            `${rows.length} exact subscriptions for ${result.parsed.devices.length} devices.`,
+          );
+          for (const row of rows) {
+            $("<tr>")
+              .append($("<td>").text(row.topic))
+              .append($("<td>").text(row.qos))
+              .append($("<td>").text(row.device))
+              .append($("<td>").text(row.purpose))
+              .appendTo($tbody);
+          }
+        };
 
-        const rows = buildTopicPreviewRows(result.parsed);
-        $summary.text(
-          `${rows.length} exact subscriptions for ${result.parsed.devices.length} devices.`,
-        );
-        for (const row of rows) {
-          $("<tr>")
-            .append($("<td>").text(row.topic))
-            .append($("<td>").text(row.qos))
-            .append($("<td>").text(row.device))
-            .append($("<td>").text(row.purpose))
-            .appendTo($tbody);
-        }
-      };
+        const renderValidation = (result) => {
+          const $message = $("#node-input-systemConfigValidation");
+          if (result.valid) {
+            $message
+              .removeClass("lsh-validation-error")
+              .addClass("lsh-validation-ok")
+              .text(`Valid LSH System Config (${result.parsed.devices.length} devices).`);
+            return;
+          }
 
-      const renderValidation = (result) => {
-        const $message = $("#node-input-systemConfigValidation");
-        if (result.valid) {
           $message
+            .removeClass("lsh-validation-ok")
+            .addClass("lsh-validation-error")
+            .text(result.errors[0]);
+        };
+
+        const refreshSystemConfigTools = () => {
+          const result = parseSystemConfigForEditor(getSystemConfigText());
+          renderValidation(result);
+          renderTopicPreview(result);
+        };
+
+        const configureSystemConfigEditor = (editor) => {
+          if (editor.setOptions) {
+            editor.setOptions({
+              enableBasicAutocompletion: true,
+              enableLiveAutocompletion: true,
+              enableSnippets: true,
+            });
+          }
+
+          const schemaCompleter = {
+            getCompletions: (_editor, _session, _position, _prefix, callback) => {
+              callback(null, SYSTEM_CONFIG_COMPLETIONS);
+            },
+          };
+          editor.completers = [schemaCompleter].concat(editor.completers || []);
+
+          if (editor.getSession) {
+            editor.getSession().on("change", () => {
+              $("#node-input-systemConfigJson").val(editor.getValue()).trigger("change");
+              refreshSystemConfigTools();
+            });
+          }
+        };
+
+        const applyStackConfig = (stackConfig) => {
+          if (!isPlainObject(stackConfig) || stackConfig.schema !== "lsh-stack-config/v1") {
+            throw new Error("Expected an lsh-stack-config/v1 JSON document.");
+          }
+
+          const coordinatorOptions = isPlainObject(stackConfig.coordinator?.options)
+            ? stackConfig.coordinator.options
+            : {};
+          const nodeRedConfig = isPlainObject(stackConfig.nodeRed?.lshLogic)
+            ? stackConfig.nodeRed.lshLogic
+            : {};
+
+          const homieBasePath = coordinatorOptions.homieBasePath ?? stackConfig.homieBasePath;
+          const lshBasePath = coordinatorOptions.lshBasePath ?? stackConfig.lshBasePath;
+          const serviceTopic = coordinatorOptions.serviceTopic ?? stackConfig.serviceTopic;
+          const protocol =
+            nodeRedConfig.protocol ?? coordinatorOptions.protocol ?? stackConfig.protocol;
+
+          if (typeof homieBasePath === "string") {
+            $("#node-input-homieBasePath").val(homieBasePath);
+          }
+          if (typeof lshBasePath === "string") {
+            $("#node-input-lshBasePath").val(lshBasePath);
+          }
+          if (typeof serviceTopic === "string") {
+            $("#node-input-serviceTopic").val(serviceTopic);
+          }
+          if (protocol === "json" || protocol === "msgpack") {
+            $("#node-input-protocol").val(protocol).trigger("change");
+          }
+
+          if (typeof nodeRedConfig.systemConfigJson === "string") {
+            setSystemConfigText(nodeRedConfig.systemConfigJson);
+          } else if (isPlainObject(stackConfig.coordinator?.systemConfig)) {
+            setSystemConfigText(formatJson(stackConfig.coordinator.systemConfig));
+          } else {
+            throw new Error("Stack config does not contain coordinator.systemConfig.");
+          }
+
+          importedSubscriptions = normalizeImportedSubscriptions(
+            stackConfig.coordinator?.subscriptions,
+          );
+          $("#node-input-stackConfigFeedback")
             .removeClass("lsh-validation-error")
             .addClass("lsh-validation-ok")
-            .text(
-              `Valid LSH System Config (${result.parsed.devices.length} devices, schema additionalProperties=false).`,
-            );
-          return;
-        }
-
-        $message
-          .removeClass("lsh-validation-ok")
-          .addClass("lsh-validation-error")
-          .text(result.errors[0]);
-      };
-
-      const refreshSystemConfigTools = () => {
-        const result = parseSystemConfigForEditor(getSystemConfigText());
-        renderValidation(result);
-        renderTopicPreview(result);
-      };
-
-      const configureSystemConfigEditor = (editor) => {
-        if (editor.setOptions) {
-          editor.setOptions({
-            enableBasicAutocompletion: true,
-            enableLiveAutocompletion: true,
-            enableSnippets: true,
-          });
-        }
-
-        const schemaCompleter = {
-          getCompletions: (_editor, _session, _position, _prefix, callback) => {
-            callback(null, SYSTEM_CONFIG_COMPLETIONS);
-          },
-        };
-        editor.completers = [schemaCompleter].concat(editor.completers || []);
-
-        if (editor.getSession) {
-          editor.getSession().on("change", () => {
-            $("#node-input-systemConfigJson").val(editor.getValue()).trigger("change");
-            refreshSystemConfigTools();
-          });
-        }
-      };
-
-      const applyStackConfig = (stackConfig) => {
-        if (!isPlainObject(stackConfig) || stackConfig.schema !== "lsh-stack-config/v1") {
-          throw new Error("Expected an lsh-stack-config/v1 JSON document.");
-        }
-
-        const coordinatorOptions = isPlainObject(stackConfig.coordinator?.options)
-          ? stackConfig.coordinator.options
-          : {};
-        const nodeRedConfig = isPlainObject(stackConfig.nodeRed?.lshLogic)
-          ? stackConfig.nodeRed.lshLogic
-          : {};
-
-        const homieBasePath = coordinatorOptions.homieBasePath ?? stackConfig.homieBasePath;
-        const lshBasePath = coordinatorOptions.lshBasePath ?? stackConfig.lshBasePath;
-        const serviceTopic = coordinatorOptions.serviceTopic ?? stackConfig.serviceTopic;
-        const protocol =
-          nodeRedConfig.protocol ?? coordinatorOptions.protocol ?? stackConfig.protocol;
-
-        if (typeof homieBasePath === "string") {
-          $("#node-input-homieBasePath").val(homieBasePath);
-        }
-        if (typeof lshBasePath === "string") {
-          $("#node-input-lshBasePath").val(lshBasePath);
-        }
-        if (typeof serviceTopic === "string") {
-          $("#node-input-serviceTopic").val(serviceTopic);
-        }
-        if (protocol === "json" || protocol === "msgpack") {
-          $("#node-input-protocol").val(protocol).trigger("change");
-        }
-
-        if (typeof nodeRedConfig.systemConfigJson === "string") {
-          setSystemConfigText(nodeRedConfig.systemConfigJson);
-        } else if (isPlainObject(stackConfig.coordinator?.systemConfig)) {
-          setSystemConfigText(formatJson(stackConfig.coordinator.systemConfig));
-        } else {
-          throw new Error("Stack config does not contain coordinator.systemConfig.");
-        }
-
-        importedSubscriptions = normalizeImportedSubscriptions(
-          stackConfig.coordinator?.subscriptions,
-        );
-        $("#node-input-stackConfigFeedback")
-          .removeClass("lsh-validation-error")
-          .addClass("lsh-validation-ok")
-          .text("Imported generated stack config.");
-        refreshConditionalFields();
-        refreshSystemConfigTools();
-      };
-
-      const insertIntoEditor = (snippet) => {
-        const editor = node._lshSystemConfigEditor;
-        if (editor) {
-          const before = typeof editor.getValue === "function" ? editor.getValue() : "";
-          let inserted = false;
-
-          if (typeof editor.insert === "function") {
-            try {
-              if (typeof editor.getCursorPosition === "function") {
-                const position = editor.getCursorPosition();
-                if (
-                  Number.isFinite(position?.row) &&
-                  Number.isFinite(position?.column) &&
-                  editor.insert.length >= 2
-                ) {
-                  editor.insert(position, snippet);
-                  inserted = typeof editor.getValue !== "function" || editor.getValue() !== before;
-                }
-              }
-
-              if (!inserted) {
-                editor.insert(snippet);
-                inserted = typeof editor.getValue !== "function" || editor.getValue() !== before;
-              }
-            } catch {
-              inserted = false;
-            }
-          }
-
-          if (!inserted && typeof editor.setValue === "function") {
-            editor.setValue(`${before}${snippet}`, -1);
-          }
-
-          if (typeof editor.getValue === "function") {
-            $("#node-input-systemConfigJson").val(editor.getValue()).trigger("change");
-          }
+            .text("Imported generated stack config.");
+          refreshConditionalFields();
           refreshSystemConfigTools();
-          return;
-        }
-
-        const $textarea = $("#node-input-systemConfigJson");
-        const currentValue = String($textarea.val() || "");
-        $textarea.val(`${currentValue}${snippet}`).trigger("change");
-        refreshSystemConfigTools();
-      };
-
-      const refreshConditionalFields = () => {
-        const exposeStateEnabled = $("#node-input-exposeStateContext").val() !== "none";
-        toggleRow("#node-input-exposeStateKey", "#node-row-exposeStateKey", exposeStateEnabled);
-
-        const exportTopicsEnabled = $("#node-input-exportTopics").val() !== "none";
-        toggleRow("#node-input-exportTopicsKey", "#node-row-exportTopicsKey", exportTopicsEnabled);
-
-        const exposeConfigEnabled = $("#node-input-exposeConfigContext").val() !== "none";
-        toggleRow("#node-input-exposeConfigKey", "#node-row-exposeConfigKey", exposeConfigEnabled);
-
-        const msgpackEnabled = $("#node-input-protocol").val() === "msgpack";
-        $("#node-row-protocol-msgpack-tip").toggle(msgpackEnabled);
-      };
-
-      $("#node-input-exposeStateContext").on("change", () => {
-        refreshConditionalFields();
-        $("#node-input-exposeStateKey").trigger("change");
-      });
-
-      $("#node-input-exportTopics").on("change", () => {
-        refreshConditionalFields();
-        $("#node-input-exportTopicsKey").trigger("change");
-      });
-
-      $("#node-input-exposeConfigContext").on("change", () => {
-        refreshConditionalFields();
-        $("#node-input-exposeConfigKey").trigger("change");
-      });
-
-      $("#node-input-protocol").on("change", refreshConditionalFields);
-      $("#node-input-homieBasePath, #node-input-lshBasePath").on(
-        "change keyup",
-        refreshSystemConfigTools,
-      );
-      $("#node-input-formatSystemConfig").on("click", () => {
-        const result = parseSystemConfigForEditor(getSystemConfigText());
-        if (result.valid) {
-          setSystemConfigText(formatJson(result.parsed));
-        } else {
-          renderValidation(result);
-        }
-      });
-      $("#node-input-insertDevice").on("click", () => {
-        insertIntoEditor('{\n  "name": ""\n}');
-      });
-      $("#node-input-insertLongClick").on("click", () => {
-        insertIntoEditor(
-          '"longClickButtons": [\n  {\n    "id": 1,\n    "actors": [],\n    "otherActors": []\n  }\n]',
-        );
-      });
-      $("#node-input-importStackConfig").on("click", () => {
-        $("#node-input-stackConfigFile").trigger("click");
-      });
-      $("#node-input-stackConfigFile").on("change", function () {
-        const file = this.files?.[0];
-        if (!file) {
-          return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = () => {
-          try {
-            applyStackConfig(JSON.parse(String(reader.result || "")));
-          } catch (error) {
-            $("#node-input-stackConfigFeedback")
-              .removeClass("lsh-validation-ok")
-              .addClass("lsh-validation-error")
-              .text(error instanceof Error ? error.message : String(error));
-          } finally {
-            this.value = "";
-          }
         };
-        reader.readAsText(file);
-      });
 
-      const $systemConfigTextarea = $("#node-input-systemConfigJson");
-      const $systemConfigEditorContainer = $("#node-input-systemConfigJson-editor");
-      $systemConfigTextarea.hide();
-      $systemConfigEditorContainer.hide();
-      if (RED.editor?.createEditor) {
-        $systemConfigEditorContainer.show();
-        lockSystemConfigEditorContainerHeight(
-          document.getElementById("node-input-systemConfigJson-editor"),
-        );
-        node._lshSystemConfigEditor = RED.editor.createEditor({
-          id: "node-input-systemConfigJson-editor",
-          mode: "ace/mode/json",
-          value: String($("#node-input-systemConfigJson").val() || ""),
+        const refreshConditionalFields = () => {
+          const exposeStateEnabled = $("#node-input-exposeStateContext").val() !== "none";
+          toggleRow("#node-input-exposeStateKey", "#node-row-exposeStateKey", exposeStateEnabled);
+
+          const exportTopicsEnabled = $("#node-input-exportTopics").val() !== "none";
+          toggleRow(
+            "#node-input-exportTopicsKey",
+            "#node-row-exportTopicsKey",
+            exportTopicsEnabled,
+          );
+
+          const exposeConfigEnabled = $("#node-input-exposeConfigContext").val() !== "none";
+          toggleRow(
+            "#node-input-exposeConfigKey",
+            "#node-row-exposeConfigKey",
+            exposeConfigEnabled,
+          );
+
+          const msgpackEnabled = $("#node-input-protocol").val() === "msgpack";
+          $("#node-row-protocol-msgpack-tip").toggle(msgpackEnabled);
+        };
+
+        $("#node-input-exposeStateContext").on("change", () => {
+          refreshConditionalFields();
+          $("#node-input-exposeStateKey").trigger("change");
         });
-        configureSystemConfigEditor(node._lshSystemConfigEditor);
-        scheduleSystemConfigEditorResize(node);
-      } else {
-        $systemConfigTextarea.show();
-        $systemConfigTextarea.on("change keyup", refreshSystemConfigTools);
-      }
 
-      refreshConditionalFields();
-      refreshSystemConfigTools();
-    },
-    oneditsave: function () {
-      if (this._lshSystemConfigEditor) {
-        $("#node-input-systemConfigJson").val(this._lshSystemConfigEditor.getValue());
-      }
-      destroySystemConfigEditor(this);
-    },
-    oneditcancel: function () {
-      destroySystemConfigEditor(this);
-    },
-    oneditresize: function () {
-      scheduleSystemConfigEditorResize(this);
-    },
-    inputLabels: "MQTT Messages",
-    outputLabels: ["LSH Commands", "Other Actor Commands", "Alerts", "Configuration", "Debug"],
-  });
+        $("#node-input-exportTopics").on("change", () => {
+          refreshConditionalFields();
+          $("#node-input-exportTopicsKey").trigger("change");
+        });
+
+        $("#node-input-exposeConfigContext").on("change", () => {
+          refreshConditionalFields();
+          $("#node-input-exposeConfigKey").trigger("change");
+        });
+
+        $("#node-input-protocol").on("change", refreshConditionalFields);
+        $("details.lsh-config-section").on("toggle", () => {
+          scheduleSystemConfigEditorResize(node);
+        });
+        $("#node-input-homieBasePath, #node-input-lshBasePath").on(
+          "change keyup",
+          refreshSystemConfigTools,
+        );
+        $("#node-input-formatSystemConfig").on("click", () => {
+          const result = parseSystemConfigForEditor(getSystemConfigText());
+          if (result.valid) {
+            setSystemConfigText(formatJson(result.parsed));
+          } else {
+            renderValidation(result);
+          }
+        });
+        $("#node-input-importStackConfig").on("click", () => {
+          $("#node-input-stackConfigFile").trigger("click");
+        });
+        $("#node-input-stackConfigFile").on("change", function () {
+          const file = this.files?.[0];
+          if (!file) {
+            return;
+          }
+
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              applyStackConfig(JSON.parse(String(reader.result || "")));
+            } catch (error) {
+              $("#node-input-stackConfigFeedback")
+                .removeClass("lsh-validation-ok")
+                .addClass("lsh-validation-error")
+                .text(error instanceof Error ? error.message : String(error));
+            } finally {
+              this.value = "";
+            }
+          };
+          reader.readAsText(file);
+        });
+
+        const $systemConfigTextarea = $("#node-input-systemConfigJson");
+        const $systemConfigEditorContainer = $("#node-input-systemConfigJson-editor");
+        $systemConfigTextarea.hide();
+        $systemConfigEditorContainer.hide();
+        if (RED.editor?.createEditor) {
+          $systemConfigEditorContainer.show();
+          lockSystemConfigEditorContainerHeight(
+            document.getElementById("node-input-systemConfigJson-editor"),
+          );
+          node._lshSystemConfigEditor = RED.editor.createEditor({
+            id: "node-input-systemConfigJson-editor",
+            mode: "ace/mode/json",
+            value: String($("#node-input-systemConfigJson").val() || ""),
+          });
+          configureSystemConfigEditor(node._lshSystemConfigEditor);
+          scheduleSystemConfigEditorResize(node);
+        } else {
+          $systemConfigTextarea.show();
+          $systemConfigTextarea.on("change keyup", refreshSystemConfigTools);
+        }
+
+        refreshConditionalFields();
+        refreshSystemConfigTools();
+      },
+      oneditsave: function () {
+        if (this._lshSystemConfigEditor) {
+          $("#node-input-systemConfigJson").val(this._lshSystemConfigEditor.getValue());
+        }
+        destroySystemConfigEditor(this);
+      },
+      oneditcancel: function () {
+        destroySystemConfigEditor(this);
+      },
+      oneditresize: function () {
+        scheduleSystemConfigEditorResize(this);
+      },
+      inputLabels: "MQTT Messages",
+      outputLabels: ["LSH Commands", "Other Actor Commands", "Alerts", "Configuration", "Debug"],
+    });
+  })();
 </script>
 
 <!-- Node Configuration Panel Template -->
@@ -838,6 +801,7 @@
       margin-top: 20px;
     }
     .lsh-config-section-title {
+      cursor: pointer;
       font-size: 14px;
       font-weight: bold;
       margin-bottom: 15px;
@@ -846,6 +810,24 @@
       display: flex;
       align-items: center;
       color: #333;
+      list-style: none;
+    }
+    .lsh-config-section-title::-webkit-details-marker {
+      display: none;
+    }
+    .lsh-config-section-title::after {
+      content: "\f107";
+      font-family: FontAwesome;
+      margin-left: auto;
+      color: #999;
+    }
+    .lsh-config-section:not([open]) .lsh-config-section-title {
+      margin-bottom: 0;
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+    .lsh-config-section:not([open]) .lsh-config-section-title::after {
+      transform: rotate(-90deg);
     }
     .lsh-config-section-title i {
       margin-right: 10px;
@@ -887,10 +869,16 @@
       margin-left: 110px;
       margin-bottom: 8px;
     }
+    .lsh-system-config {
+      box-sizing: border-box;
+      width: 100%;
+      height: 260px;
+      font-family: var(--red-ui-monospace-font, monospace);
+    }
     .lsh-system-config-editor {
       display: none;
       box-sizing: border-box;
-      width: calc(100% - 110px);
+      width: 100%;
       height: 260px;
       min-height: 260px;
       max-height: 260px;
@@ -940,13 +928,14 @@
     }
   </style>
 
-  <div class="form-row">
-    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
-    <input type="text" id="node-input-name" placeholder="LSH Logic Core" />
-  </div>
-
-  <div class="lsh-config-section">
-    <div class="lsh-config-section-title"><i class="fa fa-sitemap"></i> MQTT & Protocol</div>
+  <details class="lsh-config-section" open>
+    <summary class="lsh-config-section-title">
+      <i class="fa fa-sitemap"></i> MQTT &amp; Protocol
+    </summary>
+    <div class="form-row">
+      <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+      <input type="text" id="node-input-name" placeholder="LSH Logic Core" />
+    </div>
     <div class="form-row">
       <label for="node-input-homieBasePath">Homie Base Path</label>
       <input type="text" id="node-input-homieBasePath" placeholder="e.g., homie/5/" />
@@ -986,10 +975,12 @@
         <strong>Buffer</strong>, not a parsed string.</span
       >
     </div>
-  </div>
+  </details>
 
-  <div class="lsh-config-section">
-    <div class="lsh-config-section-title"><i class="fa fa-code"></i> System Configuration</div>
+  <details class="lsh-config-section">
+    <summary class="lsh-config-section-title">
+      <i class="fa fa-code"></i> System Configuration
+    </summary>
     <div class="form-row">
       <label for="node-input-systemConfigJson">System Config</label>
       <div class="lsh-editor-toolbar">
@@ -999,12 +990,6 @@
         <button type="button" class="red-ui-button" id="node-input-formatSystemConfig">
           Format JSON
         </button>
-        <button type="button" class="red-ui-button" id="node-input-insertDevice">
-          Insert Device
-        </button>
-        <button type="button" class="red-ui-button" id="node-input-insertLongClick">
-          Insert Long Click
-        </button>
         <input
           type="file"
           id="node-input-stackConfigFile"
@@ -1012,12 +997,11 @@
           style="display: none;"
         />
       </div>
-      <textarea
-        id="node-input-systemConfigJson"
-        rows="12"
-        style="width: calc(100% - 110px); font-family: var(--red-ui-monospace-font, monospace);"
-      ></textarea>
-      <div id="node-input-systemConfigJson-editor" class="lsh-system-config-editor"></div>
+      <textarea id="node-input-systemConfigJson" class="lsh-system-config" rows="12"></textarea>
+      <div
+        id="node-input-systemConfigJson-editor"
+        class="node-text-editor lsh-system-config-editor"
+      ></div>
       <span
         id="node-input-systemConfigValidation"
         class="lsh-validation-message"
@@ -1050,10 +1034,12 @@
         </table>
       </div>
     </div>
-  </div>
+  </details>
 
-  <div class="lsh-config-section">
-    <div class="lsh-config-section-title"><i class="fa fa-clock-o"></i> Timing Settings</div>
+  <details class="lsh-config-section">
+    <summary class="lsh-config-section-title">
+      <i class="fa fa-clock-o"></i> Timing Settings
+    </summary>
     <div class="lsh-config-subtitle">Click Protocol</div>
     <div class="form-row">
       <label for="node-input-clickTimeout">Click Confirm Timeout (s)</label>
@@ -1124,10 +1110,12 @@
         >Seconds to wait for a ping response before marking a device as stale.</span
       >
     </div>
-  </div>
+  </details>
 
-  <div class="lsh-config-section">
-    <div class="lsh-config-section-title"><i class="fa fa-exchange"></i> Context Stores</div>
+  <details class="lsh-config-section">
+    <summary class="lsh-config-section-title">
+      <i class="fa fa-exchange"></i> Context Stores
+    </summary>
     <div style="padding-left: 10px;">
       <h4>State Export</h4>
       <div class="form-row">
@@ -1194,7 +1182,7 @@
         >
       </div>
     </div>
-  </div>
+  </details>
 </script>
 <!-- The Help tab documentation for the node -->
 <script type="text/html" data-help-name="lsh-logic">
