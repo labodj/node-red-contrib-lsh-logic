@@ -232,6 +232,19 @@ npm ci
 npm run check
 ```
 
+For the isolated network-click scenarios alone:
+
+```bash
+npm run test:network-clicks
+```
+
+These exercise the real wrapper and installed coordinator using synthetic Node-RED
+messages in JSON and MessagePack: request/ACK/confirm, duplicate and retained
+events, expired/replaced correlations and invalid targets. They never connect to
+a broker or actuate hardware. Coordinator-only regressions, including a target
+going offline after ACK, are tested in the coordinator repository; its fixes must
+be released there before updating this package's dependency.
+
 ## License
 
 Apache-2.0. See
